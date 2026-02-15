@@ -22,3 +22,23 @@ Our project is already structured in a way that naturally follows the microservi
 - **Fine-grained components within each service**: for example, inside Auth we have token management, user management, and role/permission management.
 
 This is neither a monolith (single deployable) nor nano-services (too fine-grained). Each service wraps a single business capability, which is the defining trait of microservices granularity.
+
+### I-B. Justification: Why Microservices is the Best Choice
+
+| Quality Attribute | Justification |
+|---|---|
+| **Scalability** | Workflow automation platforms experience uneven load. For example, the notification service (Gmail/WhatsApp) may spike during bulk operations while auth stays idle. Microservices let us scale each service independently. The Zoom meeting service can scale up during peak scheduling hours without having to scale the entire system. |
+| **Maintainability** | Each service has its own codebase and tech stack (Go for auth, TypeScript/Next.js for the frontend). Teams can develop, test, and deploy each service independently. If we want to add a new external API like Slack, we just create a new service without touching existing ones (following the Open/Closed Principle). |
+| **Performance** | Lightweight, purpose-built services avoid the overhead of a monolithic application loading unnecessary modules. Each service can be tuned for its specific workload. For instance, the workflow engine can use an event-driven async model while auth sticks with synchronous request-response. |
+| **Fault Isolation** | If the WhatsApp integration service goes down, the rest of the platform (workflow design, task execution, auth) keeps running. This is critical for enterprise workflow tools where uptime really matters. |
+| **Technology Heterogeneity** | The project already uses Go (auth backend) and TypeScript/Next.js (frontend). With microservices, each team can pick the best tool for the job, whether that's Python for ML-based workflow recommendations, Go for high-throughput services, or Node.js for real-time WebSocket-based workstation updates. |
+| **Independent Deployment** | Admins designing workflows and employees using the workstation have different release cycles. Microservices let us continuously deploy the workflow designer without needing to redeploy the workstation or auth. |
+| **External API Integration** | The project relies heavily on third-party APIs (Google Forms, Gmail, WhatsApp, Zoom). Wrapping each one behind its own microservice gives us an anti-corruption layer, so changes in external APIs don't ripple through our core system. |
+
+**Why NOT other architectures?**
+
+| Architecture | Reason for Rejection |
+|---|---|
+| **Monolithic** | We can't scale individual components separately. Having a single deployment for auth + workflow + notifications is inefficient and risky for an enterprise platform. |
+| **Layered** | Works well for simpler CRUD apps, but our project has multiple bounded contexts (auth, workflow, notifications, integrations) that need independent lifecycles. |
+| **SOA** | SOA relies on a centralized ESB (Enterprise Service Bus), which tends to become a bottleneck. Microservices use lightweight communication (REST/gRPC/message queues), which fits much better with our cloud-native, API-driven approach. |
