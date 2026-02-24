@@ -2,14 +2,13 @@
 import Link from "next/link";
 import { useTheme } from "./ThemeProvider";
 import { useState, useEffect } from "react";
-import { useUser, useClerk } from "@clerk/nextjs";
+import { useUser } from "@clerk/nextjs";
 
 export default function Navbar() {
   const { theme, toggle } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
-  const { isSignedIn, user } = useUser();
-  const { signOut } = useClerk();
+  const { isSignedIn } = useUser();
 
   useEffect(() => {
     const handler = () => setScrolled(window.scrollY > 10);
@@ -67,18 +66,10 @@ export default function Navbar() {
           </button>
 
           {isSignedIn ? (
-            <>
-              <span className="hidden md:inline text-[0.85rem] text-[var(--text-muted)] truncate max-w-[160px]">
-                {user?.primaryEmailAddress?.emailAddress || user?.firstName}
-              </span>
-              <button
-                onClick={() => signOut()}
-                className="hidden md:inline-flex items-center justify-center gap-2 px-5 py-2.5 text-[0.925rem] font-semibold rounded-[var(--radius)] border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-all"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" /></svg>
-                Sign Out
-              </button>
-            </>
+            <Link href="/dashboard" className="hidden md:inline-flex items-center justify-center gap-2 px-5 py-2.5 text-[0.925rem] font-semibold rounded-[var(--radius)] bg-[var(--primary)] text-white shadow-[0_1px_3px_rgba(79,70,229,0.3)] hover:bg-[var(--primary-dark)] hover:shadow-[0_4px_12px_rgba(79,70,229,0.35)] hover:-translate-y-[1px] transition-all">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="m2.25 12 8.954-8.955a1.126 1.126 0 0 1 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" /></svg>
+              Dashboard
+            </Link>
           ) : (
             <>
               <Link href="/join" className="hidden md:inline-flex items-center justify-center gap-2 px-[18px] py-2.5 text-[0.925rem] font-semibold rounded-[var(--radius)] text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--surface-alt)] transition-all">
@@ -119,12 +110,7 @@ export default function Navbar() {
             </Link>
           ))}
           {isSignedIn ? (
-            <button
-              onClick={() => { setMobileOpen(false); signOut(); }}
-              className="mt-2 w-full text-center px-6 py-3 text-[0.925rem] font-semibold rounded-[var(--radius)] border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-all"
-            >
-              Sign Out
-            </button>
+            <Link href="/dashboard" onClick={() => setMobileOpen(false)} className="mt-2 w-full text-center px-6 py-3 text-[0.925rem] font-semibold rounded-[var(--radius)] bg-[var(--primary)] text-white hover:bg-[var(--primary-dark)] transition-all">Dashboard</Link>
           ) : (
             <>
               <Link href="/join" onClick={() => setMobileOpen(false)} className="mt-2 w-full text-center px-6 py-3 text-[0.925rem] font-semibold rounded-[var(--radius)] border border-[var(--border)] text-[var(--text-primary)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-all">Join Organisation</Link>
