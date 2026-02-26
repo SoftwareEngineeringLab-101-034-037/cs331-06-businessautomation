@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --turbopack",
+    "dev:warm": "node scripts/warm-routes.mjs",
     "build": "next build",
     "start": "next start",
     "type-check": "tsc --noEmit"
