@@ -4,7 +4,7 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "FlowEngine — End-to-End Business Automation",
+  title: "FlowEngine",
   description: "Build workflows, create workstations, and manage teams with an intelligent platform designed to replace complexity with clarity.",
   icons: {
     icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>",
