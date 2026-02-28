@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net/http"
 
@@ -14,35 +15,36 @@ import (
 )
 
 func main() {
-	// Load configuration
+	runMigrations := flag.Bool("migrate", false, "run database migrations on startup")
+	flag.Parse()
+
+	//Load env vars
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Connect to Supabase PostgreSQL
+	// Connect to Supabase
 	if err := database.Connect(cfg.DatabaseURL); err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	// Run migrations
-	if err := database.Migrate(); err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
+	// Run migrations (optional via startup flag)
+	if *runMigrations {
+		if err := database.Migrate(); err != nil {
+			log.Fatalf("Failed to run migrations: %v", err)
+		}
+	} else {
+		log.Println("Skipping database migrations (-migrate=false)")
 	}
 
 	// Start cleanup background job (runs every 5 min, deletes soft-deleted records older than 30 days)
 	cleanup.Start(cleanup.DefaultConfig())
 
-	// Initialize handlers
 	webhookHandler := handler.NewWebhookHandler(cfg.ClerkWebhookSecret)
+	gin.SetMode(gin.DebugMode)
 
-	// Set Gin to release mode (less verbose logging)
-	gin.SetMode(gin.ReleaseMode)
-
-	// Create Gin router with logging and recovery
-	r := gin.New()
-	r.Use(gin.Logger()) // Shows HTTP status codes
-	r.Use(gin.Recovery())
+	r := gin.Default()
 
 	// CORS configuration
 	r.Use(cors.New(cors.Config{
@@ -54,7 +56,6 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	// Health check
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -62,7 +63,6 @@ func main() {
 	// Webhook endpoint (no auth required)
 	r.POST("/api/webhooks/clerk", webhookHandler.Handle)
 
-	// Start server
 	addr := ":" + cfg.Port
 	log.Printf("Auth service running on http://localhost%s", addr)
 
