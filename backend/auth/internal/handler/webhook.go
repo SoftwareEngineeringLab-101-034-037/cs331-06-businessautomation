@@ -12,8 +12,8 @@ import (
 	svix "github.com/svix/svix-webhooks/go"
 	"gorm.io/gorm"
 
-	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/database"
-	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/database"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
 )
 
 type WebhookHandler struct {
@@ -303,3 +303,4 @@ func getString(m map[string]interface{}, key string) string {
 	}
 	return ""
 }
+

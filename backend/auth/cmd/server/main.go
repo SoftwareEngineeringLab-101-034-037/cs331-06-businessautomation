@@ -8,10 +8,10 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
-	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/cleanup"
-	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/config"
-	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/database"
-	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/handler"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/cleanup"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/config"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/database"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/handler"
 )
 
 func main() {
@@ -70,3 +70,4 @@ func main() {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
+

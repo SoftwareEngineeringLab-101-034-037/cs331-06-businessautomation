@@ -4,8 +4,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/database"
-	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/database"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
 )
 
 // Config holds cleanup configuration
@@ -60,3 +60,4 @@ func runCleanup(retentionDays int) {
 		log.Printf("Cleanup: deleted %d inactive organizations older than %d days", result.RowsAffected, retentionDays)
 	}
 }
+

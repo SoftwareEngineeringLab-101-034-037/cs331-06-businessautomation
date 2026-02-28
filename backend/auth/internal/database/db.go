@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
 )
 
 var DB *gorm.DB
@@ -54,3 +54,4 @@ func Migrate() error {
 	log.Println("Database migrations completed")
 	return nil
 }
+

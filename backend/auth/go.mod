@@ -1,4 +1,4 @@
-module github.com/CS331-06-BusinessAutomation/backend/auth
+module github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth
 
 go 1.24.0
 
@@ -57,3 +57,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
 )
+
