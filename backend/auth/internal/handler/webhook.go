@@ -10,17 +10,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 	svix "github.com/svix/svix-webhooks/go"
+	"gorm.io/gorm"
 
 	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/database"
 	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/models"
 )
 
-// WebhookHandler handles Clerk webhook events
 type WebhookHandler struct {
 	webhookSecret string
 }
 
-// NewWebhookHandler creates a new webhook handler
 func NewWebhookHandler(secret string) *WebhookHandler {
 	return &WebhookHandler{webhookSecret: secret}
 }
@@ -58,7 +57,6 @@ type ClerkOrganization struct {
 
 // Handle processes incoming Clerk webhooks
 func (h *WebhookHandler) Handle(c *gin.Context) {
-	// Read the request body
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		log.Printf("Error reading webhook body: %v", err)
@@ -96,18 +94,37 @@ func (h *WebhookHandler) Handle(c *gin.Context) {
 
 	log.Printf("Received Clerk webhook: %s", event.Type)
 
-	// Route to appropriate handler
 	switch event.Type {
 	case "user.created":
-		h.handleUserCreated(event.Data)
+		if err := h.handleUserCreated(event.Data); err != nil {
+			log.Printf("Error handling user created event: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error handling user created event"})
+			return
+		}
 	case "user.updated":
-		h.handleUserUpdated(event.Data)
+		if err := h.handleUserUpdated(event.Data); err != nil {
+			log.Printf("Error handling user updated event: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error handling user updated event"})
+			return
+		}
 	case "user.deleted":
-		h.handleUserDeleted(event.Data)
+		if err := h.handleUserDeleted(event.Data); err != nil {
+			log.Printf("Error handling user deleted event: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error handling user deleted event"})
+			return
+		}
 	case "organization.created":
-		h.handleOrganizationCreated(event.Data)
+		if err := h.handleOrganizationCreated(event.Data); err != nil {
+			log.Printf("Error handling organization created event: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error handling organization created event"})
+			return
+		}
 	case "organization.deleted":
-		h.handleOrganizationDeleted(event.Data)
+		if err := h.handleOrganizationDeleted(event.Data); err != nil {
+			log.Printf("Error handling organization deleted event: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error handling organization deleted event"})
+			return
+		}
 	default:
 		log.Printf("Unhandled webhook event type: %s", event.Type)
 	}
@@ -116,11 +133,11 @@ func (h *WebhookHandler) Handle(c *gin.Context) {
 }
 
 // This function handles the backend when clerk sends a webhook saying a new user is created
-func (h *WebhookHandler) handleUserCreated(data json.RawMessage) {
+func (h *WebhookHandler) handleUserCreated(data json.RawMessage) error {
 	var clerkUser ClerkUser
 	if err := json.Unmarshal(data, &clerkUser); err != nil {
 		log.Printf("Error parsing user data: %v", err)
-		return
+		return err
 	}
 
 	email := ""
@@ -139,20 +156,22 @@ func (h *WebhookHandler) handleUserCreated(data json.RawMessage) {
 		UpdatedAt: time.UnixMilli(clerkUser.UpdatedAt),
 	}
 
-	if err := database.DB.Create(&user).Error; err != nil {
+	err := database.DB.Create(&user).Error
+	if err != nil {
 		log.Printf("Error creating user: %v", err)
-		return
+		return err
 	}
 
 	log.Printf("User created: %s (%s)", user.ID, user.Email)
+	return nil
 }
 
 // This function handles the backend when clerk sends a webhook saying a user is updated
-func (h *WebhookHandler) handleUserUpdated(data json.RawMessage) {
+func (h *WebhookHandler) handleUserUpdated(data json.RawMessage) error {
 	var clerkUser ClerkUser
 	if err := json.Unmarshal(data, &clerkUser); err != nil {
 		log.Printf("Error parsing user data: %v", err)
-		return
+		return err
 	}
 
 	email := ""
@@ -170,37 +189,39 @@ func (h *WebhookHandler) handleUserUpdated(data json.RawMessage) {
 
 	if err := database.DB.Model(&models.User{}).Where("id = ?", clerkUser.ID).Updates(updates).Error; err != nil {
 		log.Printf("Error updating user: %v", err)
-		return
+		return err
 	}
 
 	log.Printf("User updated: %s", clerkUser.ID)
+	return nil
 }
 
 // This function handles the backend when clerk sends a webhook saying a user is deleted
-func (h *WebhookHandler) handleUserDeleted(data json.RawMessage) {
+func (h *WebhookHandler) handleUserDeleted(data json.RawMessage) error {
 	var clerkUser struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(data, &clerkUser); err != nil {
 		log.Printf("Error parsing user data: %v", err)
-		return
+		return err
 	}
 
 	// Soft delete - set isActive to false
 	if err := database.DB.Model(&models.User{}).Where("id = ?", clerkUser.ID).Update("is_active", false).Error; err != nil {
 		log.Printf("Error deleting user: %v", err)
-		return
+		return err
 	}
 
 	log.Printf("User deleted (soft): %s", clerkUser.ID)
+	return nil
 }
 
 // This function handles the backend when clerk sends a webhook saying a new organization is created
-func (h *WebhookHandler) handleOrganizationCreated(data json.RawMessage) {
+func (h *WebhookHandler) handleOrganizationCreated(data json.RawMessage) error {
 	var clerkOrg ClerkOrganization
 	if err := json.Unmarshal(data, &clerkOrg); err != nil {
 		log.Printf("Error parsing organization data: %v", err)
-		return
+		return err
 	}
 
 	// Get the creator's user ID from the webhook - this will be the org admin
@@ -208,7 +229,7 @@ func (h *WebhookHandler) handleOrganizationCreated(data json.RawMessage) {
 	var rawData map[string]interface{}
 	if err := json.Unmarshal(data, &rawData); err != nil {
 		log.Printf("Error parsing raw organization data: %v", err)
-		return
+		return err
 	}
 
 	orgAdminID := getString(rawData, "created_by")
@@ -226,47 +247,53 @@ func (h *WebhookHandler) handleOrganizationCreated(data json.RawMessage) {
 		UpdatedAt: time.UnixMilli(clerkOrg.UpdatedAt),
 	}
 
-	// Only set OrgAdminID if we have a valid user ID (may not exist in DB yet, that's OK with nullable FK)
 	if orgAdminID != "" {
 		org.OrgAdminID = &orgAdminID
 	}
 
-	if err := database.DB.Create(&org).Error; err != nil {
-		log.Printf("Error creating organization: %v", err)
-		return
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&org).Error; err != nil {
+			return err
+		}
+
+		settings := models.OrganizationSettings{
+			OrganizationID: clerkOrg.ID,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+
+		if err := tx.Create(&settings).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		log.Printf("Error creating organization and settings: %v", err)
+		return err
 	}
 
-	// Create empty settings record - will be populated via API call from frontend
-	settings := models.OrganizationSettings{
-		OrganizationID: clerkOrg.ID,
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
-	}
-
-	if err := database.DB.Create(&settings).Error; err != nil {
-		log.Printf("Error creating organization settings: %v", err)
-		// Don't fail the whole operation, settings can be created later
-	}
-
-	log.Printf(" Organization created: %s (%s) with admin: %s", org.ID, org.Name, orgAdminID)
+	log.Printf("Organization created: %s (%s) with admin: %s", clerkOrg.ID, clerkOrg.Name, orgAdminID)
+	return nil
 }
 
-func (h *WebhookHandler) handleOrganizationDeleted(data json.RawMessage) {
+func (h *WebhookHandler) handleOrganizationDeleted(data json.RawMessage) error {
 	var clerkOrg struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(data, &clerkOrg); err != nil {
 		log.Printf("Error parsing organization data: %v", err)
-		return
+		return err
 	}
 
 	// Soft delete
 	if err := database.DB.Model(&models.Organization{}).Where("id = ?", clerkOrg.ID).Update("is_active", false).Error; err != nil {
 		log.Printf("Error deleting organization: %v", err)
-		return
+		return err
 	}
 
 	log.Printf("Organization deleted (soft): %s", clerkOrg.ID)
+	return nil
 }
 
 // Helper functions

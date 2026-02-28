@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -14,33 +16,51 @@ type Config struct {
 	Port               string
 }
 
-// Load reads configuration from environment variables
 func Load() (*Config, error) {
-	// Try to load .env file from multiple possible paths
 	envPaths := []string{
-		".env",          // Current directory
-		"../../.env",    // When running from cmd/server/
-		"../../../.env", // When running from deeper paths
+		".env",
+		"../../.env",
+		"../../../.env",
 	}
 
-	for _, path := range envPaths {
-		if err := godotenv.Load(path); err == nil {
+	for _, path := range envPaths { //godotenv just loads the variables into the OS when it finds an .env file does not return the actual env vars
+		err := godotenv.Load(path)
+		if err == nil {
 			break
 		}
 	}
 
 	cfg := &Config{
-		ClerkSecretKey:     getEnv("CLERK_SECRET_KEY", ""),
-		ClerkWebhookSecret: getEnv("CLERK_WEBHOOK_SECRET", ""),
-		DatabaseURL:        getEnv("DATABASE_URL", ""),
-		Port:               getEnv("PORT", "8080"),
+		ClerkSecretKey:     strings.TrimSpace(getEnv("CLERK_SECRET_KEY", "")),
+		ClerkWebhookSecret: strings.TrimSpace(getEnv("CLERK_WEBHOOK_SECRET", "")),
+		DatabaseURL:        strings.TrimSpace(getEnv("DATABASE_URL", "")),
+		Port:               strings.TrimSpace(getEnv("PORT", "8080")),
+	}
+
+	//If any required env vars are missing we return an error
+	var missing []string
+	if cfg.ClerkSecretKey == "" {
+		missing = append(missing, "CLERK_SECRET_KEY")
+	}
+	if cfg.ClerkWebhookSecret == "" {
+		missing = append(missing, "CLERK_WEBHOOK_SECRET")
+	}
+	if cfg.DatabaseURL == "" {
+		missing = append(missing, "DATABASE_URL")
+	}
+	if cfg.Port == "" {
+		cfg.Port = "8080" // Default port
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
 	}
 
 	return cfg, nil
 }
 
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
+func getEnv(key string, defaultValue string) string {
+	value := os.Getenv(key)
+	if value != "" {
 		return value
 	}
 	return defaultValue
