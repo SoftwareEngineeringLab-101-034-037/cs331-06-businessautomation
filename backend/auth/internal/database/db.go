@@ -15,7 +15,7 @@ var DB *gorm.DB
 
 var openDatabase = func(databaseURL string) (*gorm.DB, error) {
 	return gorm.Open(postgres.Open(databaseURL), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn), // Only log warnings and errors
+		Logger: logger.Default.LogMode(logger.Error), // Only log errors
 	})
 }
 
