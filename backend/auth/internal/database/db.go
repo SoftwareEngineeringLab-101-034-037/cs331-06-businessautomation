@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"log"
 
 	"gorm.io/driver/postgres"
@@ -12,13 +13,25 @@ import (
 
 var DB *gorm.DB
 
+var openDatabase = func(databaseURL string) (*gorm.DB, error) {
+	return gorm.Open(postgres.Open(databaseURL), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn), // Only log warnings and errors
+	})
+}
+
+var runAutoMigrate = func(db *gorm.DB) error {
+	return db.AutoMigrate(
+		&models.User{},
+		&models.Organization{},
+		&models.OrganizationSettings{},
+	)
+}
+
 // Connect establishes connection to Supabase PostgreSQL
 func Connect(databaseURL string) error {
 	var err error
 
-	DB, err = gorm.Open(postgres.Open(databaseURL), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn), // Only log warnings and errors
-	})
+	DB, err = openDatabase(databaseURL)
 	if err != nil {
 		return err
 	}
@@ -29,11 +42,11 @@ func Connect(databaseURL string) error {
 
 // Migrate runs database migrations
 func Migrate() error {
-	err := DB.AutoMigrate(
-		&models.User{},
-		&models.Organization{},
-		&models.OrganizationSettings{},
-	)
+	if DB == nil {
+		return errors.New("database connection is not initialized")
+	}
+
+	err := runAutoMigrate(DB)
 	if err != nil {
 		return err
 	}
