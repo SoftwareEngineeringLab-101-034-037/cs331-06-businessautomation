@@ -1,6 +1,6 @@
 module github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/gin-contrib/cors v1.7.2
@@ -54,7 +54,7 @@ require (
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/oauth2 v0.0.0-20210514164344-f6687ab2804c // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
