@@ -1,0 +1,32 @@
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.so.*
+*.dylib
+*.o
+*.a
+*.out
+
+# IDE & Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Build output
+/bin/
+/dist/
+
+# Temporary files
+*.tmp
+*.log
