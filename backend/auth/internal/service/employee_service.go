@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
 )
+
+var ErrDuplicateDepartment = errors.New("duplicate department")
 
 // EmployeeService handles department, employee, and invitation operations.
 type EmployeeService struct {
@@ -21,12 +24,16 @@ func NewEmployeeService(db *gorm.DB, clerkSecretKey string) *EmployeeService {
 	return &EmployeeService{db: db, clerkSecretKey: clerkSecretKey}
 }
 
-// ---------------------------------------------------------------------------
-// Departments
-// ---------------------------------------------------------------------------
-
-// CreateDepartment creates a new department within an organization.
 func (s *EmployeeService) CreateDepartment(orgID, name, description string) (*models.Department, error) {
+	var existing models.Department
+	err := s.db.Where("name = ? AND organization_id = ?", name, orgID).First(&existing).Error
+	if err == nil {
+		return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, name)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("failed to check existing department: %w", err)
+	}
+
 	dept := models.Department{
 		OrganizationID: orgID,
 		Name:           name,
@@ -50,11 +57,6 @@ func (s *EmployeeService) ListDepartments(orgID string) ([]models.Department, er
 	return departments, nil
 }
 
-// ---------------------------------------------------------------------------
-// Employees
-// ---------------------------------------------------------------------------
-
-// ListEmployees returns all users who are members of the given organization.
 func (s *EmployeeService) ListEmployees(orgID string) ([]models.User, error) {
 	var users []models.User
 	err := s.db.

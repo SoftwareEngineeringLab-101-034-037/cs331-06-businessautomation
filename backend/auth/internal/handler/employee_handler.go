@@ -29,7 +29,11 @@ func (h *EmployeeHandler) CreateDepartment(c *gin.Context) {
 	}
 	dept, err := h.Service.CreateDepartment(orgID, body.Name, body.Description)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if errors.Is(err, service.ErrDuplicateDepartment) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
 		return
 	}
 	c.JSON(http.StatusCreated, dept)
