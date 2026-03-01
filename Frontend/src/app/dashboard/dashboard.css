@@ -5241,3 +5241,998 @@
     padding: 6px 10px;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   18. REACT FLOW CUSTOM NODES (rf-*)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Canvas area override for React Flow ── */
+.wfb-canvas-area {
+  position: relative;
+  padding: 0;
+  background: none;
+  overflow: hidden;
+  /* Reset old layout — React Flow manages its own sizing */
+  display: block;
+}
+
+/* ── Add-Node Toolbar (floating over canvas) ── */
+.wfb-add-toolbar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md, 0 2px 8px rgba(0,0,0,.08));
+}
+
+.wfb-add-toolbar-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.wfb-add-node-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.wfb-add-node-btn:hover {
+  background: var(--hover);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
+}
+
+.wfb-add-node-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Common node wrapper ── */
+.rf-node {
+  font-family: "Plus Jakarta Sans", var(--font-sans);
+  min-width: 180px;
+  max-width: 260px;
+  padding: 0;
+  border-radius: 12px;
+  /* Always light background — canvas is a drawing surface */
+  background: #ffffff;
+  border: 2px solid #e2e8f0;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  transition: box-shadow 0.15s, border-color 0.15s;
+  cursor: grab;
+  user-select: none;
+  position: relative;
+  /* Force all text inside nodes to always be dark */
+  color: #1e293b;
+}
+
+.rf-node:hover {
+  box-shadow: 0 2px 12px rgba(99, 102, 241, 0.12);
+}
+
+/* ── Node delete button (top-right corner, appears on hover) ── */
+.rf-node-delete-btn {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  z-index: 10;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  border: 2px solid #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.12s, background 0.12s;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  padding: 0;
+}
+
+.rf-node:hover .rf-node-delete-btn,
+.react-flow__node.selected .rf-node-delete-btn {
+  opacity: 1;
+}
+
+.rf-node-delete-btn:hover {
+  background: #dc2626;
+  transform: scale(1.15);
+}
+
+/* Condition node delete btn needs different offset since it uses absolute positioning */
+.rf-node-condition .rf-node-delete-btn {
+  top: 4px;
+  right: 4px;
+  z-index: 20;
+}
+
+/* React Flow adds .selected to the wrapper div around our node */
+.react-flow__node.selected .rf-node {
+  border-color: var(--accent, #6366f1);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+
+/* ── Start & End Nodes (circle-ish) ── */
+.rf-node-start,
+.rf-node-end {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 20px;
+  min-width: 90px;
+  max-width: 140px;
+  border-radius: 50px;
+  text-align: center;
+}
+
+.rf-node-start {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  border-color: #16a34a;
+  color: #fff;
+}
+
+.rf-node-end {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.rf-node-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.rf-node-icon-end {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.rf-node-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Task & Action Nodes ── */
+.rf-node-task,
+.rf-node-action {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-left: 4px solid var(--accent);
+}
+
+.rf-node-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.rf-node-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  color: #fff;
+}
+
+.rf-node-role {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.rf-node-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #1e293b;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.rf-node-desc {
+  font-size: 0.72rem;
+  color: #64748b;
+  line-height: 1.35;
+  max-height: 2.7em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rf-node-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.rf-node-sla {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #94a3b8;
+}
+
+/* ── Condition Node (diamond via rotated square) ── */
+.rf-node-condition {
+  /* Bounding box = side√2 of the inner rotated square.
+     Inner square: 96px × 96px  →  bounding box: ~136px × 136px */
+  position: relative;
+  width: 136px;
+  height: 136px;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0;
+  min-width: unset;
+  max-width: unset;
+}
+
+.rf-node-condition:hover {
+  box-shadow: none !important;
+}
+
+.react-flow__node.selected .rf-node-condition {
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* The rotated square that BECOMES the diamond */
+.rf-condition-diamond {
+  position: absolute;
+  /* Center the 96×96 square inside the 136×136 bounding box: (136-96)/2 = 20px */
+  top: 20px;
+  left: 20px;
+  width: 96px;
+  height: 96px;
+  border: 2.5px solid #f59e0b;
+  border-radius: 10px;
+  background: var(--card, #fff);
+  transform: rotate(45deg);
+  transition: box-shadow 0.15s, border-color 0.15s;
+  box-shadow: 0 2px 10px rgba(245, 158, 11, 0.14);
+}
+
+.react-flow__node.selected .rf-condition-diamond {
+  border-color: #f59e0b !important;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.25);
+}
+
+/* Content is counter-rotated so text stays upright */
+.rf-condition-content {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-45deg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px;
+  pointer-events: none;
+}
+
+/* Legacy icon wrapper — keep for compat */
+.rf-condition-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rf-condition-expr {
+  font-size: 0.6rem;
+  color: #f59e0b;
+  font-style: italic;
+  text-align: center;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Handle labels (Yes / No) */
+.rf-handle-label {
+  position: absolute;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  pointer-events: none;
+}
+
+.rf-handle-label-left {
+  left: -28px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #22c55e;
+}
+
+.rf-handle-label-right {
+  right: -22px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #ef4444;
+}
+
+/* ── Parallel Node (bar) ── */
+.rf-node-parallel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0;
+  min-width: 160px;
+  max-width: 280px;
+  border-width: 2.5px;
+  border-radius: 10px;
+  background: transparent;
+  overflow: visible;
+}
+
+.rf-parallel-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: 8px;
+  color: #fff;
+  font-weight: 700;
+}
+
+.rf-parallel-label {
+  font-size: 0.82rem;
+}
+
+.rf-parallel-count {
+  font-size: 0.68rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+/* ── Merge Node (inverse of parallel) ── */
+.rf-node-merge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0;
+  min-width: 160px;
+  max-width: 280px;
+  border-width: 2.5px;
+  border-radius: 10px;
+  background: transparent;
+  overflow: visible;
+}
+
+.rf-merge-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: 8px;
+  color: #fff;
+  font-weight: 700;
+}
+
+.rf-merge-label {
+  font-size: 0.82rem;
+}
+
+.rf-merge-count {
+  font-size: 0.68rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.rf-merge-legend {
+  display: flex;
+  gap: 10px;
+  padding: 4px 8px;
+  font-size: 0.62rem;
+  color: #64748b;
+}
+.rf-merge-legend-req {
+  color: #ec4899;
+  font-weight: 600;
+}
+.rf-merge-legend-opt {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+/* Required / optional handle indicators */
+.rf-handle-required {
+  border-color: #ec4899 !important;
+  background: #ec4899 !important;
+}
+.rf-handle-optional {
+  border-color: #94a3b8 !important;
+  background: #ffffff !important;
+}
+
+/* Per-input floating labels above merge handles */
+.rf-merge-input-label {
+  position: absolute;
+  top: -22px;
+  transform: translateX(-50%);
+  font-size: 0.6rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 4px;
+  pointer-events: none;
+  letter-spacing: 0.04em;
+}
+.rf-merge-input-label-req {
+  background: #ec4899;
+  color: #fff;
+}
+.rf-merge-input-label-opt {
+  background: #e2e8f0;
+  color: #64748b;
+}
+
+/* ── Merge input toggles in StepEditor ── */
+.wf-merge-inputs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wf-merge-input-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.wf-merge-input-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #1e293b;
+  min-width: 52px;
+}
+.wf-merge-toggle-group {
+  display: flex;
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1.5px solid #e2e8f0;
+}
+.wf-merge-toggle-btn {
+  padding: 4px 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: none;
+  background: var(--bg, #f8fafc);
+  color: #94a3b8;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1.5;
+}
+.wf-merge-toggle-btn + .wf-merge-toggle-btn {
+  border-left: 1.5px solid #e2e8f0;
+}
+.wf-merge-toggle-btn:hover:not(.active) {
+  background: #f1f5f9;
+  color: #475569;
+}
+.wf-merge-req {
+  color: #ec4899;
+  font-weight: 600;
+  font-size: 0.72rem;
+}
+.wf-merge-opt {
+  color: #94a3b8;
+  font-weight: 500;
+  font-size: 0.72rem;
+}
+
+/* ── Handles ── */
+.rf-handle {
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 50% !important;
+  border: 2px solid var(--accent, #6366f1) !important;
+  background: var(--card, #fff) !important;
+  transition: background 0.15s, transform 0.15s;
+}
+
+.rf-handle:hover {
+  background: var(--accent, #6366f1) !important;
+  transform: scale(1.3);
+}
+
+.rf-handle-yes {
+  border-color: #22c55e !important;
+}
+
+.rf-handle-yes:hover {
+  background: #22c55e !important;
+}
+
+.rf-handle-no {
+  border-color: #ef4444 !important;
+}
+
+.rf-handle-no:hover {
+  background: #ef4444 !important;
+}
+
+/* ── Edge label & delete button ── */
+.rf-edge-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  color: #64748b;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.rf-edge-delete-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border: 2px solid var(--surface, #fff);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  transition: transform 0.12s, background 0.12s;
+  user-select: none;
+}
+
+.rf-edge-delete-btn:hover {
+  background: #dc2626;
+  transform: scale(1.2);
+}
+
+/* ── Theme toggle in workflow builder ── */
+.wfb-theme-toggle {
+  padding: 6px 8px !important;
+  min-width: 36px;
+}
+
+/* ── React Flow overrides ── */
+.react-flow__background {
+  opacity: 0.4;
+}
+
+.react-flow__minimap {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+.react-flow__controls {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+.react-flow__controls-button {
+  background: var(--surface, #fff) !important;
+  border-bottom: 1px solid var(--border) !important;
+  fill: var(--text-secondary) !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--hover, #f5f5f5) !important;
+}
+
+.react-flow__edge-path {
+  stroke: var(--text-tertiary, #999) !important;
+  stroke-width: 2;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--accent, #6366f1) !important;
+  stroke-width: 2.5;
+}
+
+.react-flow__edge-text {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* ── Quick-add removed (replaced by toolbar) ── */
+.wf-quick-add-btn { display: none; }
+
+/* ── Graph-mode nodes (branching canvas — legacy) ── */
+.wf-graph {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+}
+
+.wf-graph-row {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.wf-graph-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  height: 48px;
+  width: 2px;
+}
+
+.wf-gnode {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  min-width: 180px;
+  max-width: 240px;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.wf-gnode:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.08);
+}
+
+.wf-gnode-selected {
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+/* Diamond shape for condition nodes */
+.wf-gnode-diamond {
+  border-radius: 4px;
+  transform: rotate(0deg);
+  background:
+    linear-gradient(135deg, transparent 12px, var(--card) 12px) top left,
+    linear-gradient(225deg, transparent 12px, var(--card) 12px) top right,
+    linear-gradient(315deg, transparent 12px, var(--card) 12px) bottom right,
+    linear-gradient(45deg, transparent 12px, var(--card) 12px) bottom left;
+  background-size: 50% 50%;
+  background-repeat: no-repeat;
+  border-color: #f59e0b;
+  text-align: center;
+}
+
+/* Bar shape for parallel / merge nodes */
+.wf-gnode-bar {
+  border-radius: 6px;
+  border-width: 3px;
+  border-color: #06b6d4;
+  min-width: 140px;
+  text-align: center;
+  background: linear-gradient(90deg, rgba(6, 182, 212, 0.06), transparent);
+}
+
+.wf-gnode-type {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.wf-gnode-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wf-gnode-role {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.wf-gnode-sla {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.wf-gnode-cond {
+  font-size: 10px;
+  color: #f59e0b;
+  font-style: italic;
+}
+
+.wf-gnode-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition: opacity 0.15s;
+  padding: 2px;
+}
+
+.wf-gnode:hover .wf-gnode-delete {
+  opacity: 1;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   Step Editor — new section / connector / task-action styles
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Section dividers ── */
+.wf-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wf-section:last-child {
+  border-bottom: none;
+}
+
+.wf-section-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+/* ── Connector type grid ── */
+.wf-connector-type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.wf-connector-type-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1.5px solid var(--border);
+  background: var(--card-bg);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.wf-connector-type-btn:hover {
+  border-color: var(--text-secondary);
+}
+
+.wf-connector-type-btn.active {
+  font-weight: 600;
+}
+
+.wf-connector-type-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Required star ── */
+.wf-required-star {
+  color: #ef4444;
+  margin-left: 2px;
+  font-weight: 700;
+}
+
+/* ── Task actions grid ── */
+.wf-task-actions-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wf-task-action-btn {
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1.5px solid var(--border);
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.wf-task-action-btn:hover {
+  border-color: var(--text-secondary);
+}
+
+.wf-task-action-btn.active {
+  font-weight: 600;
+}
+
+/* ── Condition branch indicators ── */
+.wf-condition-branches {
+  display: flex;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.wf-condition-branch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.wf-condition-branch-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Publish validation errors
+   ═══════════════════════════════════════════════════════════════ */
+.wf-publish-errors {
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 4px;
+}
+
+[data-theme="dark"] .wf-publish-errors {
+  background: rgba(239, 68, 68, 0.10);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.wf-publish-errors-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #dc2626;
+  margin-bottom: 8px;
+}
+
+[data-theme="dark"] .wf-publish-errors-title {
+  color: #f87171;
+}
+
+.wf-publish-errors-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.wf-publish-errors-list li {
+  font-size: 0.78rem;
+  color: #991b1b;
+  line-height: 1.45;
+  padding-left: 16px;
+  position: relative;
+}
+
+[data-theme="dark"] .wf-publish-errors-list li {
+  color: #fca5a5;
+}
+
+.wf-publish-errors-list li::before {
+  content: "✕";
+  position: absolute;
+  left: 0;
+  color: #ef4444;
+  font-weight: 700;
+  font-size: 0.7rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Task action branching — per-action output handles
+   ═══════════════════════════════════════════════════════════════ */
+
+/* When task has action handles, add bottom padding so labels don't overlap */
+.rf-node-task:has(.rf-handle-action) {
+  padding-bottom: 22px;
+}
+
+/* Action-specific handle colors */
+.rf-handle-action-approve { background: #22c55e !important; }
+.rf-handle-action-reject  { background: #ef4444 !important; }
+.rf-handle-action-clarify { background: #f59e0b !important; }
+.rf-handle-action-complete { background: #3b82f6 !important; }
+
+.rf-handle-action-approve:hover { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.3) !important; }
+.rf-handle-action-reject:hover  { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.3) !important; }
+.rf-handle-action-clarify:hover { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.3) !important; }
+.rf-handle-action-complete:hover { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.3) !important; }
+
+/* Small label under each action handle */
+.rf-task-action-handle-label {
+  position: absolute;
+  bottom: -16px;
+  transform: translateX(-50%);
+  font-size: 0.6rem;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  letter-spacing: 0.02em;
+  text-transform: capitalize;
+}
+
+/* Branch hint in the StepEditor */
+.wf-field-hint-branch {
+  display: block;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(59, 130, 246, 0.08);
+  border-left: 3px solid #3b82f6;
+  border-radius: 0 6px 6px 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .wf-field-hint-branch {
+  background: rgba(59, 130, 246, 0.12);
+}

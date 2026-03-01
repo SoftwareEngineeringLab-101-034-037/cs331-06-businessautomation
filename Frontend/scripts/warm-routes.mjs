@@ -79,14 +79,28 @@ async function warmRoutes() {
   console.log(`\n✅ All routes ready! (${((Date.now() - t0) / 1000).toFixed(1)}s total)\n`);
 }
 
-async function main() {
-  startServer();
+async function isServerAlready() {
+  try {
+    await fetch(BASE, { signal: AbortSignal.timeout(2000) });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-  console.log("\n⏳ Waiting for dev server to start...");
-  const ready = await waitForServer();
-  if (!ready) {
-    console.log("❌ Dev server not reachable — timed out.");
-    process.exit(1);
+async function main() {
+  const alreadyUp = await isServerAlready();
+
+  if (alreadyUp) {
+    console.log("\n⚡ Dev server already running — skipping start.\n");
+  } else {
+    startServer();
+    console.log("\n⏳ Waiting for dev server to start...");
+    const ready = await waitForServer();
+    if (!ready) {
+      console.log("❌ Dev server not reachable — timed out.");
+      process.exit(1);
+    }
   }
 
   await warmRoutes();
