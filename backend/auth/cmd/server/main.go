@@ -40,10 +40,8 @@ func main() {
 		log.Println("Skipping database migrations (-migrate=false)")
 	}
 
-	// Start cleanup background job (runs every 5 min, deletes soft-deleted records older than 30 days)
 	cleanup.Start(cleanup.DefaultConfig())
 
-	// Initialize services
 	employeeService := service.NewEmployeeService(database.DB, cfg.ClerkSecretKey)
 	employeeHandler := handler.NewEmployeeHandler(employeeService)
 
@@ -52,9 +50,8 @@ func main() {
 
 	r := gin.Default()
 
-	// CORS configuration
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"}, // Configure for production
+		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Accept", "Authorization", "Content-Type"},
 		ExposeHeaders:    []string{"Link"},
@@ -65,7 +62,7 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-	// Webhook endpoint (no auth required — verified via Svix signature)
+
 	r.POST("/api/webhooks/clerk", webhookHandler.Handle)
 
 	api := r.Group("/api")
@@ -88,7 +85,6 @@ func main() {
 	log.Printf("Auth service running on http://localhost%s", addr)
 
 	if err := r.Run(addr); err != nil {
-		log.Fatalf("Server failed: %v", err)
+		log.Fatalf("Server failed to run: %v", err)
 	}
 }
-
