@@ -6,11 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
 )
@@ -45,6 +48,9 @@ func (s *EmployeeService) InviteAndNotify(input InviteInput) (*InviteResult, err
 	).First(&existing).Error
 	if err == nil {
 		return nil, fmt.Errorf("a pending invitation already exists for %s", input.Email)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("database lookup failed for %s in org %s: %w", input.Email, input.OrgID, err)
 	}
 
 	// Resolve department — look up by name within the org, or use as ID directly
