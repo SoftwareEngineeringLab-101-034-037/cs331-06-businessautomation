@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/service"
@@ -74,7 +75,14 @@ func (h *EmployeeHandler) InviteSingle(c *gin.Context) {
 		InvitedBy:    userID,
 	})
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		switch {
+		case errors.Is(err, service.ErrDuplicateInvite):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrNotFound):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
 		return
 	}
 
@@ -118,14 +126,12 @@ func (h *EmployeeHandler) InviteBulk(c *gin.Context) {
 	}
 	defer file.Close()
 
-	// Parse the Excel file
 	parseResult, err := service.ParseEmployeeExcel(file)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Process each valid row — create invitations
 	successful := 0
 	var inviteErrors []service.ParseError
 
@@ -151,7 +157,6 @@ func (h *EmployeeHandler) InviteBulk(c *gin.Context) {
 		}
 	}
 
-	// Combine parse errors + invite errors
 	allErrors := append(parseResult.Errors, inviteErrors...)
 
 	c.JSON(http.StatusOK, gin.H{

@@ -20,40 +20,40 @@ import (
 
 const clerkBaseURL = "https://api.clerk.com/v1"
 
+var (
+	ErrDuplicateInvite = errors.New("duplicate invitation")
+	ErrNotFound        = errors.New("not found")
+)
+
 // InviteInput holds the parameters for creating a single employee invitation.
 type InviteInput struct {
 	OrgID        string
 	Email        string
 	FirstName    string
 	LastName     string
-	DepartmentID string // department name or ID — resolved to department
+	DepartmentID string
 	Role         string
 	JobTitle     string
 	InvitedBy    string
 }
 
-// InviteResult is the outcome of a successful invitation.
 type InviteResult struct {
 	Invitation models.EmployeeInvitation `json:"invitation"`
 }
 
-// InviteAndNotify creates an employee invitation in our DB and sends the
-// invitation email via Clerk's organization invitation API.
 func (s *EmployeeService) InviteAndNotify(input InviteInput) (*InviteResult, error) {
-	// Check for an existing pending invitation with the same email + org
 	var existing models.EmployeeInvitation
 	err := s.db.Where(
 		"email = ? AND organization_id = ? AND status = ?",
 		input.Email, input.OrgID, "pending",
 	).First(&existing).Error
 	if err == nil {
-		return nil, fmt.Errorf("a pending invitation already exists for %s", input.Email)
+		return nil, fmt.Errorf("%w: a pending invitation already exists for %s", ErrDuplicateInvite, input.Email)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("database lookup failed for %s in org %s: %w", input.Email, input.OrgID, err)
 	}
 
-	// Resolve department — look up by name within the org, or use as ID directly
 	deptID, err := s.resolveDepartmentID(input.OrgID, input.DepartmentID)
 	if err != nil {
 		return nil, fmt.Errorf("department lookup failed: %w", err)
@@ -220,5 +220,5 @@ func (s *EmployeeService) resolveDepartmentID(orgID, nameOrID string) (string, e
 		return "", fmt.Errorf("DB error looking up department %q in org %s: %w", nameOrID, orgID, err)
 	}
 
-	return "", fmt.Errorf("department %q not found in organization %s", nameOrID, orgID)
+	return "", fmt.Errorf("%w: department %q not found in organization %s", ErrNotFound, nameOrID, orgID)
 }
