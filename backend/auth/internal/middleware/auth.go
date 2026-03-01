@@ -1,12 +1,14 @@
 package middleware
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"gorm.io/gorm"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/database"
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
@@ -76,6 +78,12 @@ func OrgAdminOnly() gin.HandlerFunc {
 			"user_id = ? AND organization_id = ?", userID, orgID,
 		).First(&membership).Error
 
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Printf("[OrgAdminOnly] database error checking membership: %v", err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+			return
+		}
+
 		if err == nil && membership.IsOrgAdmin() {
 			c.Set(OrgIDKey, orgID)
 			c.Next()
@@ -87,6 +95,11 @@ func OrgAdminOnly() gin.HandlerFunc {
 		err = database.DB.Where("id = ? AND org_admin_id = ?", orgID, userID).First(&org).Error
 
 		if err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				log.Printf("[OrgAdminOnly] database error checking org admin: %v", err)
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+				return
+			}
 			log.Printf("[OrgAdminOnly] denied: user_id=%s org_id=%s (not found in memberships or org_admin)", userID, orgID)
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Not a member of this organization"})
 			return
