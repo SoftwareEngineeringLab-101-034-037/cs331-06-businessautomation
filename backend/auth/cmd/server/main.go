@@ -12,6 +12,8 @@ import (
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/config"
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/database"
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/handler"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/middleware"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/service"
 )
 
 func main() {
@@ -41,7 +43,11 @@ func main() {
 	// Start cleanup background job (runs every 5 min, deletes soft-deleted records older than 30 days)
 	cleanup.Start(cleanup.DefaultConfig())
 
-	webhookHandler := handler.NewWebhookHandler(cfg.ClerkWebhookSecret)
+	// Initialize services
+	employeeService := service.NewEmployeeService(database.DB, cfg.ClerkSecretKey)
+	employeeHandler := handler.NewEmployeeHandler(employeeService)
+
+	webhookHandler := handler.NewWebhookHandler(cfg.ClerkWebhookSecret, employeeService)
 	gin.SetMode(gin.DebugMode)
 
 	r := gin.Default()
@@ -59,9 +65,24 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-
-	// Webhook endpoint (no auth required)
+	// Webhook endpoint (no auth required — verified via Svix signature)
 	r.POST("/api/webhooks/clerk", webhookHandler.Handle)
+
+	api := r.Group("/api")
+	api.Use(middleware.ClerkAuthMiddleware())
+	{
+		orgApi := api.Group("/orgs/:orgId")
+		orgApi.Use(middleware.OrgAdminOnly())
+		{
+			orgApi.POST("/departments", employeeHandler.CreateDepartment)
+			orgApi.GET("/departments", employeeHandler.ListDepartments)
+			orgApi.POST("/employees/invite", employeeHandler.InviteSingle)
+			orgApi.POST("/employees/invite/bulk", employeeHandler.InviteBulk)
+			orgApi.GET("/employees", employeeHandler.ListEmployees)
+			orgApi.GET("/invitations", employeeHandler.ListInvitations)
+			orgApi.DELETE("/invitations/:invitationId", employeeHandler.RevokeInvitation)
+		}
+	}
 
 	addr := ":" + cfg.Port
 	log.Printf("Auth service running on http://localhost%s", addr)
@@ -70,4 +91,3 @@ func main() {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
-
