@@ -14,14 +14,16 @@ import (
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/database"
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/service"
 )
 
 type WebhookHandler struct {
-	webhookSecret string
+	webhookSecret   string
+	employeeService *service.EmployeeService
 }
 
-func NewWebhookHandler(secret string) *WebhookHandler {
-	return &WebhookHandler{webhookSecret: secret}
+func NewWebhookHandler(secret string, empSvc *service.EmployeeService) *WebhookHandler {
+	return &WebhookHandler{webhookSecret: secret, employeeService: empSvc}
 }
 
 // ClerkWebhookEvent represents the structure of a Clerk webhook payload
@@ -53,6 +55,19 @@ type ClerkOrganization struct {
 	ImageURL  string `json:"image_url"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
+}
+
+type ClerkMembershipData struct {
+	ID           string `json:"id"`
+	Role         string `json:"role"`
+	CreatedAt    int64  `json:"created_at"`
+	UpdatedAt    int64  `json:"updated_at"`
+	Organization struct {
+		ID string `json:"id"`
+	} `json:"organization"`
+	PublicUserData struct {
+		UserID string `json:"user_id"`
+	} `json:"public_user_data"`
 }
 
 // Handle processes incoming Clerk webhooks
@@ -123,6 +138,12 @@ func (h *WebhookHandler) Handle(c *gin.Context) {
 		if err := h.handleOrganizationDeleted(event.Data); err != nil {
 			log.Printf("Error handling organization deleted event: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error handling organization deleted event"})
+			return
+		}
+	case "organizationMembership.created":
+		if err := h.handleMembershipCreated(event.Data); err != nil {
+			log.Printf("Error handling membership created event: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error handling membership created event"})
 			return
 		}
 	default:
@@ -233,9 +254,6 @@ func (h *WebhookHandler) handleOrganizationCreated(data json.RawMessage) error {
 	}
 
 	orgAdminID := getString(rawData, "created_by")
-	if orgAdminID == "" {
-		log.Printf("No created_by user found for organization %s, will update later via membership", clerkOrg.ID)
-	}
 
 	org := models.Organization{
 		ID:        clerkOrg.ID,
@@ -247,8 +265,16 @@ func (h *WebhookHandler) handleOrganizationCreated(data json.RawMessage) error {
 		UpdatedAt: time.UnixMilli(clerkOrg.UpdatedAt),
 	}
 
+	// Only set org_admin_id if the user actually exists in our DB
+	// (the user.created webhook may arrive late or fail)
 	if orgAdminID != "" {
-		org.OrgAdminID = &orgAdminID
+		var userCount int64
+		database.DB.Model(&models.User{}).Where("id = ?", orgAdminID).Count(&userCount)
+		if userCount > 0 {
+			org.OrgAdminID = &orgAdminID
+		} else {
+			log.Printf("Admin user %s not yet in DB for org %s — will be linked via membership webhook", orgAdminID, clerkOrg.ID)
+		}
 	}
 
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
@@ -296,11 +322,51 @@ func (h *WebhookHandler) handleOrganizationDeleted(data json.RawMessage) error {
 	return nil
 }
 
-// Helper functions
+func (h *WebhookHandler) handleMembershipCreated(data json.RawMessage) error {
+	var memberData ClerkMembershipData
+	if err := json.Unmarshal(data, &memberData); err != nil {
+		log.Printf("Error parsing membership data: %v", err)
+		return err
+	}
+
+	userID := memberData.PublicUserData.UserID
+	orgID := memberData.Organization.ID
+
+	// 1. Create OrganizationMembership record in our DB
+	membership := models.OrganizationMembership{
+		ID:             memberData.ID,
+		UserID:         userID,
+		OrganizationID: orgID,
+		ClerkRole:      memberData.Role,
+		JoinedAt:       time.UnixMilli(memberData.CreatedAt),
+		CreatedAt:      time.UnixMilli(memberData.CreatedAt),
+		UpdatedAt:      time.UnixMilli(memberData.UpdatedAt),
+	}
+	if err := database.DB.Create(&membership).Error; err != nil {
+		log.Printf("Error creating membership record (may already exist): %v", err)
+	}
+
+	// 2. Look up user's email to match against pending invitations
+	var user models.User
+	if err := database.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		log.Printf("User %s not found for membership linking: %v", userID, err)
+		return nil
+	}
+
+	// 3. Try to auto-accept a matching invitation (assigns department + role)
+	if h.employeeService != nil {
+		if err := h.employeeService.AcceptInvitationByEmail(user.Email, orgID, userID); err != nil {
+			log.Printf("Invitation auto-accept note: %v", err)
+		}
+	}
+
+	log.Printf("Membership created: user %s joined org %s as %s", userID, orgID, memberData.Role)
+	return nil
+}
+
 func getString(m map[string]interface{}, key string) string {
 	if v, ok := m[key].(string); ok {
 		return v
 	}
 	return ""
 }
-
