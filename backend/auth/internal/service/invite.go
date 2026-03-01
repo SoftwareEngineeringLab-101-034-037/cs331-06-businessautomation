@@ -146,48 +146,56 @@ func (s *EmployeeService) AcceptInvitationByEmail(email, orgID, userID string) e
 	}
 
 	if invitation.IsExpired() {
-		// Mark as expired rather than accepting
-		s.db.Model(&invitation).Update("status", "expired")
+		if err := s.db.Model(&invitation).Update("status", "expired").Error; err != nil {
+			return fmt.Errorf("failed to mark invitation as expired: %w", err)
+		}
 		return fmt.Errorf("invitation for %s has expired", email)
 	}
 
 	now := time.Now()
-	// Mark invitation as accepted
-	if err := s.db.Model(&invitation).Updates(map[string]interface{}{
-		"status":           "accepted",
-		"accepted_at":      now,
-		"accepted_user_id": userID,
-		"updated_at":       now,
-	}).Error; err != nil {
-		return fmt.Errorf("failed to accept invitation: %w", err)
-	}
 
-	// Assign department and job title to the user
-	userUpdates := map[string]interface{}{
-		"department_id": invitation.DepartmentID,
-		"updated_at":    now,
-	}
-	if invitation.JobTitle != "" {
-		userUpdates["job_title"] = invitation.JobTitle
-	}
-
-	// Resolve and assign role if specified
-	if invitation.RoleName != "" {
-		var role models.Role
-		if err := s.db.Where("name = ? AND organization_id = ?", invitation.RoleName, orgID).First(&role).Error; err == nil {
-			userUpdates["role_id"] = role.ID
-		} else {
-			log.Printf("Role %q not found for org %s, skipping role assignment", invitation.RoleName, orgID)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		// Mark invitation as accepted
+		if err := tx.Model(&invitation).Updates(map[string]interface{}{
+			"status":           "accepted",
+			"accepted_at":      now,
+			"accepted_user_id": userID,
+			"updated_at":       now,
+		}).Error; err != nil {
+			return fmt.Errorf("failed to accept invitation: %w", err)
 		}
-	}
 
-	if err := s.db.Model(&models.User{}).Where("id = ?", userID).Updates(userUpdates).Error; err != nil {
-		return fmt.Errorf("failed to update user after invitation acceptance: %w", err)
-	}
+		// Build user updates
+		userUpdates := map[string]interface{}{
+			"department_id": invitation.DepartmentID,
+			"updated_at":    now,
+		}
+		if invitation.JobTitle != "" {
+			userUpdates["job_title"] = invitation.JobTitle
+		}
 
-	log.Printf("Invitation accepted: user %s joined org %s, assigned to department %s",
-		userID, orgID, invitation.DepartmentID)
-	return nil
+		// Resolve and assign role if specified
+		if invitation.RoleName != "" {
+			var role models.Role
+			if err := tx.Where("name = ? AND organization_id = ?", invitation.RoleName, orgID).First(&role).Error; err == nil {
+				userUpdates["role_id"] = role.ID
+			} else {
+				log.Printf("Role %q not found for org %s, skipping role assignment", invitation.RoleName, orgID)
+			}
+		}
+
+		result := tx.Model(&models.User{}).Where("id = ?", userID).Updates(userUpdates)
+		if result.Error != nil {
+			return fmt.Errorf("failed to update user after invitation acceptance: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("user %s not found, rolling back invitation acceptance", userID)
+		}
+
+		log.Printf("Invitation accepted: user %s joined org %s, assigned to department %s",
+			userID, orgID, invitation.DepartmentID)
+		return nil
+	})
 }
 
 // resolveDepartmentID tries to find a department by name within the org first,
