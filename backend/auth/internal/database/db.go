@@ -62,3 +62,4 @@ func Migrate() error {
 	log.Println("Database migrations completed")
 	return nil
 }
+
