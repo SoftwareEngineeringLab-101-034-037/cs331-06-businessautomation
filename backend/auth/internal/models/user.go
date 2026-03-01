@@ -15,6 +15,7 @@ type User struct {
 	AvatarURL    string         `json:"avatar_url"`
 	DepartmentID *string        `json:"department_id"`                 // Local extension
 	RoleID       *string        `json:"role_id"`                       // FK to Role
+	JobTitle     string         `json:"job_title"`                     // Employee's job title
 	Preferences  datatypes.JSON `gorm:"type:jsonb" json:"preferences"` // Local extension
 	IsActive     bool           `gorm:"default:true" json:"is_active"`
 	CreatedAt    time.Time      `json:"created_at"`
@@ -23,6 +24,7 @@ type User struct {
 
 	// Relationships
 	Role        *Role                    `gorm:"foreignKey:RoleID" json:"role,omitempty"`
+	Department  *Department              `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
 	Memberships []OrganizationMembership `gorm:"foreignKey:UserID" json:"memberships,omitempty"`
 }
 
