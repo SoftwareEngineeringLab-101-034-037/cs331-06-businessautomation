@@ -14,8 +14,14 @@ import (
 var DB *gorm.DB
 
 var openDatabase = func(databaseURL string) (*gorm.DB, error) {
-	return gorm.Open(postgres.Open(databaseURL), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Error), // Only log errors
+	// Supabase uses PgBouncer (port 6543) in transaction mode which doesn't
+	// support prepared statements. We disable them to avoid "prepared statement
+	// already exists" errors.
+	return gorm.Open(postgres.New(postgres.Config{
+		DSN:                  databaseURL,
+		PreferSimpleProtocol: true, // disables prepared statement caching
+	}), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Error),
 	})
 }
 
@@ -24,6 +30,8 @@ var runAutoMigrate = func(db *gorm.DB) error {
 		&models.User{},
 		&models.Organization{},
 		&models.OrganizationSettings{},
+		&models.Department{},
+		&models.EmployeeInvitation{},
 	)
 }
 

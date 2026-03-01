@@ -59,5 +59,15 @@ func runCleanup(retentionDays int) {
 	} else if result.RowsAffected > 0 {
 		log.Printf("Cleanup: deleted %d inactive organizations older than %d days", result.RowsAffected, retentionDays)
 	}
+
+	// Expire pending invitations that are past their expiry time
+	result = database.DB.Model(&models.EmployeeInvitation{}).
+		Where("status = ? AND expires_at < ?", "pending", time.Now()).
+		Update("status", "expired")
+	if result.Error != nil {
+		log.Printf("Cleanup error (invitations): %v", result.Error)
+	} else if result.RowsAffected > 0 {
+		log.Printf("Cleanup: expired %d old invitations", result.RowsAffected)
+	}
 }
 

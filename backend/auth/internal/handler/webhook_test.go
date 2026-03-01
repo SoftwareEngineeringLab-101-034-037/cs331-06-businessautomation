@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CS331-06-BusinessAutomation/backend/auth/internal/database"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/database"
 	"github.com/gin-gonic/gin"
 	svix "github.com/svix/svix-webhooks/go"
 	"gorm.io/driver/sqlite"
@@ -21,7 +21,7 @@ import (
 
 func TestHandleReturnsUnauthorizedForInvalidSignature(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	handler := NewWebhookHandler(testWebhookSecret())
+	handler := NewWebhookHandler(testWebhookSecret(), nil)
 
 	body := mustMarshal(t, map[string]interface{}{
 		"type":   "ignored.event",
@@ -47,7 +47,7 @@ func TestHandleReturnsUnauthorizedForInvalidSignature(t *testing.T) {
 
 func TestHandleReturnsOKForValidSignedUnknownEvent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	handler := NewWebhookHandler(testWebhookSecret())
+	handler := NewWebhookHandler(testWebhookSecret(), nil)
 
 	body := mustMarshal(t, map[string]interface{}{
 		"type":   "some.unhandled.event",
@@ -85,7 +85,7 @@ func TestHandleReturnsInternalServerErrorWhenHandlerFails(t *testing.T) {
 	}
 
 	gin.SetMode(gin.TestMode)
-	handler := NewWebhookHandler(testWebhookSecret())
+	handler := NewWebhookHandler(testWebhookSecret(), nil)
 	body := mustMarshal(t, map[string]interface{}{
 		"type": "user.created",
 		"data": map[string]interface{}{
@@ -120,7 +120,7 @@ func TestHandleUserCreatedCreatesRow(t *testing.T) {
 	db := setupWebhookTestDB(t)
 	database.DB = db
 
-	handler := NewWebhookHandler("")
+	handler := NewWebhookHandler("", nil)
 	data := mustMarshal(t, map[string]interface{}{
 		"id": "user_1",
 		"email_addresses": []map[string]interface{}{
@@ -158,7 +158,7 @@ func TestHandleUserUpdatedUpdatesExistingRow(t *testing.T) {
 		t.Fatalf("failed seeding user: %v", err)
 	}
 
-	handler := NewWebhookHandler("")
+	handler := NewWebhookHandler("", nil)
 	data := mustMarshal(t, map[string]interface{}{
 		"id": "user_2",
 		"email_addresses": []map[string]interface{}{
@@ -198,7 +198,7 @@ func TestHandleUserDeletedMarksInactive(t *testing.T) {
 		t.Fatalf("failed seeding user: %v", err)
 	}
 
-	handler := NewWebhookHandler("")
+	handler := NewWebhookHandler("", nil)
 	data := mustMarshal(t, map[string]interface{}{"id": "user_3"})
 	if err := handler.handleUserDeleted(data); err != nil {
 		t.Fatalf("expected no error deleting user, got %v", err)
@@ -218,7 +218,7 @@ func TestHandleOrganizationCreatedCreatesOrgAndSettings(t *testing.T) {
 	db := setupWebhookTestDB(t)
 	database.DB = db
 
-	handler := NewWebhookHandler("")
+	handler := NewWebhookHandler("", nil)
 	data := mustMarshal(t, map[string]interface{}{
 		"id":         "org_1",
 		"name":       "Org One",
@@ -263,7 +263,7 @@ func TestHandleOrganizationCreatedRollsBackWhenSettingsInsertFails(t *testing.T)
 		t.Fatalf("failed seeding organization settings: %v", err)
 	}
 
-	handler := NewWebhookHandler("")
+	handler := NewWebhookHandler("", nil)
 	data := mustMarshal(t, map[string]interface{}{
 		"id":         "org_tx_rollback",
 		"name":       "Rollback Org",
@@ -299,7 +299,7 @@ func TestHandleOrganizationDeletedMarksInactive(t *testing.T) {
 		t.Fatalf("failed seeding organization: %v", err)
 	}
 
-	handler := NewWebhookHandler("")
+	handler := NewWebhookHandler("", nil)
 	data := mustMarshal(t, map[string]interface{}{"id": "org_2"})
 	if err := handler.handleOrganizationDeleted(data); err != nil {
 		t.Fatalf("expected no error deleting organization, got %v", err)
