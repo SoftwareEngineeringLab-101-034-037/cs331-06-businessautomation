@@ -207,11 +207,17 @@ func (s *EmployeeService) resolveDepartmentID(orgID, nameOrID string) (string, e
 	if err == nil {
 		return dept.ID, nil
 	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", fmt.Errorf("DB error looking up department %q in org %s: %w", nameOrID, orgID, err)
+	}
 
 	// Fall back to treating as a direct ID
 	err = s.db.Where("id = ? AND organization_id = ?", nameOrID, orgID).First(&dept).Error
 	if err == nil {
 		return dept.ID, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", fmt.Errorf("DB error looking up department %q in org %s: %w", nameOrID, orgID, err)
 	}
 
 	return "", fmt.Errorf("department %q not found in organization %s", nameOrID, orgID)
