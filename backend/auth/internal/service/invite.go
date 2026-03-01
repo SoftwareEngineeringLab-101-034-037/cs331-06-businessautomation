@@ -118,7 +118,8 @@ func (s *EmployeeService) sendClerkOrgInvitation(orgID, email string) error {
 	req.Header.Set("Authorization", "Bearer "+s.clerkSecretKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("clerk API request failed: %w", err)
 	}
