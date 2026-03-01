@@ -1,241 +1,313 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-import type { WorkflowStep, WorkflowTrigger } from "@/types/workflow";
-import { TRIGGER_CONFIG, STEP_ACTION_CONFIG } from "@/types/workflow";
+import { useState, useCallback, useMemo } from "react";
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  MiniMap,
+  BaseEdge,
+  EdgeLabelRenderer,
+  getSmoothStepPath,
+  type Node,
+  type Edge,
+  type EdgeProps,
+  type OnNodesChange,
+  type OnEdgesChange,
+  type OnConnect,
+  type Connection,
+  BackgroundVariant,
+  MarkerType,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 
-interface WorkflowCanvasProps {
-  trigger: WorkflowTrigger;
-  steps: WorkflowStep[];
-  selectedStepId: string | null;
-  onSelectTrigger: () => void;
-  onSelectStep: (id: string) => void;
-  onAddStep: (afterIndex: number) => void;
-  onReorder: (steps: WorkflowStep[]) => void;
-  onDeleteStep: (id: string) => void;
+import type { WorkflowStep, WorkflowEdge, NodeType } from "@/types/workflow";
+import { NODE_TYPE_CONFIG } from "@/types/workflow";
+import { nodeTypes, type FlowNodeData } from "./FlowNodes";
+
+/* ─── Deletable Edge ───
+   Receives `selected` and `onDelete` via edge.data
+   to avoid relying on RF's internal selection state
+   being wiped on every controlled re-render. */
+// Map label text to a colour pill (opaque backgrounds)
+const LABEL_COLOR_MAP: Record<string, { text: string; bg: string; border: string }> = {
+  Yes:      { text: "#166534", bg: "#dcfce7", border: "#86efac" },
+  No:       { text: "#991b1b", bg: "#fee2e2", border: "#fca5a5" },
+  Approve:  { text: "#166534", bg: "#dcfce7", border: "#86efac" },
+  Reject:   { text: "#991b1b", bg: "#fee2e2", border: "#fca5a5" },
+  Clarify:  { text: "#92400e", bg: "#fef3c7", border: "#fde68a" },
+  Complete: { text: "#1e40af", bg: "#dbeafe", border: "#93c5fd" },
+};
+
+function DeletableEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  data,
+  label,
+  markerEnd,
+  style,
+}: EdgeProps) {
+  const d = data as { selected?: boolean; onDelete?: () => void } | undefined;
+  const isSelected = d?.selected ?? false;
+
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
+    sourceX, sourceY, sourcePosition,
+    targetX, targetY, targetPosition,
+  });
+
+  const midX = (sourceX + targetX) / 2;
+  const midY = (sourceY + targetY) / 2;
+
+  return (
+    <>
+      <BaseEdge
+        path={edgePath}
+        markerEnd={markerEnd}
+        style={{
+          ...style,
+          stroke: isSelected ? "var(--accent, #6366f1)" : "var(--border)",
+          strokeWidth: isSelected ? 2.5 : 2,
+        }}
+      />
+      <EdgeLabelRenderer>
+        {/* Edge label (Yes / No / action name) */}
+        {label && (() => {
+          const lbl = label as string;
+          const palette = LABEL_COLOR_MAP[lbl];
+          return (
+            <div
+              style={{
+                position: "absolute",
+                transform: `translate(-50%,-50%) translate(${labelX}px,${labelY}px)`,
+                pointerEvents: "none",
+                color: palette?.text ?? "var(--text-secondary)",
+                background: palette?.bg ?? "#f3f4f6",
+                border: `1px solid ${palette?.border ?? "var(--border)"}`,
+                borderRadius: 99,
+                padding: "1px 8px",
+                fontSize: "0.68rem",
+                fontWeight: 700,
+                letterSpacing: "0.03em",
+                lineHeight: 1.8,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {lbl}
+            </div>
+          );
+        })()}
+        {/* Delete button — visible when edge is selected */}
+        {isSelected && d?.onDelete && (
+          <button
+            style={{
+              position: "absolute",
+              transform: `translate(-50%,-50%) translate(${midX}px,${midY}px)`,
+              pointerEvents: "all",
+            }}
+            className="rf-edge-delete-btn"
+            onClick={(e) => { e.stopPropagation(); d.onDelete!(); }}
+            title="Delete edge (or press Backspace)"
+          >
+            &times;
+          </button>
+        )}
+      </EdgeLabelRenderer>
+    </>
+  );
 }
 
+const edgeTypes = { deletable: DeletableEdge };
+
+/* ─── Props ─── */
+export interface WorkflowCanvasProps {
+  steps: WorkflowStep[];
+  edges: WorkflowEdge[];
+  selectedStepId: string | null;
+  onSelectStep: (id: string | null) => void;
+  onNodesChange: OnNodesChange;
+  onEdgesChange: OnEdgesChange;
+  onConnect: (connection: Connection) => void;
+  onDeleteStep: (id: string) => void;
+  onDeleteEdge: (id: string) => void;
+}
+
+/* ─── Helpers ─── */
+function stepsToFlowNodes(
+  steps: WorkflowStep[],
+  edges: WorkflowEdge[],
+  selectedId: string | null,
+  onDeleteStep: (id: string) => void,
+): Node[] {
+  // Build per-node set of source handles that already have an outgoing edge
+  const connectedSrc = new Map<string, Set<string>>();
+  for (const e of edges) {
+    if (!connectedSrc.has(e.source)) connectedSrc.set(e.source, new Set());
+    connectedSrc.get(e.source)!.add(e.sourceHandle ?? "source");
+  }
+
+  return steps.map((s) => {
+    const deletable = s.type !== "start" && s.type !== "end";
+    const nt = s.type || "task";
+    return {
+      id: s.id,
+      type: nt,
+      position: s.position ?? { x: 250, y: 0 },
+      data: {
+        ...s,
+        selected: s.id === selectedId,
+        onDelete: deletable ? () => onDeleteStep(s.id) : undefined,
+        connectedHandles: Array.from(connectedSrc.get(s.id) ?? []),
+      } as unknown as Record<string, unknown>,
+      selected: s.id === selectedId,
+    };
+  });
+}
+
+function edgesToFlowEdges(
+  edges: WorkflowEdge[],
+  selectedEdgeId: string | null,
+  onDeleteEdge: (id: string) => void,
+): Edge[] {
+  return edges.map((e) => ({
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    sourceHandle: e.sourceHandle,
+    targetHandle: e.targetHandle,
+    label: e.label,
+    type: "deletable",
+    animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+    style: { strokeWidth: 2, stroke: "var(--border)" },
+    /* Pass selection and delete callback via data so the edge
+       component doesn’t depend on RF’s internal selection state */
+    data: {
+      selected: e.id === selectedEdgeId,
+      onDelete: () => onDeleteEdge(e.id),
+    },
+  }));
+}
+
+/* ─── Canvas Component ─── */
 export default function WorkflowCanvas({
-  trigger,
   steps,
+  edges,
   selectedStepId,
-  onSelectTrigger,
   onSelectStep,
-  onAddStep,
-  onReorder,
+  onNodesChange,
+  onEdgesChange,
+  onConnect,
   onDeleteStep,
+  onDeleteEdge,
 }: WorkflowCanvasProps) {
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [dropTarget, setDropTarget] = useState<number | null>(null);
-  const dragRef = useRef<number | null>(null);
+  /* Track which edge is "selected" locally — avoids the problem
+     of the controlled-rerender resetting RF internal selection. */
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
-  const triggerCfg = TRIGGER_CONFIG[trigger.type];
+  const flowNodes = useMemo(
+    () => stepsToFlowNodes(steps, edges, selectedStepId, onDeleteStep),
+    [steps, edges, selectedStepId, onDeleteStep],
+  );
+  const flowEdges = useMemo(
+    () => edgesToFlowEdges(edges, selectedEdgeId, onDeleteEdge),
+    [edges, selectedEdgeId, onDeleteEdge],
+  );
 
-  /* ── Drag handlers ── */
-  const handleDragStart = useCallback((idx: number) => {
-    dragRef.current = idx;
-    setDragIndex(idx);
+  const handleNodeClick = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      onSelectStep(node.id);
+      setSelectedEdgeId(null);
+    },
+    [onSelectStep],
+  );
+
+  const handleEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
+    setSelectedEdgeId((cur) => (cur === edge.id ? null : edge.id));
   }, []);
 
-  const handleDragOver = useCallback(
-    (e: React.DragEvent, idx: number) => {
-      e.preventDefault();
-      if (dragRef.current !== null && dragRef.current !== idx) {
-        setDropTarget(idx);
+  const handlePaneClick = useCallback(() => {
+    onSelectStep(null);
+    setSelectedEdgeId(null);
+  }, [onSelectStep]);
+
+  /* Keyboard delete for selected edge */
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if ((e.key === "Backspace" || e.key === "Delete") && selectedEdgeId) {
+        onDeleteEdge(selectedEdgeId);
+        setSelectedEdgeId(null);
       }
     },
-    [],
+    [selectedEdgeId, onDeleteEdge],
   );
 
-  const handleDrop = useCallback(
-    (idx: number) => {
-      const from = dragRef.current;
-      if (from === null || from === idx) return;
-      const updated = [...steps];
-      const [moved] = updated.splice(from, 1);
-      updated.splice(idx, 0, moved);
-      onReorder(updated);
-      setDragIndex(null);
-      setDropTarget(null);
-      dragRef.current = null;
-    },
-    [steps, onReorder],
+  const handleConnect = useCallback(
+    (connection: Connection) => onConnect(connection),
+    [onConnect],
   );
 
-  const handleDragEnd = useCallback(() => {
-    setDragIndex(null);
-    setDropTarget(null);
-    dragRef.current = null;
+  const minimapColor = useCallback((node: Node) => {
+    const nt = (node.type || "task") as NodeType;
+    return NODE_TYPE_CONFIG[nt]?.color ?? "#888";
   }, []);
 
   return (
-    <div className="wf-canvas">
-      {/* ── Trigger node ── */}
-      <button
-        className={`wf-node wf-node-trigger ${selectedStepId === "__trigger__" ? "wf-node-selected" : ""}`}
-        onClick={onSelectTrigger}
+    <div
+      style={{ position: "absolute", inset: 0 }}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+    >
+      <ReactFlow
+        nodes={flowNodes}
+        edges={flowEdges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={handleConnect}
+        onNodeClick={handleNodeClick}
+        onEdgeClick={handleEdgeClick}
+        onPaneClick={handlePaneClick}
+        fitView
+        snapToGrid
+        snapGrid={[20, 20]}
+        /* Keyboard delete: Backspace/Delete on selected node —
+         onNodesChange already handles "remove" changes */
+      deleteKeyCode={["Backspace", "Delete"]}
+        connectionLineStyle={{ strokeWidth: 2, stroke: "var(--accent)" }}
+        defaultEdgeOptions={{
+          type: "deletable",
+          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+          style: { strokeWidth: 2, stroke: "var(--border)" },
+        }}
       >
-        <div className="wf-node-icon wf-node-icon-trigger">
-          <TriggerIcon type={trigger.type} />
-        </div>
-        <div className="wf-node-content">
-          <span className="wf-node-label">Trigger</span>
-          <span className="wf-node-title">{triggerCfg.label}</span>
-        </div>
-        <ChevronRight />
-      </button>
-
-      {/* Connector */}
-      <div className="wf-connector">
-        <div className="wf-connector-line" />
-        <button
-          className="wf-connector-add"
-          onClick={() => onAddStep(0)}
-          title="Add step here"
-        >
-          <PlusIcon />
-        </button>
-        <div className="wf-connector-line" />
-      </div>
-
-      {/* ── Step nodes ── */}
-      {steps.map((step, idx) => {
-        const actionCfg = STEP_ACTION_CONFIG[step.actionType];
-        const isDragging = dragIndex === idx;
-        const isDropTarget = dropTarget === idx;
-
-        return (
-          <div key={step.id}>
-            <div
-              className={`wf-node wf-node-step
-                ${selectedStepId === step.id ? "wf-node-selected" : ""}
-                ${isDragging ? "wf-node-dragging" : ""}
-                ${isDropTarget ? "wf-node-drop-target" : ""}`}
-              draggable
-              onDragStart={() => handleDragStart(idx)}
-              onDragOver={(e) => handleDragOver(e, idx)}
-              onDrop={() => handleDrop(idx)}
-              onDragEnd={handleDragEnd}
-              onClick={() => onSelectStep(step.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") onSelectStep(step.id);
-              }}
-            >
-              {/* Drag handle */}
-              <div className="wf-node-drag" title="Drag to reorder">
-                <GripIcon />
-              </div>
-
-              {/* Step number */}
-              <div
-                className="wf-node-number"
-                style={{ background: actionCfg.color }}
-              >
-                {idx + 1}
-              </div>
-
-              <div className="wf-node-content">
-                <span className="wf-node-label" style={{ color: actionCfg.color }}>
-                  {actionCfg.label}
-                </span>
-                <span className="wf-node-title">
-                  {step.title || "Untitled step"}
-                </span>
-                {step.assignedRole && (
-                  <span className="wf-node-role">
-                    <PersonIcon /> {step.assignedRole}
-                  </span>
-                )}
-              </div>
-
-              {/* SLA badge */}
-              <span className="wf-node-sla">
-                {step.slaDays}d SLA
-              </span>
-
-              {/* Delete */}
-              <button
-                className="wf-node-delete"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteStep(step.id);
-                }}
-                title="Remove step"
-              >
-                <TrashIcon />
-              </button>
-            </div>
-
-            {/* Connector after step */}
-            <div className="wf-connector">
-              <div className="wf-connector-line" />
-              <button
-                className="wf-connector-add"
-                onClick={() => onAddStep(idx + 1)}
-                title="Add step here"
-              >
-                <PlusIcon />
-              </button>
-              <div className="wf-connector-line" />
-            </div>
-          </div>
-        );
-      })}
-
-      {/* End node */}
-      <div className="wf-node wf-node-end">
-        <div className="wf-node-icon wf-node-icon-end">
-          <FlagIcon />
-        </div>
-        <div className="wf-node-content">
-          <span className="wf-node-label">End</span>
-          <span className="wf-node-title">Workflow Complete</span>
-        </div>
-      </div>
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border)" />
+        <Controls position="bottom-left" />
+        <MiniMap
+          nodeColor={minimapColor}
+          nodeStrokeColor={minimapColor}
+          nodeStrokeWidth={3}
+          nodeBorderRadius={4}
+          maskColor="rgba(0,0,0,0.08)"
+          bgColor="#f8fafc"
+          position="bottom-right"
+          pannable
+          zoomable
+          style={{
+            border: "1px solid var(--border)",
+            borderRadius: 10,
+            boxShadow: "0 2px 10px rgba(0,0,0,0.10)",
+            overflow: "hidden",
+            width: 180,
+            height: 120,
+          }}
+        />
+      </ReactFlow>
     </div>
   );
-}
-
-/* ── Inline SVG icons ── */
-function TriggerIcon({ type }: { type: string }) {
-  switch (type) {
-    case "form_submission":
-      return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="22" height="22"><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" /></svg>;
-    case "email_received":
-      return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="22" height="22"><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" /></svg>;
-    case "scheduled":
-      return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="22" height="22"><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>;
-    case "webhook":
-      return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="22" height="22"><path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" /></svg>;
-    case "condition":
-      return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="22" height="22"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 14.5M14.25 3.104c.251.023.501.05.75.082M19.8 14.5l-2.846 2.046a.75.75 0 0 1-.882 0L12 13.685l-4.072 2.86a.75.75 0 0 1-.882 0L4.2 14.5" /></svg>;
-    default: // manual
-      return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="22" height="22"><path strokeLinecap="round" strokeLinejoin="round" d="M10.05 4.575a1.575 1.575 0 1 0-3.15 0v3m3.15-3v-1.5a1.575 1.575 0 0 1 3.15 0v1.5m-3.15 0 .075 5.925m3.075-5.925v2.468m0 0a1.575 1.575 0 0 1 3.15 0V15a6 6 0 0 1-6 6h-.5a6 6 0 0 1-6-6v-2.422" /></svg>;
-  }
-}
-
-function PlusIcon() {
-  return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="16" height="16"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>;
-}
-
-function GripIcon() {
-  return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>;
-}
-
-function TrashIcon() {
-  return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16"><path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" /></svg>;
-}
-
-function PersonIcon() {
-  return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="13" height="13"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" /></svg>;
-}
-
-function FlagIcon() {
-  return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="22" height="22"><path strokeLinecap="round" strokeLinejoin="round" d="M3 3v1.5M3 21v-6m0 0 2.77-.693a9 9 0 0 1 6.208.682l.108.054a9 9 0 0 0 6.086.71l3.114-.732a48.524 48.524 0 0 1-.005-10.499l-3.11.732a9 9 0 0 1-6.085-.711l-.108-.054a9 9 0 0 0-6.208-.682L3 4.5M3 15V4.5" /></svg>;
-}
-
-function ChevronRight() {
-  return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="16" height="16" className="wf-node-chevron"><path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>;
 }
