@@ -172,6 +172,32 @@ export function StepEditor({ step, stepIndex, onChange, onClose }: StepEditorPro
       <div className="wf-editor-body">
 
         {/* ════════════════════════════════════════════
+            COMMON: Title & Description (all node types)
+           ════════════════════════════════════════════ */}
+        <div className="wf-section">
+          <div className="wf-section-label">General</div>
+          <div className="wf-field">
+            <label className="wf-field-label">Title</label>
+            <input
+              className="wf-input"
+              placeholder="e.g. Manager Approval"
+              value={step.title}
+              onChange={(e) => onChange({ ...step, title: e.target.value })}
+            />
+          </div>
+          <div className="wf-field">
+            <label className="wf-field-label">Description</label>
+            <textarea
+              className="wf-textarea"
+              placeholder="What happens at this step?"
+              rows={3}
+              value={step.description}
+              onChange={(e) => onChange({ ...step, description: e.target.value })}
+            />
+          </div>
+        </div>
+
+        {/* ════════════════════════════════════════════
             START NODE — Trigger overview (read-only)
            ════════════════════════════════════════════ */}
         {nodeType === "start" && (
@@ -636,31 +662,6 @@ export function StepEditor({ step, stepIndex, onChange, onClose }: StepEditorPro
           </div>
         )}
 
-        {/* ════════════════════════════════════════════
-            COMMON: Title & Description (all node types)
-           ════════════════════════════════════════════ */}
-        <div className="wf-section">
-          <div className="wf-section-label">General</div>
-          <div className="wf-field">
-            <label className="wf-field-label">Title</label>
-            <input
-              className="wf-input"
-              placeholder="e.g. Manager Approval"
-              value={step.title}
-              onChange={(e) => onChange({ ...step, title: e.target.value })}
-            />
-          </div>
-          <div className="wf-field">
-            <label className="wf-field-label">Description</label>
-            <textarea
-              className="wf-textarea"
-              placeholder="What happens at this step?"
-              rows={3}
-              value={step.description}
-              onChange={(e) => onChange({ ...step, description: e.target.value })}
-            />
-          </div>
-        </div>
       </div>
     </div>
   );
