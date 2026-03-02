@@ -50,8 +50,10 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # Pin to a specific version for deterministic CI. Review periodically.
+          version: v1.64.8
           working-directory: backend/auth
+          install-mode: goinstall
       
       - name: Go fmt
         run: |
