@@ -10,6 +10,7 @@ import (
 const (
 	clerkSecretKeyEnv     = "CLERK_SECRET_KEY"
 	clerkWebhookSecretEnv = "CLERK_WEBHOOK_SECRET"
+	clerkIssuerURLEnv     = "CLERK_ISSUER_URL"
 	databaseURLEnv        = "DATABASE_URL"
 	portEnv               = "PORT"
 )
@@ -36,6 +37,7 @@ func TestLoadReturnsErrorWhenRequiredVarsMissing(t *testing.T) {
 
 	unsetEnv(t, clerkSecretKeyEnv)
 	unsetEnv(t, clerkWebhookSecretEnv)
+	unsetEnv(t, clerkIssuerURLEnv)
 	unsetEnv(t, databaseURLEnv)
 	unsetEnv(t, portEnv)
 
@@ -48,6 +50,9 @@ func TestLoadReturnsErrorWhenRequiredVarsMissing(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), clerkWebhookSecretEnv) {
 		t.Fatalf("expected missing %s in error, got %v", clerkWebhookSecretEnv, err)
+	}
+	if !strings.Contains(err.Error(), clerkIssuerURLEnv) {
+		t.Fatalf("expected missing %s in error, got %v", clerkIssuerURLEnv, err)
 	}
 	if !strings.Contains(err.Error(), databaseURLEnv) {
 		t.Fatalf("expected missing %s in error, got %v", databaseURLEnv, err)
@@ -64,6 +69,7 @@ func TestLoadTrimsValuesAndDefaultsPortAfterTrim(t *testing.T) {
 
 	t.Setenv(clerkSecretKeyEnv, "  sk_test  ")
 	t.Setenv(clerkWebhookSecretEnv, "  whsec_test  ")
+	t.Setenv(clerkIssuerURLEnv, "  https://test.clerk.accounts.dev  ")
 	t.Setenv(databaseURLEnv, "  postgres://example  ")
 	t.Setenv(portEnv, "   ")
 
@@ -96,12 +102,14 @@ func TestLoadFallsBackToParentEnvPath(t *testing.T) {
 
 	unsetEnv(t, clerkSecretKeyEnv)
 	unsetEnv(t, clerkWebhookSecretEnv)
+	unsetEnv(t, clerkIssuerURLEnv)
 	unsetEnv(t, databaseURLEnv)
 	unsetEnv(t, portEnv)
 
 	parentEnv := strings.Join([]string{
 		clerkSecretKeyEnv + "=sk_parent",
 		clerkWebhookSecretEnv + "=whsec_parent",
+		clerkIssuerURLEnv + "=https://parent.clerk.accounts.dev",
 		databaseURLEnv + "=postgres://parent",
 		portEnv + "=9001",
 	}, "\n")
@@ -131,11 +139,13 @@ func TestLoadStopsAfterFirstEnvFile(t *testing.T) {
 
 	unsetEnv(t, clerkSecretKeyEnv)
 	unsetEnv(t, clerkWebhookSecretEnv)
+	unsetEnv(t, clerkIssuerURLEnv)
 	unsetEnv(t, databaseURLEnv)
 	unsetEnv(t, portEnv)
 
 	firstEnv := strings.Join([]string{
 		clerkWebhookSecretEnv + "=whsec_first",
+		clerkIssuerURLEnv + "=https://first.clerk.accounts.dev",
 		databaseURLEnv + "=postgres://first",
 		portEnv + "=8082",
 	}, "\n")

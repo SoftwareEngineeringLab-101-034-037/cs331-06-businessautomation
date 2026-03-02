@@ -1,14 +1,18 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
 )
+
+var ErrDuplicateDepartment = errors.New("duplicate department")
 
 // EmployeeService handles department, employee, and invitation operations.
 type EmployeeService struct {
@@ -21,12 +25,16 @@ func NewEmployeeService(db *gorm.DB, clerkSecretKey string) *EmployeeService {
 	return &EmployeeService{db: db, clerkSecretKey: clerkSecretKey}
 }
 
-// ---------------------------------------------------------------------------
-// Departments
-// ---------------------------------------------------------------------------
-
-// CreateDepartment creates a new department within an organization.
 func (s *EmployeeService) CreateDepartment(orgID, name, description string) (*models.Department, error) {
+	var existing models.Department
+	err := s.db.Where("name = ? AND organization_id = ?", name, orgID).First(&existing).Error
+	if err == nil {
+		return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, name)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("failed to check existing department: %w", err)
+	}
+
 	dept := models.Department{
 		OrganizationID: orgID,
 		Name:           name,
@@ -35,6 +43,10 @@ func (s *EmployeeService) CreateDepartment(orgID, name, description string) (*mo
 		UpdatedAt:      time.Now(),
 	}
 	if err := s.db.Create(&dept).Error; err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, name)
+		}
 		return nil, fmt.Errorf("failed to create department: %w", err)
 	}
 	log.Printf("Department created: %s in org %s", dept.ID, orgID)
@@ -50,11 +62,6 @@ func (s *EmployeeService) ListDepartments(orgID string) ([]models.Department, er
 	return departments, nil
 }
 
-// ---------------------------------------------------------------------------
-// Employees
-// ---------------------------------------------------------------------------
-
-// ListEmployees returns all users who are members of the given organization.
 func (s *EmployeeService) ListEmployees(orgID string) ([]models.User, error) {
 	var users []models.User
 	err := s.db.
@@ -98,8 +105,20 @@ func (s *EmployeeService) RevokeInvitation(invitationID, orgID string) error {
 		return fmt.Errorf("failed to revoke invitation: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("invitation not found or already processed")
+		return fmt.Errorf("%w: invitation %s not found or already processed", ErrNotFound, invitationID)
 	}
 	log.Printf("Invitation %s revoked", invitationID)
 	return nil
+}
+
+func (s *EmployeeService) GetDepartmentDetails(orgID, deptID string) (*models.Department, error) {
+	var dept models.Department
+	err := s.db.Where("organization_id = ? AND id = ?", orgID, deptID).First(&dept).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: department %s in org %s", ErrNotFound, deptID, orgID)
+		}
+		return nil, fmt.Errorf("failed to get department details: %w", err)
+	}
+	return &dept, nil
 }

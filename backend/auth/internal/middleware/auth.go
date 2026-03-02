@@ -19,8 +19,10 @@ const (
 	OrgIDKey  = "org_id"
 )
 
-// For production, replace ParseUnverified with full JWKS-based verification.
-func ClerkAuthMiddleware() gin.HandlerFunc {
+// ClerkAuthMiddleware verifies incoming JWTs against Clerk's JWKS.
+// keyFunc is obtained from a keyfunc.JWKS instance; issuerURL is the
+// Clerk Frontend API URL (e.g. https://<instance>.clerk.accounts.dev).
+func ClerkAuthMiddleware(keyFunc jwt.Keyfunc, issuerURL string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
@@ -32,9 +34,13 @@ func ClerkAuthMiddleware() gin.HandlerFunc {
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
-		token, _, err := jwt.NewParser().ParseUnverified(tokenString, jwt.MapClaims{})
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+		token, err := jwt.Parse(tokenString, keyFunc,
+			jwt.WithValidMethods([]string{"RS256"}),
+			jwt.WithIssuer(issuerURL),
+			jwt.WithExpirationRequired(),
+		)
+		if err != nil || !token.Valid {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
 			return
 		}
 

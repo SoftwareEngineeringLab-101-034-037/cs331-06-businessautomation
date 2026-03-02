@@ -14,9 +14,6 @@ import (
 var DB *gorm.DB
 
 var openDatabase = func(databaseURL string) (*gorm.DB, error) {
-	// Supabase uses PgBouncer (port 6543) in transaction mode which doesn't
-	// support prepared statements. We disable them to avoid "prepared statement
-	// already exists" errors.
 	return gorm.Open(postgres.New(postgres.Config{
 		DSN:                  databaseURL,
 		PreferSimpleProtocol: true, // disables prepared statement caching
@@ -62,4 +59,3 @@ func Migrate() error {
 	log.Println("Database migrations completed")
 	return nil
 }
-

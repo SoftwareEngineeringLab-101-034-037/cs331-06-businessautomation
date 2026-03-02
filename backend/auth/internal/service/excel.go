@@ -48,8 +48,6 @@ var expectedColumns = map[string]string{
 	"jobtitle":   "job_title",
 }
 
-// ParseEmployeeExcel reads an .xlsx file from r and returns parsed employee
-// rows and any per-row validation errors.
 func ParseEmployeeExcel(r io.Reader) (*ParseResult, error) {
 	f, err := excelize.OpenReader(r)
 	if err != nil {
@@ -57,7 +55,6 @@ func ParseEmployeeExcel(r io.Reader) (*ParseResult, error) {
 	}
 	defer f.Close()
 
-	// Use the first sheet
 	sheetName := f.GetSheetName(0)
 	if sheetName == "" {
 		return nil, fmt.Errorf("Excel file has no sheets")
@@ -71,9 +68,8 @@ func ParseEmployeeExcel(r io.Reader) (*ParseResult, error) {
 		return nil, fmt.Errorf("Excel file must have a header row and at least one data row")
 	}
 
-	// Map header columns to field names
 	headerRow := rows[0]
-	colIndex := make(map[string]int) // field name → column index
+	colIndex := make(map[string]int)
 	for i, cell := range headerRow {
 		key := strings.TrimSpace(strings.ToLower(cell))
 		if field, ok := expectedColumns[key]; ok {
@@ -92,7 +88,7 @@ func ParseEmployeeExcel(r io.Reader) (*ParseResult, error) {
 
 	for rowIdx := 1; rowIdx < len(rows); rowIdx++ {
 		row := rows[rowIdx]
-		rowNum := rowIdx + 1 // 1-indexed for user display
+		rowNum := rowIdx + 1
 
 		get := func(field string) string {
 			idx, ok := colIndex[field]
