@@ -161,7 +161,7 @@ export default function WorkflowBuilderPage() {
 
   /* ── Navigation ── */
   const handleBack = useCallback(() => {
-    router.push("/dashboard/workstation");
+    router.replace("/dashboard/workstation");
   }, [router]);
 
   useEffect(() => {
