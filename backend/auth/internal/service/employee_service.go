@@ -100,7 +100,7 @@ func (s *EmployeeService) RevokeInvitation(invitationID, orgID string) error {
 		return fmt.Errorf("failed to revoke invitation: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("invitation not found or already processed")
+		return fmt.Errorf("%w: invitation %s not found or already processed", ErrNotFound, invitationID)
 	}
 	log.Printf("Invitation %s revoked", invitationID)
 	return nil
