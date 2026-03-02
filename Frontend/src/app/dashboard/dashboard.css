@@ -352,6 +352,63 @@
   color: #f97316;
 }
 
+/* ── Workflow row 3-dot menu ── */
+.wf-row-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.wf-row-menu-btn:hover {
+  background: var(--surface-alt);
+  color: var(--text-primary);
+}
+
+.wf-row-dropdown {
+  z-index: 9999;
+  min-width: 160px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.wf-row-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s;
+  text-align: left;
+}
+.wf-row-dropdown-item:hover {
+  background: var(--surface-alt);
+}
+.wf-row-dropdown-danger {
+  color: #ef4444;
+}
+.wf-row-dropdown-danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
 /* ─────────────────────────────────────────────
    4. PAGE LAYOUT PRIMITIVES
    ───────────────────────────────────────────── */
