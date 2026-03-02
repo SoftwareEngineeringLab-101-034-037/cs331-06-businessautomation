@@ -116,6 +116,13 @@ func newSQLiteDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("failed to open in-memory sqlite: %v", err)
 	}
+
+	sqlDB, err := testDB.DB()
+	if err != nil {
+		t.Fatalf("failed to get underlying sql.DB: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
 	return testDB
 }
 

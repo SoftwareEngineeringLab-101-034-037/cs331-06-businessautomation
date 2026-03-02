@@ -321,6 +321,13 @@ func setupMiddlewareTestDB(t *testing.T, withMembershipsTable, withOrganizations
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
 
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("failed to get underlying sql.DB: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+
 	if withMembershipsTable {
 		if err := db.Exec(`
 			CREATE TABLE organization_memberships (

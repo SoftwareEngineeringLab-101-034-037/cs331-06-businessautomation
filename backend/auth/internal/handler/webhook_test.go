@@ -418,6 +418,13 @@ func setupWebhookTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
 
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("failed to get underlying sql.DB: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+
 	schema := []string{
 		`
 		CREATE TABLE users (
