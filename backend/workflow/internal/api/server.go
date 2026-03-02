@@ -177,7 +177,10 @@ wf.CreatedAt = wf.UpdatedAt
 if req.CommitMessage != "" {
 log.Printf("[AUDIT] workflow %s (v%d) updated — %s", wf.ID, wf.Version, req.CommitMessage)
 }
-s.store.SaveWorkflow(wf)
+if _, err := s.store.SaveWorkflow(wf); err != nil {
+http.Error(w, "save failed: "+err.Error(), http.StatusInternalServerError)
+return
+}
 writeJSON(w, http.StatusOK, wf)
 case http.MethodDelete:
 if err := s.store.DeleteWorkflow(id); err != nil {
