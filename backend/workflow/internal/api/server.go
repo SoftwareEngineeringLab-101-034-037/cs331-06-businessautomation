@@ -172,6 +172,11 @@ wf.Version = existing.Version + 1
 } else {
 // First time seeing this ID — treat as new
 wf.CreatedAt = wf.UpdatedAt
+if wf.Status == "draft" {
+wf.Version = 0
+} else if wf.Version == 0 {
+wf.Version = 1
+}
 }
 // Audit log — commit message is NOT stored in the workflow document
 if req.CommitMessage != "" {

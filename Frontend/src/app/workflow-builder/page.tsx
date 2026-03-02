@@ -79,6 +79,7 @@ export default function WorkflowBuilderPage() {
 
   /* ── Editing existing workflow (via ?id=) ── */
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingIsDraft, setEditingIsDraft] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
 
   /* ── Discard confirmation dialog ── */
@@ -131,6 +132,7 @@ export default function WorkflowBuilderPage() {
 
         setDraft(loaded);
         setEditingId(wfId);
+        setEditingIsDraft(wf.status === "draft");
         // Snapshot for change-detection
         originalDraftRef.current = JSON.stringify(loaded);
         // Mark this id as successfully loaded
@@ -393,7 +395,7 @@ export default function WorkflowBuilderPage() {
   const hasChanges = !editingId || originalDraftRef.current === null
     ? true
     : JSON.stringify(draft) !== originalDraftRef.current;
-  const commitOk = !editingId || commitMessage.trim().length > 0;
+  const commitOk = !editingId || editingIsDraft || commitMessage.trim().length > 0;
   // Only prompt discard when there is actually something to lose
   const needsConfirmation = editingId
     ? hasChanges
@@ -516,7 +518,7 @@ export default function WorkflowBuilderPage() {
     if (!canPublish) return;
     // Guard: update requires actual changes and a commit message
     if (editingId && !hasChanges) { showToast("No changes detected.", "warning"); return; }
-    if (editingId && !commitMessage.trim()) { showToast("A commit message is required.", "warning"); return; }
+    if (editingId && !editingIsDraft && !commitMessage.trim()) { showToast("A commit message is required.", "warning"); return; }
 
     // Validate before publishing
     const errors = validateWorkflow();
@@ -1015,7 +1017,7 @@ export default function WorkflowBuilderPage() {
                     d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z"
                   />
                 </svg>
-                {editingId ? "Update" : "Publish"}
+                {editingId && !editingIsDraft ? "Update" : "Publish"}
               </button>
             </div>
           </div>
@@ -1244,8 +1246,8 @@ export default function WorkflowBuilderPage() {
                   </div>
                 )}
 
-                {/* Commit message — only when updating */}
-                {editingId && (
+                {/* Commit message — only when updating a non-draft */}
+                {editingId && !editingIsDraft && (
                   <div className="wf-field" style={{ marginTop: 12 }}>
                     <label className="wf-field-label">
                       Commit Message
@@ -1280,7 +1282,7 @@ export default function WorkflowBuilderPage() {
                     disabled={editingId ? !commitOk || !hasChanges : false}
                     onClick={handlePublish}
                   >
-                    {publishErrors.length > 0 ? "Re-check & Publish" : editingId ? "Confirm & Update" : "Confirm & Publish"}
+                    {publishErrors.length > 0 ? "Re-check & Publish" : editingId && !editingIsDraft ? "Confirm & Update" : "Confirm & Publish"}
                   </button>
                 </div>
               </div>
