@@ -3,7 +3,7 @@
 import { memo, Fragment } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import type { WorkflowStep } from "@/types/workflow";
-import { NODE_TYPE_CONFIG, STEP_ACTION_CONFIG, TASK_ACTION_OPTIONS } from "@/types/workflow";
+import { NODE_TYPE_CONFIG, STEP_ACTION_CONFIG, TASK_ACTION_OPTIONS, CONNECTOR_CONFIG } from "@/types/workflow";
 
 export type FlowNodeData = WorkflowStep & {
   selected?: boolean;
@@ -135,17 +135,21 @@ export const TaskNode = memo(function TaskNode({ data }: NodeProps) {
 
 /* ───────────────────────────────────────────────────────
    Action Node  (rounded rect, 1 input + 1 output)
+   Badge + colour driven by connector type, not actionType.
    ─────────────────────────────────────────────────────── */
 export const ActionNode = memo(function ActionNode({ data }: NodeProps) {
   const d = data as unknown as FlowNodeData;
-  const actionCfg = STEP_ACTION_CONFIG[d.actionType] ?? STEP_ACTION_CONFIG.custom_task;
   const ntCfg = NODE_TYPE_CONFIG.action;
+  // Use connector config if set, otherwise fall back to generic action colour
+  const connCfg = d.connector?.type ? CONNECTOR_CONFIG[d.connector.type] : null;
+  const badgeLabel = connCfg?.label ?? "Action";
+  const badgeColor = connCfg?.color ?? ntCfg.color;
   return (
-    <div className="rf-node rf-node-action" style={{ borderLeftColor: ntCfg.color }}>
+    <div className="rf-node rf-node-action" style={{ borderLeftColor: badgeColor }}>
       {d.onDelete && <NodeDeleteBtn onDelete={d.onDelete} />}
       <Handle type="target" position={Position.Top} id="target" className="rf-handle rf-handle-target" />
       <div className="rf-node-header">
-        <span className="rf-node-badge" style={{ background: ntCfg.color }}>{actionCfg.label}</span>
+        <span className="rf-node-badge" style={{ background: badgeColor }}>{badgeLabel}</span>
       </div>
       <span className="rf-node-title">{d.title || "Untitled Action"}</span>
       {d.description && <span className="rf-node-desc">{d.description}</span>}
