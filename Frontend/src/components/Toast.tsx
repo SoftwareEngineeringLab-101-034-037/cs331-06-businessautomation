@@ -50,21 +50,28 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
   if (toasts.length === 0) return null;
 
   return (
-    <div style={{
-      position: "fixed",
-      bottom: 24,
-      right: 24,
-      display: "flex",
-      flexDirection: "column",
-      gap: 10,
-      zIndex: 99999,
-      pointerEvents: "none",
-    }}>
+    <div
+      style={{
+        position: "fixed",
+        bottom: 24,
+        right: 24,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        zIndex: 99999,
+        pointerEvents: "none",
+      }}
+      role="status"
+      aria-live="polite"
+      aria-atomic="false"
+    >
       {toasts.map((t) => {
         const c = COLORS[t.type];
         return (
           <div
             key={t.id}
+            role={t.type === "error" ? "alert" : undefined}
+            aria-live={t.type === "error" ? "assertive" : undefined}
             style={{
               display: "flex",
               alignItems: "flex-start",
