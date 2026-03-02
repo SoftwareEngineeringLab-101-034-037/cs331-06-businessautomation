@@ -70,4 +70,3 @@ func runCleanup(retentionDays int) {
 		log.Printf("Cleanup: expired %d old invitations", result.RowsAffected)
 	}
 }
-
