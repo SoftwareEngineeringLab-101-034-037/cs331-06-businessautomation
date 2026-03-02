@@ -4,7 +4,10 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
+	keyfunc "github.com/MicahParks/keyfunc/v2"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
@@ -42,6 +45,16 @@ func main() {
 
 	cleanup.Start(cleanup.DefaultConfig())
 
+	// Initialize JWKS for JWT verification against Clerk's public keys
+	jwksURL := strings.TrimRight(cfg.ClerkIssuerURL, "/") + "/.well-known/jwks.json"
+	jwks, err := keyfunc.Get(jwksURL, keyfunc.Options{
+		RefreshInterval: time.Hour,
+	})
+	if err != nil {
+		log.Fatalf("Failed to fetch JWKS from %s: %v", jwksURL, err)
+	}
+	defer jwks.EndBackground()
+
 	employeeService := service.NewEmployeeService(database.DB, cfg.ClerkSecretKey)
 	employeeHandler := handler.NewEmployeeHandler(employeeService)
 
@@ -66,7 +79,7 @@ func main() {
 	r.POST("/api/webhooks/clerk", webhookHandler.Handle)
 
 	api := r.Group("/api")
-	api.Use(middleware.ClerkAuthMiddleware())
+	api.Use(middleware.ClerkAuthMiddleware(jwks.Keyfunc, cfg.ClerkIssuerURL))
 	{
 		orgApi := api.Group("/orgs/:orgId")
 		orgApi.Use(middleware.OrgAdminOnly())

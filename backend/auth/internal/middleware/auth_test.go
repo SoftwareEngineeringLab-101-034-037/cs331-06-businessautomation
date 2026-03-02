@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,10 +17,28 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+const testIssuer = "https://test.clerk.accounts.dev"
+
+// testRSAKey is generated once per test binary and used to sign/verify test JWTs.
+var testRSAKey *rsa.PrivateKey
+
+func init() {
+	var err error
+	testRSAKey, err = rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic("failed to generate test RSA key: " + err.Error())
+	}
+}
+
+// testKeyFunc returns the RSA public key for any token — used as jwt.Keyfunc in tests.
+func testKeyFunc(token *jwt.Token) (interface{}, error) {
+	return &testRSAKey.PublicKey, nil
+}
+
 func TestClerkAuthMiddlewareMissingAuthHeader(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/protected", ClerkAuthMiddleware(), func(c *gin.Context) {
+	r.GET("/protected", ClerkAuthMiddleware(testKeyFunc, testIssuer), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
@@ -34,7 +54,7 @@ func TestClerkAuthMiddlewareMissingAuthHeader(t *testing.T) {
 func TestClerkAuthMiddlewareInvalidBearerPrefix(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/protected", ClerkAuthMiddleware(), func(c *gin.Context) {
+	r.GET("/protected", ClerkAuthMiddleware(testKeyFunc, testIssuer), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
@@ -51,7 +71,7 @@ func TestClerkAuthMiddlewareInvalidBearerPrefix(t *testing.T) {
 func TestClerkAuthMiddlewareInvalidToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/protected", ClerkAuthMiddleware(), func(c *gin.Context) {
+	r.GET("/protected", ClerkAuthMiddleware(testKeyFunc, testIssuer), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
@@ -68,12 +88,14 @@ func TestClerkAuthMiddlewareInvalidToken(t *testing.T) {
 func TestClerkAuthMiddlewareMissingUserIDInToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/protected", ClerkAuthMiddleware(), func(c *gin.Context) {
+	r.GET("/protected", ClerkAuthMiddleware(testKeyFunc, testIssuer), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
 	token := signedTestJWT(t, jwt.MapClaims{
+		"iss": testIssuer,
 		"iat": time.Now().Unix(),
+		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
@@ -89,7 +111,7 @@ func TestClerkAuthMiddlewareMissingUserIDInToken(t *testing.T) {
 func TestClerkAuthMiddlewareSetsUserIDOnSuccess(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/protected", ClerkAuthMiddleware(), func(c *gin.Context) {
+	r.GET("/protected", ClerkAuthMiddleware(testKeyFunc, testIssuer), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"user_id": GetUserID(c),
 		})
@@ -97,7 +119,9 @@ func TestClerkAuthMiddlewareSetsUserIDOnSuccess(t *testing.T) {
 
 	token := signedTestJWT(t, jwt.MapClaims{
 		"sub": "user_123",
+		"iss": testIssuer,
 		"iat": time.Now().Unix(),
+		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
@@ -375,8 +399,8 @@ func restoreDB(t *testing.T) {
 
 func signedTestJWT(t *testing.T, claims jwt.MapClaims) string {
 	t.Helper()
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte("test-secret"))
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signed, err := token.SignedString(testRSAKey)
 	if err != nil {
 		t.Fatalf("failed signing test jwt: %v", err)
 	}
