@@ -48,7 +48,9 @@ export default function WorkstationPage() {
   useEffect(() => {
     if (toastShownRef.current) return;
     const msg = searchParams.get("toast");
-    const type = (searchParams.get("toastType") ?? "success") as "success" | "error" | "warning" | "info";
+    const rawType = searchParams.get("toastType") ?? "success";
+    const validTypes = ["success", "error", "warning", "info"] as const;
+    const type: typeof validTypes[number] = validTypes.includes(rawType as any) ? (rawType as any) : "success";
     if (msg) {
       toastShownRef.current = true;
       showToast(msg, type);
@@ -111,9 +113,15 @@ export default function WorkstationPage() {
         setOpenMenuId(null);
       }
     }
+    function handleScroll() {
+      setOpenMenuId(null);
+    }
     document.addEventListener("mousedown", close);
-    document.addEventListener("scroll", () => setOpenMenuId(null), { once: true });
-    return () => document.removeEventListener("mousedown", close);
+    document.addEventListener("scroll", handleScroll, { once: true });
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("scroll", handleScroll);
+    };
   }, [openMenuId]);
 
   /* Delete confirmation dialog */

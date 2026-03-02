@@ -84,14 +84,15 @@ export default function WorkflowBuilderPage() {
   const [showDiscardModal, setShowDiscardModal] = useState(false);
   // Snapshot of the draft at load time — used to detect actual changes
   const originalDraftRef = useRef<string | null>(null);
+  const prevWfIdRef = useRef<string | null>(null);
 
   /* ── Toast notifications ── */
   const { toasts, showToast, dismissToast } = useToast();
 
   useEffect(() => {
     const wfId = searchParams.get("id");
-    if (!wfId || loadedRef.current) return;
-    loadedRef.current = true;
+    if (!wfId || prevWfIdRef.current === wfId) return;
+    prevWfIdRef.current = wfId;
 
     (async () => {
       try {
