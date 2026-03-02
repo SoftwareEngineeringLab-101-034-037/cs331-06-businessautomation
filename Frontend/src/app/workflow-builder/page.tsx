@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   applyEdgeChanges,
   type OnNodesChange,
@@ -12,6 +12,7 @@ import { RoleGate } from "@/components/dashboard/RoleProvider";
 import { useTheme } from "@/components/ThemeProvider";
 import WorkflowCanvas from "@/components/dashboard/WorkflowCanvas";
 import { TriggerEditor, StepEditor } from "@/components/dashboard/StepEditor";
+import { useToast, ToastContainer } from "@/components/Toast";
 import type {
   WorkflowDraft,
   WorkflowStep,
@@ -62,6 +63,7 @@ const INITIAL_DRAFT: WorkflowDraft = {
 
 export default function WorkflowBuilderPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { theme, toggle: toggleTheme } = useTheme();
 
   /* ── State ── */
@@ -72,6 +74,67 @@ export default function WorkflowBuilderPage() {
   const [publishErrors, setPublishErrors] = useState<string[]>([]);
   const [showDetailsDialog, setShowDetailsDialog] = useState(true);
   const [detailsSidebarOpen, setDetailsSidebarOpen] = useState(false);
+
+  /* ── Editing existing workflow (via ?id=) ── */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [commitMessage, setCommitMessage] = useState("");
+  const loadedRef = useRef(false);
+
+  /* ── Discard confirmation dialog ── */
+  const [showDiscardModal, setShowDiscardModal] = useState(false);
+  // Snapshot of the draft at load time — used to detect actual changes
+  const originalDraftRef = useRef<string | null>(null);
+
+  /* ── Toast notifications ── */
+  const { toasts, showToast, dismissToast } = useToast();
+
+  useEffect(() => {
+    const wfId = searchParams.get("id");
+    if (!wfId || loadedRef.current) return;
+    loadedRef.current = true;
+
+    (async () => {
+      try {
+        const res = await fetch(`http://localhost:8085/workflows/${wfId}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const wf = await res.json();
+
+        // Restore canvas from raw_json if available
+        let steps: WorkflowStep[] = INITIAL_STEPS;
+        let edges: WorkflowEdge[] = INITIAL_EDGES;
+        if (wf.raw_json) {
+          try {
+            const raw = JSON.parse(wf.raw_json);
+            if (Array.isArray(raw.steps) && raw.steps.length > 0) steps = raw.steps;
+            if (Array.isArray(raw.edges)) edges = raw.edges;
+          } catch { /* ignore bad JSON */ }
+        }
+
+        const loaded: WorkflowDraft = {
+          name: wf.name || "",
+          description: wf.description || "",
+          department: wf.department || "",
+          trigger: {
+            type: wf.trigger?.type || "manual",
+            config: wf.trigger?.config || {},
+          },
+          steps,
+          edges,
+          tags: wf.tags || [],
+        };
+
+        setDraft(loaded);
+        setEditingId(wfId);
+        // Snapshot for change-detection
+        originalDraftRef.current = JSON.stringify(loaded);
+        // Skip the "New Workflow" details dialog — go straight to canvas
+        setShowDetailsDialog(false);
+      } catch (err) {
+        console.error("Failed to load workflow for editing:", err);
+        showToast("Could not load workflow. Starting fresh.", "error");
+      }
+    })();
+  }, [searchParams]);
 
   /* Dialog form local state */
   const [dlgName, setDlgName] = useState("");
@@ -314,6 +377,18 @@ export default function WorkflowBuilderPage() {
   /* ── Publish ── */
   const realSteps = draft.steps.filter((s) => s.type !== "start" && s.type !== "end");
   const canPublish = draft.name.trim() && realSteps.length > 0;
+  // True when at least one field differs from what was loaded
+  const hasChanges = !editingId || originalDraftRef.current === null
+    ? true
+    : JSON.stringify(draft) !== originalDraftRef.current;
+  const commitOk = !editingId || commitMessage.trim().length > 0;
+  // Only prompt discard when there is actually something to lose
+  const needsConfirmation = editingId
+    ? hasChanges
+    : JSON.stringify(draft) !== JSON.stringify(INITIAL_DRAFT);
+  const handleCancelOrBack = useCallback(() => {
+    if (needsConfirmation) { setShowDiscardModal(true); } else { handleBack(); }
+  }, [needsConfirmation, handleBack]);
 
   /** Validate the workflow graph is runnable before publishing */
   function validateWorkflow(): string[] {
@@ -427,6 +502,9 @@ export default function WorkflowBuilderPage() {
 
   const handlePublish = useCallback(async () => {
     if (!canPublish) return;
+    // Guard: update requires actual changes and a commit message
+    if (editingId && !hasChanges) { showToast("No changes detected.", "warning"); return; }
+    if (editingId && !commitMessage.trim()) { showToast("A commit message is required.", "warning"); return; }
 
     // Validate before publishing
     const errors = validateWorkflow();
@@ -567,24 +645,87 @@ export default function WorkflowBuilderPage() {
     };
 
     try {
-      const res = await fetch("http://localhost:8085/workflows", {
-        method: "POST",
+      // If editing an existing workflow, PUT to update; otherwise POST to create
+      const url = editingId
+        ? `http://localhost:8085/workflows/${editingId}`
+        : "http://localhost:8085/workflows";
+      const method = editingId ? "PUT" : "POST";
+
+      // Wrap with commit_message for updates (audit trail, not persisted in DB)
+      const requestBody = editingId
+        ? { ...payload, commit_message: commitMessage.trim() || "No message" }
+        : payload;
+
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(requestBody),
       });
       if (!res.ok) {
         const errText = await res.text();
         throw new Error(`publish failed (${res.status}): ${errText}`);
       }
-      const body = await res.json();
+      const resBody = await res.json();
       setShowPublishModal(false);
-      alert(`Workflow published! ID: ${body.id}`);
-      router.push("/dashboard/workstation");
+      const msg = editingId ? `Workflow updated!` : `Workflow published! ID: ${resBody.id}`;
+      router.push(`/dashboard/workstation?toast=${encodeURIComponent(msg)}&toastType=success`);
     } catch (err: any) {
       console.error(err);
-      alert("Failed to publish workflow: " + (err.message || err));
+      showToast("Failed to publish workflow: " + (err.message || err), "error");
     }
-  }, [canPublish, draft, router]);
+  }, [canPublish, hasChanges, commitMessage, draft, editingId, router, showToast]);
+
+  const handleSaveDraft = useCallback(async () => {
+    if (!draft.name.trim()) { showToast("Please enter a workflow name before saving.", "warning"); return; }
+    // Build backend nodes (same logic as publish but skip validation)
+    const edgesBySource: Record<string, typeof draft.edges> = {};
+    for (const e of draft.edges) { (edgesBySource[e.source] ??= []).push(e); }
+    const backendNodes: any[] = draft.steps.map((s) => {
+      const out = edgesBySource[s.id] || [];
+      const node: Record<string, any> = { id: s.id, type: s.type, title: s.title, description: s.description || "", position: s.position };
+      if (s.type === "task") {
+        node.next = out[0]?.target || "";
+        node.assigned_role = s.assignedRole || "";
+        node.assigned_position = s.assignedPosition || "";
+        node.assigned_user = s.assignedUser || "";
+        node.task_actions = s.taskActions || [];
+        node.form_template_id = s.formTemplateId || "";
+        node.sla_days = s.slaDays || 0;
+      } else if (s.type === "condition") {
+        node.condition = s.condition || "";
+        node.next_yes = out.find((e) => e.sourceHandle === "yes")?.target || "";
+        node.next_no = out.find((e) => e.sourceHandle === "no")?.target || "";
+      } else if (s.type === "parallel") {
+        node.next_branches = out.map((e) => e.target);
+      } else {
+        node.next = out[0]?.target || "";
+      }
+      return node;
+    });
+    const payload = {
+      name: draft.name,
+      description: draft.description,
+      department: draft.department,
+      version: 0,
+      status: "draft",
+      trigger: { type: draft.trigger.type === "form_submission" ? "form_submit" : draft.trigger.type, config: draft.trigger.config },
+      nodes: backendNodes,
+      tags: draft.tags,
+      raw_json: JSON.stringify({ steps: draft.steps, edges: draft.edges }),
+    };
+    try {
+      const url = editingId ? `http://localhost:8085/workflows/${editingId}` : "http://localhost:8085/workflows";
+      const method = editingId ? "PUT" : "POST";
+      const requestBody = editingId ? { ...payload, commit_message: "Saved as draft" } : payload;
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody) });
+      if (!res.ok) { const t = await res.text(); throw new Error(`${res.status}: ${t}`); }
+      const resBody = await res.json();
+      const msg = editingId ? `Draft updated.` : `Draft saved! ID: ${resBody.id}`;
+      router.push(`/dashboard/workstation?toast=${encodeURIComponent(msg)}&toastType=success`);
+    } catch (err: any) {
+      showToast("Failed to save draft: " + (err.message || err), "error");
+    }
+  }, [draft, editingId, router, showToast]);
 
   /* ── Selected step for editor ── */
   const selectedStep =
@@ -599,6 +740,7 @@ export default function WorkflowBuilderPage() {
   const addableTypes: NodeType[] = ["task", "action", "condition", "parallel", "merge"];
 
   return (
+    <>
     <RoleGate
       allowed={["org_admin", "admin"]}
       fallback={
@@ -742,7 +884,7 @@ export default function WorkflowBuilderPage() {
           {/* Top toolbar */}
           <div className="wfb-toolbar">
             <div className="wfb-toolbar-left">
-              <button className="wf-back-btn" onClick={handleBack} title="Back to Workstation">
+              <button className="wf-back-btn" onClick={handleCancelOrBack} title="Back to Workstation">
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   fill="none"
@@ -824,18 +966,26 @@ export default function WorkflowBuilderPage() {
 
               <button
                 className="action-btn action-btn-outline"
-                onClick={() => {
-                  if (confirm("Discard all changes?")) {
-                    handleBack();
-                  }
-                }}
+                onClick={handleCancelOrBack}
               >
                 Cancel
               </button>
 
               <button
+                className="action-btn action-btn-outline"
+                disabled={!draft.name.trim()}
+                onClick={handleSaveDraft}
+                title="Save without validation as a draft"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.046 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.139.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" />
+                </svg>
+                Save Draft
+              </button>
+
+              <button
                 className="action-btn action-btn-primary"
-                disabled={!canPublish}
+                disabled={!canPublish || !hasChanges}
                 onClick={() => setShowPublishModal(true)}
               >
                 <svg
@@ -853,7 +1003,7 @@ export default function WorkflowBuilderPage() {
                     d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z"
                   />
                 </svg>
-                Publish
+                {editingId ? "Update" : "Publish"}
               </button>
             </div>
           </div>
@@ -980,6 +1130,41 @@ export default function WorkflowBuilderPage() {
             </div>
           </div>
 
+          {/* Discard confirmation modal */}
+          {showDiscardModal && (
+            <div
+              className="modal-overlay"
+              onClick={() => setShowDiscardModal(false)}
+            >
+              <div
+                className="modal-content"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="modal-title">Discard all changes?</h3>
+                <p className="modal-desc">
+                  Any unsaved changes to{" "}
+                  <strong>&ldquo;{draft.name || "this workflow"}&rdquo;</strong>{" "}
+                  will be permanently lost. This cannot be undone.
+                </p>
+                <div className="modal-actions">
+                  <button
+                    className="action-btn action-btn-outline"
+                    onClick={() => setShowDiscardModal(false)}
+                  >
+                    Keep editing
+                  </button>
+                  <button
+                    className="action-btn"
+                    style={{ background: "#ef4444", color: "#fff", border: "none" }}
+                    onClick={() => { setShowDiscardModal(false); handleBack(); }}
+                  >
+                    Discard &amp; leave
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Publish confirmation modal */}
           {showPublishModal && (
             <div
@@ -1040,6 +1225,37 @@ export default function WorkflowBuilderPage() {
                   </div>
                 </div>
 
+                {/* No-changes warning when updating */}
+                {editingId && !hasChanges && (
+                  <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 8, background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.35)", fontSize: "0.82rem", color: "#b45309" }}>
+                    No changes detected. Modify the workflow before updating.
+                  </div>
+                )}
+
+                {/* Commit message — only when updating */}
+                {editingId && (
+                  <div className="wf-field" style={{ marginTop: 12 }}>
+                    <label className="wf-field-label">
+                      Commit Message
+                      <span className="wf-required-star" style={{ marginLeft: 4 }}>*</span>
+                    </label>
+                    <span className="wf-field-hint">Required. Briefly describe what changed (for audit trail).</span>
+                    <textarea
+                      className="wf-textarea"
+                      rows={2}
+                      placeholder="e.g. Added finance approval step"
+                      value={commitMessage}
+                      onChange={(e) => setCommitMessage(e.target.value)}
+                      style={!commitMessage.trim() ? { borderColor: "#ef4444" } : {}}
+                    />
+                    {!commitMessage.trim() && (
+                      <span style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: 4, display: "block" }}>
+                        A commit message is required to save changes.
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 <div className="modal-actions">
                   <button
                     className="action-btn action-btn-outline"
@@ -1049,9 +1265,10 @@ export default function WorkflowBuilderPage() {
                   </button>
                   <button
                     className="action-btn action-btn-primary"
+                    disabled={editingId ? !commitOk || !hasChanges : false}
                     onClick={handlePublish}
                   >
-                    {publishErrors.length > 0 ? "Re-check & Publish" : "Confirm & Publish"}
+                    {publishErrors.length > 0 ? "Re-check & Publish" : editingId ? "Confirm & Update" : "Confirm & Publish"}
                   </button>
                 </div>
               </div>
@@ -1060,5 +1277,7 @@ export default function WorkflowBuilderPage() {
         </div>
       )}
     </RoleGate>
+    <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+    </>
   );
 }
