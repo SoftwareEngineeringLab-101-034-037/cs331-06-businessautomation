@@ -37,6 +37,7 @@ func ClerkAuthMiddleware(keyFunc jwt.Keyfunc, issuerURL string) gin.HandlerFunc 
 		token, err := jwt.Parse(tokenString, keyFunc,
 			jwt.WithValidMethods([]string{"RS256"}),
 			jwt.WithIssuer(issuerURL),
+			jwt.WithExpirationRequired(),
 		)
 		if err != nil || !token.Valid {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
