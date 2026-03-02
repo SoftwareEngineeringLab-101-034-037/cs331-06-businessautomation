@@ -36,7 +36,7 @@ function timeAgo(iso: string): string {
   return `${days}d ago`;
 }
 
-const WF_API = "http://localhost:8085";
+const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
 
 export default function WorkstationPage() {
   const router = useRouter();
@@ -371,7 +371,7 @@ export default function WorkstationPage() {
                       <td className="font-medium">{wf.name}</td>
                       <td>{wf.department || <span className="table-muted">&mdash;</span>}</td>
                       <td>
-                        <span className={`status-dot ${wf.status === "active" ? "active" : "inactive"}`}>{wf.status}</span>
+                        <span className={`status-dot ${wf.status === "active" ? "active" : wf.status === "draft" ? "draft" : "inactive"}`}>{wf.status}</span>
                       </td>
                       <td><span className="role-badge">{wf.trigger?.type || "manual"}</span></td>
                       <td>

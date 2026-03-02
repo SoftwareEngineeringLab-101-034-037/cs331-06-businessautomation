@@ -308,6 +308,15 @@
   color: var(--text-muted);
 }
 
+.status-dot.draft {
+  color: #a78bfa;
+}
+
+.status-dot.draft::before {
+  background: #a78bfa;
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.2);
+}
+
 /* Empty state */
 .empty-state {
   display: flex;

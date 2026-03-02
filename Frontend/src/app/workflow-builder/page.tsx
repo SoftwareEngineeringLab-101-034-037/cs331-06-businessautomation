@@ -23,6 +23,8 @@ import type {
 import { createBlankStep, generateStepId, NODE_TYPE_CONFIG } from "@/types/workflow";
 import { MOCK_DEPARTMENTS } from "@/lib/mock-data";
 
+const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
+
 /* ── Initial draft ── */
 const INITIAL_STEPS: WorkflowStep[] = [
   {
@@ -78,7 +80,6 @@ export default function WorkflowBuilderPage() {
   /* ── Editing existing workflow (via ?id=) ── */
   const [editingId, setEditingId] = useState<string | null>(null);
   const [commitMessage, setCommitMessage] = useState("");
-  const loadedRef = useRef(false);
 
   /* ── Discard confirmation dialog ── */
   const [showDiscardModal, setShowDiscardModal] = useState(false);
@@ -92,13 +93,17 @@ export default function WorkflowBuilderPage() {
   useEffect(() => {
     const wfId = searchParams.get("id");
     if (!wfId || prevWfIdRef.current === wfId) return;
-    prevWfIdRef.current = wfId;
+
+    // Cancellation guard — prevents stale responses from overwriting state
+    let cancelled = false;
 
     (async () => {
       try {
-        const res = await fetch(`http://localhost:8085/workflows/${wfId}`);
+        const res = await fetch(`${WF_API}/workflows/${wfId}`);
+        if (cancelled) return;
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const wf = await res.json();
+        if (cancelled) return;
 
         // Restore canvas from raw_json if available
         let steps: WorkflowStep[] = INITIAL_STEPS;
@@ -128,14 +133,20 @@ export default function WorkflowBuilderPage() {
         setEditingId(wfId);
         // Snapshot for change-detection
         originalDraftRef.current = JSON.stringify(loaded);
+        // Mark this id as successfully loaded
+        prevWfIdRef.current = wfId;
         // Skip the "New Workflow" details dialog — go straight to canvas
         setShowDetailsDialog(false);
       } catch (err) {
+        if (cancelled) return;
         console.error("Failed to load workflow for editing:", err);
         showToast("Could not load workflow. Starting fresh.", "error");
+        // Don't set prevWfIdRef — allow retries on next render
       }
     })();
-  }, [searchParams]);
+
+    return () => { cancelled = true; };
+  }, [searchParams, showToast]);
 
   /* Dialog form local state */
   const [dlgName, setDlgName] = useState("");
@@ -648,8 +659,8 @@ export default function WorkflowBuilderPage() {
     try {
       // If editing an existing workflow, PUT to update; otherwise POST to create
       const url = editingId
-        ? `http://localhost:8085/workflows/${editingId}`
-        : "http://localhost:8085/workflows";
+        ? `${WF_API}/workflows/${editingId}`
+        : `${WF_API}/workflows`;
       const method = editingId ? "PUT" : "POST";
 
       // Wrap with commit_message for updates (audit trail, not persisted in DB)
@@ -715,7 +726,7 @@ export default function WorkflowBuilderPage() {
       raw_json: JSON.stringify({ steps: draft.steps, edges: draft.edges }),
     };
     try {
-      const url = editingId ? `http://localhost:8085/workflows/${editingId}` : "http://localhost:8085/workflows";
+      const url = editingId ? `${WF_API}/workflows/${editingId}` : `${WF_API}/workflows`;
       const method = editingId ? "PUT" : "POST";
       const requestBody = editingId ? { ...payload, commit_message: "Saved as draft" } : payload;
       const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody) });
