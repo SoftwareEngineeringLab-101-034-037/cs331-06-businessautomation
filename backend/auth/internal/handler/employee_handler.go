@@ -181,3 +181,19 @@ func (h *EmployeeHandler) ListEmployees(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, employees)
 }
+
+// GET /api/orgs/:orgId/departments/:deptID
+func (h *EmployeeHandler) GetDepartment(c *gin.Context) {
+	orgID := c.Param("orgId")
+	deptID := c.Param("deptID")
+	deptDetails, err := h.Service.GetDepartmentDetails(orgID, deptID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, deptDetails)
+}

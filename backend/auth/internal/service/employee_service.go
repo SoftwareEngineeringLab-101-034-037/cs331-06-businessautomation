@@ -105,3 +105,15 @@ func (s *EmployeeService) RevokeInvitation(invitationID, orgID string) error {
 	log.Printf("Invitation %s revoked", invitationID)
 	return nil
 }
+
+func (s *EmployeeService) GetDepartmentDetails(orgID, deptID string) (*models.Department, error) {
+	var dept models.Department
+	err := s.db.Where("organization_id = ? AND id = ?", orgID, deptID).First(&dept).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: department %s in org %s", ErrNotFound, deptID, orgID)
+		}
+		return nil, fmt.Errorf("failed to get department details: %w", err)
+	}
+	return &dept, nil
+}

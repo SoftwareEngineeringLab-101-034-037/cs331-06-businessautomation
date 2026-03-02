@@ -73,6 +73,7 @@ func main() {
 		{
 			orgApi.POST("/departments", employeeHandler.CreateDepartment)
 			orgApi.GET("/departments", employeeHandler.ListDepartments)
+			orgApi.GET("/departments/:deptID", employeeHandler.GetDepartment)
 			orgApi.POST("/employees/invite", employeeHandler.InviteSingle)
 			orgApi.POST("/employees/invite/bulk", employeeHandler.InviteBulk)
 			orgApi.GET("/employees", employeeHandler.ListEmployees)
