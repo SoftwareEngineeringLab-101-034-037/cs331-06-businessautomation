@@ -2,6 +2,7 @@ package models
 
 import (
 	"testing"
+	"time"
 
 	"gorm.io/datatypes"
 )
@@ -45,6 +46,16 @@ func TestTableNames(t *testing.T) {
 			name:      "users",
 			model:     User{},
 			tableName: "users",
+		},
+		{
+			name:      "departments",
+			model:     Department{},
+			tableName: "departments",
+		},
+		{
+			name:      "employee invitations",
+			model:     EmployeeInvitation{},
+			tableName: "employee_invitations",
 		},
 	}
 
@@ -165,5 +176,48 @@ func TestRoleHasPermissionReturnsFalse(t *testing.T) {
 	}
 	if role.HasPermission("workflow", "delete") {
 		t.Fatal("expected HasPermission to return false for current placeholder implementation")
+	}
+}
+
+func TestEmployeeInvitationStateHelpers(t *testing.T) {
+	now := time.Now()
+
+	pendingFuture := &EmployeeInvitation{
+		Status:    "pending",
+		ExpiresAt: now.Add(1 * time.Hour),
+	}
+	if pendingFuture.IsExpired() {
+		t.Fatal("expected future invitation not to be expired")
+	}
+	if !pendingFuture.IsPending() {
+		t.Fatal("expected pending future invitation to be pending")
+	}
+	if !pendingFuture.CanAccept() {
+		t.Fatal("expected pending future invitation to be acceptable")
+	}
+
+	pendingPast := &EmployeeInvitation{
+		Status:    "pending",
+		ExpiresAt: now.Add(-1 * time.Hour),
+	}
+	if !pendingPast.IsExpired() {
+		t.Fatal("expected past invitation to be expired")
+	}
+	if pendingPast.IsPending() {
+		t.Fatal("expected expired invitation not to be pending")
+	}
+	if pendingPast.CanAccept() {
+		t.Fatal("expected expired invitation not to be acceptable")
+	}
+
+	acceptedFuture := &EmployeeInvitation{
+		Status:    "accepted",
+		ExpiresAt: now.Add(1 * time.Hour),
+	}
+	if acceptedFuture.IsPending() {
+		t.Fatal("expected accepted invitation not to be pending")
+	}
+	if acceptedFuture.CanAccept() {
+		t.Fatal("expected accepted invitation not to be acceptable")
 	}
 }

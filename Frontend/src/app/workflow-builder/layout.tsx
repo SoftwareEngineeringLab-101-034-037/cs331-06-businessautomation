@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import { RoleProvider } from "@/components/dashboard/RoleProvider";
 import "../dashboard/dashboard.css";
 
@@ -10,7 +11,9 @@ export default function WorkflowBuilderLayout({
 }) {
   return (
     <RoleProvider defaultRole="admin">
-      {children}
+      <Suspense fallback={null}>
+        {children}
+      </Suspense>
     </RoleProvider>
   );
 }

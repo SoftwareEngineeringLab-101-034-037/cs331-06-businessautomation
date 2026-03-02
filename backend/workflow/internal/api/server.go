@@ -121,7 +121,7 @@ wf.Status = models.WorkflowActive
 }
 wf.CreatedAt = now
 wf.UpdatedAt = now
-if wf.Version == 0 {
+if wf.Version == 0 && wf.Status != "draft" {
 wf.Version = 1
 }
 id, err := s.store.SaveWorkflow(wf)
@@ -148,14 +148,44 @@ return
 }
 writeJSON(w, http.StatusOK, wf)
 case http.MethodPut:
-var wf models.Workflow
-if err := json.NewDecoder(r.Body).Decode(&wf); err != nil {
+// Wrapper struct so we can receive commit_message without persisting it
+var req struct {
+models.Workflow
+CommitMessage string `json:"commit_message"`
+}
+if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 http.Error(w, "invalid JSON", http.StatusBadRequest)
 return
 }
+wf := req.Workflow
 wf.ID = id
 wf.UpdatedAt = time.Now()
-s.store.SaveWorkflow(wf)
+// Preserve fields from the existing document
+if existing, ok := s.store.GetWorkflow(id); ok {
+wf.CreatedAt = existing.CreatedAt
+wf.CreatedBy = existing.CreatedBy
+if wf.Status == "draft" {
+wf.Version = 0
+} else if wf.Version <= existing.Version {
+wf.Version = existing.Version + 1
+}
+} else {
+// First time seeing this ID — treat as new
+wf.CreatedAt = wf.UpdatedAt
+if wf.Status == "draft" {
+wf.Version = 0
+} else if wf.Version == 0 {
+wf.Version = 1
+}
+}
+// Audit log — commit message is NOT stored in the workflow document
+if req.CommitMessage != "" {
+log.Printf("[AUDIT] workflow %s (v%d) updated — %s", wf.ID, wf.Version, req.CommitMessage)
+}
+if _, err := s.store.SaveWorkflow(wf); err != nil {
+http.Error(w, "save failed: "+err.Error(), http.StatusInternalServerError)
+return
+}
 writeJSON(w, http.StatusOK, wf)
 case http.MethodDelete:
 if err := s.store.DeleteWorkflow(id); err != nil {

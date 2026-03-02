@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"errors"
+	"log"
 	"net/http"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/service"
@@ -28,7 +30,12 @@ func (h *EmployeeHandler) CreateDepartment(c *gin.Context) {
 	}
 	dept, err := h.Service.CreateDepartment(orgID, body.Name, body.Description)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if errors.Is(err, service.ErrDuplicateDepartment) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		} else {
+			log.Printf("CreateDepartment error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		}
 		return
 	}
 	c.JSON(http.StatusCreated, dept)
@@ -39,7 +46,8 @@ func (h *EmployeeHandler) ListDepartments(c *gin.Context) {
 	orgID := c.Param("orgId")
 	depts, err := h.Service.ListDepartments(orgID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("ListDepartments error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 	c.JSON(http.StatusOK, depts)
@@ -74,7 +82,15 @@ func (h *EmployeeHandler) InviteSingle(c *gin.Context) {
 		InvitedBy:    userID,
 	})
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		switch {
+		case errors.Is(err, service.ErrDuplicateInvite):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrNotFound):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			log.Printf("InviteSingle error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		}
 		return
 	}
 
@@ -89,7 +105,8 @@ func (h *EmployeeHandler) ListInvitations(c *gin.Context) {
 	orgID := c.Param("orgId")
 	invitations, err := h.Service.ListInvitations(orgID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("ListInvitations error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 	c.JSON(http.StatusOK, invitations)
@@ -100,7 +117,11 @@ func (h *EmployeeHandler) RevokeInvitation(c *gin.Context) {
 	orgID := c.Param("orgId")
 	invID := c.Param("invitationId")
 	if err := h.Service.RevokeInvitation(invID, orgID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if errors.Is(err, service.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Invitation revoked"})
@@ -118,14 +139,12 @@ func (h *EmployeeHandler) InviteBulk(c *gin.Context) {
 	}
 	defer file.Close()
 
-	// Parse the Excel file
 	parseResult, err := service.ParseEmployeeExcel(file)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Process each valid row — create invitations
 	successful := 0
 	var inviteErrors []service.ParseError
 
@@ -151,7 +170,6 @@ func (h *EmployeeHandler) InviteBulk(c *gin.Context) {
 		}
 	}
 
-	// Combine parse errors + invite errors
 	allErrors := append(parseResult.Errors, inviteErrors...)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -167,8 +185,26 @@ func (h *EmployeeHandler) ListEmployees(c *gin.Context) {
 	orgID := c.Param("orgId")
 	employees, err := h.Service.ListEmployees(orgID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("ListEmployees error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 	c.JSON(http.StatusOK, employees)
+}
+
+// GET /api/orgs/:orgId/departments/:deptID
+func (h *EmployeeHandler) GetDepartment(c *gin.Context) {
+	orgID := c.Param("orgId")
+	deptID := c.Param("deptID")
+	deptDetails, err := h.Service.GetDepartmentDetails(orgID, deptID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		} else {
+			log.Printf("GetDepartment error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, deptDetails)
 }

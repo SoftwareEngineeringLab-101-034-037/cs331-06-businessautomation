@@ -12,6 +12,7 @@ import (
 type Config struct {
 	ClerkSecretKey     string
 	ClerkWebhookSecret string
+	ClerkIssuerURL     string
 	DatabaseURL        string
 	Port               string
 }
@@ -33,6 +34,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		ClerkSecretKey:     strings.TrimSpace(getEnv("CLERK_SECRET_KEY", "")),
 		ClerkWebhookSecret: strings.TrimSpace(getEnv("CLERK_WEBHOOK_SECRET", "")),
+		ClerkIssuerURL:     strings.TrimSpace(getEnv("CLERK_ISSUER_URL", "")),
 		DatabaseURL:        strings.TrimSpace(getEnv("DATABASE_URL", "")),
 		Port:               strings.TrimSpace(getEnv("PORT", "8080")),
 	}
@@ -44,6 +46,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.ClerkWebhookSecret == "" {
 		missing = append(missing, "CLERK_WEBHOOK_SECRET")
+	}
+	if cfg.ClerkIssuerURL == "" {
+		missing = append(missing, "CLERK_ISSUER_URL")
 	}
 	if cfg.DatabaseURL == "" {
 		missing = append(missing, "DATABASE_URL")

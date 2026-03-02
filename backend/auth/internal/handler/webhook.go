@@ -370,4 +370,3 @@ func getString(m map[string]interface{}, key string) string {
 	}
 	return ""
 }
-

@@ -4,7 +4,10 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
+	keyfunc "github.com/MicahParks/keyfunc/v2"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
@@ -40,10 +43,18 @@ func main() {
 		log.Println("Skipping database migrations (-migrate=false)")
 	}
 
-	// Start cleanup background job (runs every 5 min, deletes soft-deleted records older than 30 days)
 	cleanup.Start(cleanup.DefaultConfig())
 
-	// Initialize services
+	// Initialize JWKS for JWT verification against Clerk's public keys
+	jwksURL := strings.TrimRight(cfg.ClerkIssuerURL, "/") + "/.well-known/jwks.json"
+	jwks, err := keyfunc.Get(jwksURL, keyfunc.Options{
+		RefreshInterval: time.Hour,
+	})
+	if err != nil {
+		log.Fatalf("Failed to fetch JWKS from %s: %v", jwksURL, err)
+	}
+	defer jwks.EndBackground()
+
 	employeeService := service.NewEmployeeService(database.DB, cfg.ClerkSecretKey)
 	employeeHandler := handler.NewEmployeeHandler(employeeService)
 
@@ -52,9 +63,8 @@ func main() {
 
 	r := gin.Default()
 
-	// CORS configuration
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"}, // Configure for production
+		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Accept", "Authorization", "Content-Type"},
 		ExposeHeaders:    []string{"Link"},
@@ -65,17 +75,18 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-	// Webhook endpoint (no auth required — verified via Svix signature)
+
 	r.POST("/api/webhooks/clerk", webhookHandler.Handle)
 
 	api := r.Group("/api")
-	api.Use(middleware.ClerkAuthMiddleware())
+	api.Use(middleware.ClerkAuthMiddleware(jwks.Keyfunc, cfg.ClerkIssuerURL))
 	{
 		orgApi := api.Group("/orgs/:orgId")
 		orgApi.Use(middleware.OrgAdminOnly())
 		{
 			orgApi.POST("/departments", employeeHandler.CreateDepartment)
 			orgApi.GET("/departments", employeeHandler.ListDepartments)
+			orgApi.GET("/departments/:deptID", employeeHandler.GetDepartment)
 			orgApi.POST("/employees/invite", employeeHandler.InviteSingle)
 			orgApi.POST("/employees/invite/bulk", employeeHandler.InviteBulk)
 			orgApi.GET("/employees", employeeHandler.ListEmployees)
@@ -88,7 +99,6 @@ func main() {
 	log.Printf("Auth service running on http://localhost%s", addr)
 
 	if err := r.Run(addr); err != nil {
-		log.Fatalf("Server failed: %v", err)
+		log.Fatalf("Server failed to run: %v", err)
 	}
 }
-
