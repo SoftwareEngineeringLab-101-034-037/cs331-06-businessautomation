@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
@@ -42,6 +43,10 @@ func (s *EmployeeService) CreateDepartment(orgID, name, description string) (*mo
 		UpdatedAt:      time.Now(),
 	}
 	if err := s.db.Create(&dept).Error; err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, name)
+		}
 		return nil, fmt.Errorf("failed to create department: %w", err)
 	}
 	log.Printf("Department created: %s in org %s", dept.ID, orgID)
