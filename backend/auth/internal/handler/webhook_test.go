@@ -314,6 +314,88 @@ func TestHandleOrganizationDeletedMarksInactive(t *testing.T) {
 	}
 }
 
+func TestHandleMembershipCreatedCreatesMembershipWhenUserMissing(t *testing.T) {
+	restoreDB(t)
+	db := setupWebhookTestDB(t)
+	database.DB = db
+
+	handler := NewWebhookHandler("", nil)
+	data := mustMarshal(t, map[string]interface{}{
+		"id":         "mem_1",
+		"role":       "org:member",
+		"created_at": time.Now().UnixMilli(),
+		"updated_at": time.Now().UnixMilli(),
+		"organization": map[string]interface{}{
+			"id": "org_1",
+		},
+		"public_user_data": map[string]interface{}{
+			"user_id": "missing_user",
+		},
+	})
+
+	if err := handler.handleMembershipCreated(data); err != nil {
+		t.Fatalf("expected no error handling membership created, got %v", err)
+	}
+
+	var count int64
+	if err := db.Table("organization_memberships").Where("id = ?", "mem_1").Count(&count).Error; err != nil {
+		t.Fatalf("failed counting memberships: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 membership row, got %d", count)
+	}
+}
+
+func TestHandleMembershipCreatedCreatesMembershipWhenUserExists(t *testing.T) {
+	restoreDB(t)
+	db := setupWebhookTestDB(t)
+	database.DB = db
+
+	if err := db.Exec(`
+		INSERT INTO users (id, email, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, "user_4", "user4@example.com", true, time.Now(), time.Now()).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
+
+	handler := NewWebhookHandler("", nil)
+	data := mustMarshal(t, map[string]interface{}{
+		"id":         "mem_2",
+		"role":       "org:admin",
+		"created_at": time.Now().UnixMilli(),
+		"updated_at": time.Now().UnixMilli(),
+		"organization": map[string]interface{}{
+			"id": "org_1",
+		},
+		"public_user_data": map[string]interface{}{
+			"user_id": "user_4",
+		},
+	})
+
+	if err := handler.handleMembershipCreated(data); err != nil {
+		t.Fatalf("expected no error handling membership created, got %v", err)
+	}
+
+	var membershipRole string
+	if err := db.Table("organization_memberships").Select("clerk_role").Where("id = ?", "mem_2").Scan(&membershipRole).Error; err != nil {
+		t.Fatalf("failed reading membership row: %v", err)
+	}
+	if membershipRole != "org:admin" {
+		t.Fatalf("expected membership role org:admin, got %q", membershipRole)
+	}
+}
+
+func TestHandleMembershipCreatedReturnsErrorForInvalidPayload(t *testing.T) {
+	restoreDB(t)
+	db := setupWebhookTestDB(t)
+	database.DB = db
+
+	handler := NewWebhookHandler("", nil)
+	if err := handler.handleMembershipCreated(json.RawMessage(`{"id":`)); err == nil {
+		t.Fatal("expected invalid membership payload to return error")
+	}
+}
+
 func TestGetString(t *testing.T) {
 	if got := getString(map[string]interface{}{"created_by": "user_123"}, "created_by"); got != "user_123" {
 		t.Fatalf("expected user_123, got %q", got)
@@ -346,6 +428,7 @@ func setupWebhookTestDB(t *testing.T) *gorm.DB {
 			avatar_url TEXT,
 			department_id TEXT,
 			role_id TEXT,
+			job_title TEXT,
 			preferences TEXT,
 			is_active BOOLEAN DEFAULT 1,
 			created_at DATETIME,
@@ -374,6 +457,18 @@ func setupWebhookTestDB(t *testing.T) *gorm.DB {
 			size TEXT,
 			country TEXT,
 			use_case TEXT,
+			created_at DATETIME,
+			updated_at DATETIME
+		)
+		`,
+		`
+		CREATE TABLE organization_memberships (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			organization_id TEXT NOT NULL,
+			clerk_role TEXT NOT NULL,
+			local_role_id TEXT,
+			joined_at DATETIME,
 			created_at DATETIME,
 			updated_at DATETIME
 		)
