@@ -14,7 +14,7 @@ interface BackendWorkflow {
   description?: string;
   department?: string;
   version: number;
-  status: string;
+  status: "active" | "inactive" | "draft";
   trigger: { type: string; config?: Record<string, string> };
   nodes: unknown[];
   tags?: string[];
@@ -26,7 +26,11 @@ interface BackendWorkflow {
 
 /* helper - pretty relative time */
 function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
+  if (!iso) return "unknown";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return "unknown";
+  const diff = Date.now() - t;
+  if (diff < 0) return "just now";
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
@@ -167,10 +171,16 @@ export default function WorkstationPage() {
     try {
       const existing = workflows.find((w) => w.id === inactiveTarget.id);
       if (!existing) throw new Error("Workflow not found");
+      const minimal = {
+        id: existing.id, name: existing.name, description: existing.description,
+        department: existing.department, version: existing.version,
+        trigger: existing.trigger, nodes: existing.nodes,
+        tags: existing.tags, raw_json: existing.raw_json, status: "inactive" as const,
+      };
       const res = await fetch(`${WF_API}/workflows/${inactiveTarget.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...existing, status: "inactive" }),
+        body: JSON.stringify(minimal),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setWorkflows((prev) => prev.map((w) => w.id === inactiveTarget.id ? { ...w, status: "inactive" } : w));
@@ -185,10 +195,16 @@ export default function WorkstationPage() {
   const handleSetActive = useCallback(async (wf: BackendWorkflow) => {
     setOpenMenuId(null);
     try {
+      const minimal = {
+        id: wf.id, name: wf.name, description: wf.description,
+        department: wf.department, version: wf.version,
+        trigger: wf.trigger, nodes: wf.nodes,
+        tags: wf.tags, raw_json: wf.raw_json, status: "active" as const,
+      };
       const res = await fetch(`${WF_API}/workflows/${wf.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...wf, status: "active" }),
+        body: JSON.stringify(minimal),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setWorkflows((prev) => prev.map((w) => w.id === wf.id ? { ...w, status: "active" } : w));
@@ -445,7 +461,7 @@ export default function WorkstationPage() {
           <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
             <div className="modal-header">
               <h3 className="modal-title" style={{ color: "#ef4444" }}>Delete Workflow</h3>
-              <button className="modal-close" onClick={() => setDeleteTarget(null)}>&times;</button>
+              <button className="modal-close" aria-label="Close delete modal" onClick={() => setDeleteTarget(null)}>&times;</button>
             </div>
             <div className="modal-body">
               <p style={{ fontSize: "0.9rem", marginBottom: 16, color: "var(--text-secondary)" }}>
@@ -462,6 +478,7 @@ export default function WorkstationPage() {
                 onKeyDown={(e) => { if (e.key === "Enter") confirmDelete(); }}
                 placeholder="delete permanently"
                 autoComplete="off"
+                aria-label='Type "delete permanently" to confirm deletion'
               />
             </div>
             <div className="modal-footer">
@@ -478,7 +495,7 @@ export default function WorkstationPage() {
           <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
             <div className="modal-header">
               <h3 className="modal-title" style={{ color: "#22c55e" }}>Set Workflow Active</h3>
-              <button className="modal-close" onClick={() => setActiveTarget(null)}>&times;</button>
+              <button className="modal-close" aria-label="Close set active modal" onClick={() => setActiveTarget(null)}>&times;</button>
             </div>
             <div className="modal-body">
               <p style={{ fontSize: "0.9rem", marginBottom: 16, color: "var(--text-secondary)" }}>
@@ -495,6 +512,7 @@ export default function WorkstationPage() {
                 onKeyDown={(e) => { if (e.key === "Enter") confirmActive(); }}
                 placeholder="active"
                 autoComplete="off"
+                aria-label='Type "active" to confirm setting workflow active'
               />
             </div>
             <div className="modal-footer">
@@ -518,7 +536,7 @@ export default function WorkstationPage() {
           <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
             <div className="modal-header">
               <h3 className="modal-title" style={{ color: "#f59e0b" }}>Set Workflow Inactive</h3>
-              <button className="modal-close" onClick={() => setInactiveTarget(null)}>&times;</button>
+              <button className="modal-close" aria-label="Close set inactive modal" onClick={() => setInactiveTarget(null)}>&times;</button>
             </div>
             <div className="modal-body">
               <p style={{ fontSize: "0.9rem", marginBottom: 16, color: "var(--text-secondary)" }}>
@@ -535,6 +553,7 @@ export default function WorkstationPage() {
                 onKeyDown={(e) => { if (e.key === "Enter") confirmInactive(); }}
                 placeholder="inactive"
                 autoComplete="off"
+                aria-label='Type "inactive" to confirm setting workflow inactive'
               />
             </div>
             <div className="modal-footer">

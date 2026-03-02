@@ -87,6 +87,8 @@ export default function WorkflowBuilderPage() {
   // Snapshot of the draft at load time — used to detect actual changes
   const originalDraftRef = useRef<string | null>(null);
   const prevWfIdRef = useRef<string | null>(null);
+  // Stable ref to handleCancelOrBack — kept fresh each render to avoid stale closure in popstate
+  const handleCancelOrBackRef = useRef<() => void>(() => {});
 
   /* ── Toast notifications ── */
   const { toasts, showToast, dismissToast } = useToast();
@@ -163,10 +165,16 @@ export default function WorkflowBuilderPage() {
   }, [router]);
 
   useEffect(() => {
-    const handlePop = () => router.push("/dashboard/workstation");
+    // Push a sentinel entry so browser back triggers popstate instead of leaving
+    window.history.pushState(null, "");
+    const handlePop = () => {
+      // Re-push so the URL stays put while any confirm modal is open
+      window.history.pushState(null, "");
+      handleCancelOrBackRef.current();
+    };
     window.addEventListener("popstate", handlePop);
     return () => window.removeEventListener("popstate", handlePop);
-  }, [router]);
+  }, []);
 
   /* ── Dialog handlers ── */
   const addDlgTag = useCallback(() => {
@@ -403,6 +411,8 @@ export default function WorkflowBuilderPage() {
   const handleCancelOrBack = useCallback(() => {
     if (needsConfirmation) { setShowDiscardModal(true); } else { handleBack(); }
   }, [needsConfirmation, handleBack]);
+  // Keep ref fresh so the popstate listener always sees the latest value
+  handleCancelOrBackRef.current = handleCancelOrBack;
 
   /** Validate the workflow graph is runnable before publishing */
   function validateWorkflow(): string[] {
@@ -679,9 +689,10 @@ export default function WorkflowBuilderPage() {
         const errText = await res.text();
         throw new Error(`publish failed (${res.status}): ${errText}`);
       }
-      const resBody = await res.json();
+      const hasBody = res.status !== 204 && res.headers.get("content-length") !== "0" && res.headers.get("content-type")?.includes("json");
+      const resBody = hasBody ? await res.json() : null;
       setShowPublishModal(false);
-      const msg = editingId ? `Workflow updated!` : `Workflow published! ID: ${resBody.id}`;
+      const msg = editingId ? `Workflow updated!` : `Workflow published!${resBody?.id ? ` ID: ${resBody.id}` : ""}`;
       router.push(`/dashboard/workstation?toast=${encodeURIComponent(msg)}&toastType=success`);
     } catch (err: any) {
       console.error(err);
@@ -698,7 +709,19 @@ export default function WorkflowBuilderPage() {
       const out = edgesBySource[s.id] || [];
       const node: Record<string, any> = { id: s.id, type: s.type, title: s.title, description: s.description || "", position: s.position };
       if (s.type === "task") {
-        node.next = out[0]?.target || "";
+        const actions = s.taskActions ?? [];
+        if (actions.length >= 2) {
+          const nextActions: Record<string, string> = {};
+          for (const e of out) {
+            if (e.sourceHandle && actions.includes(e.sourceHandle as any)) {
+              nextActions[e.sourceHandle] = e.target;
+            }
+          }
+          node.next_actions = nextActions;
+          node.next = out.length > 0 ? out[0].target : "";
+        } else {
+          node.next = out[0]?.target || "";
+        }
         node.assigned_role = s.assignedRole || "";
         node.assigned_position = s.assignedPosition || "";
         node.assigned_user = s.assignedUser || "";
@@ -733,8 +756,9 @@ export default function WorkflowBuilderPage() {
       const requestBody = editingId ? { ...payload, commit_message: "Saved as draft" } : payload;
       const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody) });
       if (!res.ok) { const t = await res.text(); throw new Error(`${res.status}: ${t}`); }
-      const resBody = await res.json();
-      const msg = editingId ? `Draft updated.` : `Draft saved! ID: ${resBody.id}`;
+      const hasBody = res.status !== 204 && res.headers.get("content-length") !== "0" && res.headers.get("content-type")?.includes("json");
+      const resBody = hasBody ? await res.json() : null;
+      const msg = editingId ? `Draft updated.` : `Draft saved!${resBody?.id ? ` ID: ${resBody.id}` : ""}`;
       router.push(`/dashboard/workstation?toast=${encodeURIComponent(msg)}&toastType=success`);
     } catch (err: any) {
       showToast("Failed to save draft: " + (err.message || err), "error");
