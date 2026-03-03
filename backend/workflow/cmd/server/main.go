@@ -25,21 +25,14 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	var store storage.Store
-	if cfg.MongoURI != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if ms, connErr := storage.NewMongoStore(ctx, cfg.MongoURI); connErr == nil {
-			log.Printf("Connected to MongoDB: %s", cfg.MongoURI)
-			store = ms
-		} else {
-			log.Printf("MongoDB connection failed: %v — falling back to in-memory store", connErr)
-		}
+	// Connect to MongoDB (required)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := storage.NewMongoStore(ctx, cfg.MongoURI)
+	if err != nil {
+		log.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
-	if store == nil {
-		log.Println("Using in-memory store")
-		store = storage.NewMemoryStore()
-	}
+	log.Printf("Connected to MongoDB: %s", cfg.MongoURI)
 
 	email := connectors.NewMockEmail()
 	exec := executor.NewExecutor(store, email)

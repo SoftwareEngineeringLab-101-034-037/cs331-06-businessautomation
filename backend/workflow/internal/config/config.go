@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -33,6 +34,14 @@ func Load() (*Config, error) {
 		MongoURI:       strings.TrimSpace(getEnv("MONGO_URI", "")),
 		ClerkIssuerURL: strings.TrimSpace(getEnv("CLERK_ISSUER_URL", "")),
 		Port:           strings.TrimSpace(getEnv("PORT", "8085")),
+	}
+
+	var missing []string
+	if cfg.MongoURI == "" {
+		missing = append(missing, "MONGO_URI")
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
 	}
 
 	return cfg, nil
