@@ -1,4 +1,4 @@
-﻿package executor
+package executor
 
 import (
 	"fmt"
@@ -437,5 +437,3 @@ func toFloat(s string) float64 {
 	}
 	return f
 }
-
-

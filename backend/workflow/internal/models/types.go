@@ -194,7 +194,7 @@ const (
 
 type Instance struct {
 	ID          string                 `json:"id" bson:"id"`
-	WorkflowID  string                `json:"workflow_id" bson:"workflow_id"`
+	WorkflowID  string                 `json:"workflow_id" bson:"workflow_id"`
 	Status      InstanceStatus         `json:"status" bson:"status"`
 	CurrentNode string                 `json:"current_node,omitempty" bson:"current_node,omitempty"`
 	Data        map[string]interface{} `json:"data,omitempty" bson:"data,omitempty"`
