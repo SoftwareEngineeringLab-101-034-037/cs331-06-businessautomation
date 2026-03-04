@@ -82,6 +82,9 @@ func (h *TaskHandler) Action(c *gin.Context) {
 		return
 	}
 
-	h.Store.SaveTask(task)
+	if _, err := h.Store.SaveTask(task); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save task: " + err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, task)
 }
