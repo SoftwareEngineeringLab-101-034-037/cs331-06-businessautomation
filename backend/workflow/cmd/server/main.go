@@ -74,6 +74,7 @@ func main() {
 	api.Use(authMW)
 	{
 		orgApi := api.Group("/orgs/:orgId")
+		orgApi.Use(middleware.RequireOrgMatch())
 		{
 			// Workflow CRUD
 			orgApi.GET("/workflows", workflowHandler.List)

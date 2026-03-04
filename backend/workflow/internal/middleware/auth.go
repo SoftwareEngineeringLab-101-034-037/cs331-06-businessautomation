@@ -63,3 +63,20 @@ func GetUserID(c *gin.Context) string {
 func GetOrgID(c *gin.Context) string {
 	return c.GetString(OrgIDKey)
 }
+
+// RequireOrgMatch ensures the :orgId path parameter matches the org_id
+// claim from the authenticated JWT. Returns 403 if they differ.
+func RequireOrgMatch() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		pathOrgID := c.Param("orgId")
+		tokenOrgID := c.GetString(OrgIDKey)
+
+		if pathOrgID == "" || tokenOrgID == "" || pathOrgID != tokenOrgID {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "You do not have access to this organisation",
+			})
+			return
+		}
+		c.Next()
+	}
+}
