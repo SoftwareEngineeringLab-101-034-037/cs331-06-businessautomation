@@ -33,6 +33,7 @@ func NewMongoStore(ctx context.Context, uri string) (*MongoStore, error) {
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := client.Ping(pingCtx, nil); err != nil {
+		_ = client.Disconnect(ctx)
 		return nil, err
 	}
 	db := client.Database("workflowdb")
@@ -43,27 +44,37 @@ func NewMongoStore(ctx context.Context, uri string) (*MongoStore, error) {
 		instCol: db.Collection("instances"),
 		taskCol: db.Collection("tasks"),
 	}
-	s.ensureIndexes(ctx)
+	if err := s.ensureIndexes(ctx); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, err
+	}
 	return s, nil
 }
 
-func (m *MongoStore) ensureIndexes(ctx context.Context) {
+func (m *MongoStore) ensureIndexes(ctx context.Context) error {
 	ictx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_, _ = m.wfCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
+	if _, err := m.wfCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "org_id", Value: 1}}},
-	})
-	_, _ = m.instCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
+	}); err != nil {
+		return err
+	}
+	if _, err := m.instCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "workflow_id", Value: 1}}},
 		{Keys: bson.D{{Key: "org_id", Value: 1}}},
-	})
-	_, _ = m.taskCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
+	}); err != nil {
+		return err
+	}
+	if _, err := m.taskCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "assigned_role", Value: 1}, {Key: "status", Value: 1}}},
 		{Keys: bson.D{{Key: "instance_id", Value: 1}}},
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // -- Workflows --
