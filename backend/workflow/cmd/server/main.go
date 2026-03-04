@@ -61,7 +61,7 @@ func main() {
 		AllowHeaders:     []string{"Accept", "Authorization", "Content-Type"},
 		ExposeHeaders:    []string{"Link"},
 		AllowCredentials: false,
-		MaxAge:           300,
+		MaxAge:           300 * time.Second,
 	}))
 
 	// Public
