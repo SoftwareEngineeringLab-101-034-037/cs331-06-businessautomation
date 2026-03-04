@@ -1,4 +1,4 @@
-﻿package executor
+package executor
 
 import (
 	"fmt"
@@ -42,6 +42,7 @@ func (e *Executor) StartInstance(wf models.Workflow, data map[string]interface{}
 	now := time.Now()
 	inst := models.Instance{
 		WorkflowID: wf.ID,
+		OrgID:      wf.OrgID,
 		Status:     models.InstanceRunning,
 		Data:       data,
 		NodeStates: make(map[string]models.NodeState),
@@ -111,7 +112,13 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 		return // terminal
 
 	case models.NodeTask:
-		action := e.executeTask(instanceID, wf, node, data)
+		action, err := e.executeTask(instanceID, wf, node, data)
+		if err != nil {
+			log.Printf("executor: task node %s failed: %v", nodeID, err)
+			e.setNodeState(instanceID, nodeID, "failed")
+			e.markFailed(instanceID, fmt.Sprintf("task node %s: %v", nodeID, err))
+			return
+		}
 		e.setNodeState(instanceID, nodeID, "completed")
 		e.walkNext(instanceID, node, action, wf, data)
 
@@ -180,9 +187,10 @@ func (e *Executor) walkNext(instanceID string, node *models.WorkflowNode, result
 // Returns the chosen action string (used for action-based branching).
 // In production this would pause and wait for the assignee to complete
 // the task via the API; for now it simulates by picking the first allowed action.
-func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *models.WorkflowNode, data map[string]interface{}) string {
+func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *models.WorkflowNode, data map[string]interface{}) (string, error) {
 	task := models.TaskAssignment{
 		InstanceID:       instanceID,
+		OrgID:            wf.OrgID,
 		WorkflowID:       wf.ID,
 		NodeID:           node.ID,
 		Title:            node.Title,
@@ -197,7 +205,11 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 		Data:             data,
 		CreatedAt:        time.Now(),
 	}
-	taskID, _ := e.store.SaveTask(task)
+	taskID, err := e.store.SaveTask(task)
+	if err != nil {
+		log.Printf("executor: failed to save task for node %s: %v", node.ID, err)
+		return "", fmt.Errorf("save task: %w", err)
+	}
 	e.audit(instanceID, node.ID, "task_assigned", map[string]interface{}{
 		"task_id":           taskID,
 		"assigned_role":     node.AssignedRole,
@@ -221,7 +233,7 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 		chosenAction = node.TaskActions[0]
 	}
 	log.Printf("executor: task %s simulated action=%q", taskID, chosenAction)
-	return chosenAction
+	return chosenAction, nil
 }
 
 // executeAction calls the configured connector.
@@ -437,5 +449,3 @@ func toFloat(s string) float64 {
 	}
 	return f
 }
-
-

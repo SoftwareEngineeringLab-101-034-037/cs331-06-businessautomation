@@ -1,18 +1,101 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
-	_ "github.com/joho/godotenv/autoload"
-	"github.com/example/business-automation/backend/workflow/internal/api"
+	keyfunc "github.com/MicahParks/keyfunc/v2"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+
+	"github.com/example/business-automation/backend/workflow/internal/config"
+	"github.com/example/business-automation/backend/workflow/internal/connectors"
+	"github.com/example/business-automation/backend/workflow/internal/executor"
+	"github.com/example/business-automation/backend/workflow/internal/handler"
+	"github.com/example/business-automation/backend/workflow/internal/middleware"
+	"github.com/example/business-automation/backend/workflow/internal/storage"
 )
 
 func main() {
-	srv := api.NewServer()
-	addr := ":8085"
-	log.Printf("workflow server listening on %s", addr)
-	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
-		log.Fatalf("server error: %v", err)
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Connect to MongoDB (required)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := storage.NewMongoStore(ctx, cfg.MongoURI)
+	if err != nil {
+		log.Fatalf("Failed to connect to MongoDB: %v", err)
+	}
+	log.Printf("Connected to MongoDB succesfully")
+
+	email := connectors.NewMockEmail()
+	exec := executor.NewExecutor(store, email)
+
+	workflowHandler := handler.NewWorkflowHandler(store)
+	instanceHandler := handler.NewInstanceHandler(store, exec)
+	taskHandler := handler.NewTaskHandler(store)
+
+	// ── Clerk JWT auth ────────────────────────────────────────────────────────
+	jwksURL := strings.TrimRight(cfg.ClerkIssuerURL, "/") + "/.well-known/jwks.json"
+	jwks, err := keyfunc.Get(jwksURL, keyfunc.Options{RefreshInterval: time.Hour})
+	if err != nil {
+		log.Fatalf("Failed to fetch JWKS from %s: %v", jwksURL, err)
+	}
+	defer jwks.EndBackground()
+	authMW := middleware.ClerkAuthMiddleware(jwks.Keyfunc, cfg.ClerkIssuerURL)
+	log.Printf("Clerk JWT auth enabled (issuer: %s)", cfg.ClerkIssuerURL)
+
+	// ── Gin router ────────────────────────────────────────────────────────────
+	gin.SetMode(gin.DebugMode)
+	r := gin.Default()
+
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Accept", "Authorization", "Content-Type"},
+		ExposeHeaders:    []string{"Link"},
+		AllowCredentials: false,
+		MaxAge:           300 * time.Second,
+	}))
+
+	// Public
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	// Protected
+	api := r.Group("/api")
+	api.Use(authMW)
+	{
+		orgApi := api.Group("/orgs/:orgId")
+		orgApi.Use(middleware.RequireOrgMatch())
+		{
+			// Workflow CRUD
+			orgApi.GET("/workflows", workflowHandler.List)
+			orgApi.POST("/workflows", workflowHandler.Create)
+			orgApi.GET("/workflows/:id", workflowHandler.Get)
+			orgApi.PUT("/workflows/:id", workflowHandler.Update)
+			orgApi.DELETE("/workflows/:id", workflowHandler.Delete)
+
+			// Instance management
+			orgApi.POST("/instances", instanceHandler.Start)
+			orgApi.GET("/instances/:id", instanceHandler.Get)
+
+			// Task management
+			orgApi.GET("/tasks", taskHandler.List)
+			orgApi.PUT("/tasks/:id/:action", taskHandler.Action)
+		}
+	}
+
+	addr := ":" + cfg.Port
+	log.Printf("Workflow service running on http://localhost%s", addr)
+	if err := r.Run(addr); err != nil {
+		log.Fatalf("Server failed to run: %v", err)
 	}
 }

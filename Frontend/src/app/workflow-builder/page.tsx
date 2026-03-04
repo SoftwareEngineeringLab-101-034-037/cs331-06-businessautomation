@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useAuth, useOrganization } from "@clerk/nextjs";
 import {
   applyEdgeChanges,
   type OnNodesChange,
@@ -67,6 +68,21 @@ export default function WorkflowBuilderPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { theme, toggle: toggleTheme } = useTheme();
+  const { getToken } = useAuth();
+  const { organization } = useOrganization();
+
+  const orgApiBase = `${WF_API}/api/orgs/${organization?.id}`;
+
+  const authFetch = useCallback(async (input: string, init: RequestInit = {}): Promise<Response> => {
+    const token = await getToken();
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  }, [getToken]);
 
   /* ── State ── */
   const [draft, setDraft] = useState<WorkflowDraft>(INITIAL_DRAFT);
@@ -102,7 +118,7 @@ export default function WorkflowBuilderPage() {
 
     (async () => {
       try {
-        const res = await fetch(`${WF_API}/workflows/${wfId}`);
+        const res = await authFetch(`${orgApiBase}/workflows/${wfId}`);
         if (cancelled) return;
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const wf = await res.json();
@@ -150,7 +166,7 @@ export default function WorkflowBuilderPage() {
     })();
 
     return () => { cancelled = true; };
-  }, [searchParams, showToast]);
+  }, [searchParams, showToast, authFetch, orgApiBase]);
 
   /* Dialog form local state */
   const [dlgName, setDlgName] = useState("");
@@ -526,6 +542,7 @@ export default function WorkflowBuilderPage() {
 
   const handlePublish = useCallback(async () => {
     if (!canPublish) return;
+    if (!organization?.id) { showToast("No active organisation — please select one first.", "error"); return; }
     // Guard: update requires actual changes and a commit message
     if (editingId && !hasChanges) { showToast("No changes detected.", "warning"); return; }
     if (editingId && !editingIsDraft && !commitMessage.trim()) { showToast("A commit message is required.", "warning"); return; }
@@ -671,8 +688,8 @@ export default function WorkflowBuilderPage() {
     try {
       // If editing an existing workflow, PUT to update; otherwise POST to create
       const url = editingId
-        ? `${WF_API}/workflows/${editingId}`
-        : `${WF_API}/workflows`;
+        ? `${orgApiBase}/workflows/${editingId}`
+        : `${orgApiBase}/workflows`;
       const method = editingId ? "PUT" : "POST";
 
       // Wrap with commit_message for updates (audit trail, not persisted in DB)
@@ -680,7 +697,7 @@ export default function WorkflowBuilderPage() {
         ? { ...payload, commit_message: commitMessage.trim() || "No message" }
         : payload;
 
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
@@ -702,6 +719,7 @@ export default function WorkflowBuilderPage() {
 
   const handleSaveDraft = useCallback(async () => {
     if (!draft.name.trim()) { showToast("Please enter a workflow name before saving.", "warning"); return; }
+    if (!organization?.id) { showToast("No active organisation — please select one first.", "error"); return; }
     // Build backend nodes (same logic as publish but skip validation)
     const edgesBySource: Record<string, typeof draft.edges> = {};
     for (const e of draft.edges) { (edgesBySource[e.source] ??= []).push(e); }
@@ -751,10 +769,10 @@ export default function WorkflowBuilderPage() {
       raw_json: JSON.stringify({ steps: draft.steps, edges: draft.edges }),
     };
     try {
-      const url = editingId ? `${WF_API}/workflows/${editingId}` : `${WF_API}/workflows`;
+      const url = editingId ? `${orgApiBase}/workflows/${editingId}` : `${orgApiBase}/workflows`;
       const method = editingId ? "PUT" : "POST";
       const requestBody = editingId ? { ...payload, commit_message: "Saved as draft" } : payload;
-      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody) });
+      const res = await authFetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody) });
       if (!res.ok) { const t = await res.text(); throw new Error(`${res.status}: ${t}`); }
       const hasBody = res.status !== 204 && res.headers.get("content-length") !== "0" && res.headers.get("content-type")?.includes("json");
       const resBody = hasBody ? await res.json() : null;

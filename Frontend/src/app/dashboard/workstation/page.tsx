@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useAuth, useOrganization } from "@clerk/nextjs";
 import { MOCK_DEPARTMENTS } from "@/lib/mock-data";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 import { useToast, ToastContainer } from "@/components/Toast";
@@ -47,6 +48,21 @@ export default function WorkstationPage() {
   const searchParams = useSearchParams();
   const { toasts, showToast, dismissToast } = useToast();
   const toastShownRef = useRef(false);
+  const { getToken } = useAuth();
+  const { organization } = useOrganization();
+
+  const orgApiBase = `${WF_API}/api/orgs/${organization?.id}`;
+
+  const authFetch = useCallback(async (input: string, init: RequestInit = {}): Promise<Response> => {
+    const token = await getToken();
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  }, [getToken]);
 
   /* Show toast passed via URL query (from workflow-builder redirects) */
   useEffect(() => {
@@ -73,20 +89,21 @@ export default function WorkstationPage() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchWorkflows = useCallback(async () => {
+    if (!organization?.id) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${WF_API}/workflows`);
+      const res = await authFetch(`${orgApiBase}/workflows`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: BackendWorkflow[] = await res.json();
-      setWorkflows(data);
+      setWorkflows(data ?? []);
     } catch (err: any) {
       console.error("Failed to load workflows:", err);
       setError(err.message || "Could not reach workflow service");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [organization?.id, orgApiBase, authFetch]);
 
   useEffect(() => { fetchWorkflows(); }, [fetchWorkflows]);
 
@@ -143,7 +160,7 @@ export default function WorkstationPage() {
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget || deleteInput.toLowerCase() !== "delete permanently") return;
     try {
-      const res = await fetch(`${WF_API}/workflows/${deleteTarget.id}`, { method: "DELETE" });
+      const res = await authFetch(`${orgApiBase}/workflows/${deleteTarget.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setWorkflows((prev) => prev.filter((w) => w.id !== deleteTarget.id));
       showToast(`"${deleteTarget.name}" deleted successfully.`, "success");
@@ -152,7 +169,7 @@ export default function WorkstationPage() {
     }
     setDeleteTarget(null);
     setDeleteInput("");
-  }, [deleteTarget, deleteInput, showToast]);
+  }, [deleteTarget, deleteInput, orgApiBase, authFetch, showToast]);
 
   /* Inactive confirmation dialog */
   const [inactiveTarget, setInactiveTarget] = useState<{ id: string; name: string } | null>(null);
@@ -177,7 +194,7 @@ export default function WorkstationPage() {
         trigger: existing.trigger, nodes: existing.nodes,
         tags: existing.tags, raw_json: existing.raw_json, status: "inactive" as const,
       };
-      const res = await fetch(`${WF_API}/workflows/${inactiveTarget.id}`, {
+      const res = await authFetch(`${orgApiBase}/workflows/${inactiveTarget.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(minimal),
@@ -190,7 +207,7 @@ export default function WorkstationPage() {
     }
     setInactiveTarget(null);
     setInactiveInput("");
-  }, [inactiveTarget, inactiveInput, workflows, showToast]);
+  }, [inactiveTarget, inactiveInput, workflows, orgApiBase, authFetch, showToast]);
 
   const handleSetActive = useCallback(async (wf: BackendWorkflow) => {
     setOpenMenuId(null);
@@ -201,7 +218,7 @@ export default function WorkstationPage() {
         trigger: wf.trigger, nodes: wf.nodes,
         tags: wf.tags, raw_json: wf.raw_json, status: "active" as const,
       };
-      const res = await fetch(`${WF_API}/workflows/${wf.id}`, {
+      const res = await authFetch(`${orgApiBase}/workflows/${wf.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(minimal),
@@ -212,7 +229,7 @@ export default function WorkstationPage() {
     } catch (err: any) {
       showToast("Failed to set active: " + (err.message || err), "error");
     }
-  }, [showToast]);
+  }, [orgApiBase, authFetch, showToast]);
 
   /* Active confirmation dialog */
   const [activeTarget, setActiveTarget] = useState<BackendWorkflow | null>(null);

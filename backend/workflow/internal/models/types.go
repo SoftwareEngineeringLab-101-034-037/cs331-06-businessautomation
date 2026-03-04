@@ -88,6 +88,7 @@ const (
 
 type Workflow struct {
 	ID          string         `json:"id" bson:"id"`
+	OrgID       string         `json:"org_id" bson:"org_id"`
 	Version     int            `json:"version" bson:"version"`
 	Name        string         `json:"name" bson:"name"`
 	Description string         `json:"description,omitempty" bson:"description,omitempty"`
@@ -194,7 +195,8 @@ const (
 
 type Instance struct {
 	ID          string                 `json:"id" bson:"id"`
-	WorkflowID  string                `json:"workflow_id" bson:"workflow_id"`
+	OrgID       string                 `json:"org_id" bson:"org_id"`
+	WorkflowID  string                 `json:"workflow_id" bson:"workflow_id"`
 	Status      InstanceStatus         `json:"status" bson:"status"`
 	CurrentNode string                 `json:"current_node,omitempty" bson:"current_node,omitempty"`
 	Data        map[string]interface{} `json:"data,omitempty" bson:"data,omitempty"`
@@ -228,6 +230,7 @@ const (
 
 type TaskAssignment struct {
 	ID               string                 `json:"id" bson:"id"`
+	OrgID            string                 `json:"org_id" bson:"org_id"`
 	InstanceID       string                 `json:"instance_id" bson:"instance_id"`
 	WorkflowID       string                 `json:"workflow_id" bson:"workflow_id"`
 	NodeID           string                 `json:"node_id" bson:"node_id"`
