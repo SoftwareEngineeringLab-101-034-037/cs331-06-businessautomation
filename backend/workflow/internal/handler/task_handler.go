@@ -30,7 +30,16 @@ func (h *TaskHandler) List(c *gin.Context) {
 
 	switch {
 	case instanceID != "":
-		tasks, err = h.Store.ListTasksByInstance(instanceID)
+		all, e := h.Store.ListTasksByInstance(instanceID)
+		if e != nil {
+			err = e
+			break
+		}
+		for _, t := range all {
+			if t.OrgID == orgId {
+				tasks = append(tasks, t)
+			}
+		}
 	case role != "":
 		tasks, err = h.Store.ListTasksByRole(orgId, role)
 	default:
@@ -50,11 +59,16 @@ func (h *TaskHandler) List(c *gin.Context) {
 
 // PUT /api/orgs/:orgId/tasks/:id/:action  (action = approve | reject | clarify | complete)
 func (h *TaskHandler) Action(c *gin.Context) {
+	orgId := c.Param("orgId")
 	taskID := c.Param("id")
 	action := c.Param("action")
 
 	task, ok := h.Store.GetTask(taskID)
 	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+		return
+	}
+	if task.OrgID != orgId {
 		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
 		return
 	}
