@@ -41,21 +41,15 @@ func main() {
 	instanceHandler := handler.NewInstanceHandler(store, exec)
 	taskHandler := handler.NewTaskHandler(store)
 
-	// ── Clerk JWT auth (optional — disabled if CLERK_ISSUER_URL is not set) ───
-	var authMW gin.HandlerFunc
-	if cfg.ClerkIssuerURL != "" {
-		jwksURL := strings.TrimRight(cfg.ClerkIssuerURL, "/") + "/.well-known/jwks.json"
-		jwks, jwksErr := keyfunc.Get(jwksURL, keyfunc.Options{RefreshInterval: time.Hour})
-		if jwksErr != nil {
-			log.Fatalf("Failed to fetch JWKS from %s: %v", jwksURL, jwksErr)
-		}
-		defer jwks.EndBackground()
-		authMW = middleware.ClerkAuthMiddleware(jwks.Keyfunc, cfg.ClerkIssuerURL)
-		log.Printf("Clerk JWT auth enabled (issuer: %s)", cfg.ClerkIssuerURL)
-	} else {
-		log.Println("[WARN] CLERK_ISSUER_URL not set — JWT auth is disabled")
-		authMW = func(c *gin.Context) { c.Next() }
+	// ── Clerk JWT auth ────────────────────────────────────────────────────────
+	jwksURL := strings.TrimRight(cfg.ClerkIssuerURL, "/") + "/.well-known/jwks.json"
+	jwks, err := keyfunc.Get(jwksURL, keyfunc.Options{RefreshInterval: time.Hour})
+	if err != nil {
+		log.Fatalf("Failed to fetch JWKS from %s: %v", jwksURL, err)
 	}
+	defer jwks.EndBackground()
+	authMW := middleware.ClerkAuthMiddleware(jwks.Keyfunc, cfg.ClerkIssuerURL)
+	log.Printf("Clerk JWT auth enabled (issuer: %s)", cfg.ClerkIssuerURL)
 
 	// ── Gin router ────────────────────────────────────────────────────────────
 	gin.SetMode(gin.DebugMode)
@@ -70,8 +64,6 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	// ── Routes ────────────────────────────────────────────────────────────────
-
 	// Public
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -81,23 +73,25 @@ func main() {
 	api := r.Group("/api")
 	api.Use(authMW)
 	{
-		// Workflow CRUD
-		api.GET("/workflows", workflowHandler.List)
-		api.POST("/workflows", workflowHandler.Create)
-		api.GET("/workflows/:id", workflowHandler.Get)
-		api.PUT("/workflows/:id", workflowHandler.Update)
-		api.DELETE("/workflows/:id", workflowHandler.Delete)
+		orgApi := api.Group("/orgs/:orgId")
+		{
+			// Workflow CRUD
+			orgApi.GET("/workflows", workflowHandler.List)
+			orgApi.POST("/workflows", workflowHandler.Create)
+			orgApi.GET("/workflows/:id", workflowHandler.Get)
+			orgApi.PUT("/workflows/:id", workflowHandler.Update)
+			orgApi.DELETE("/workflows/:id", workflowHandler.Delete)
 
-		// Instance management
-		api.POST("/instances", instanceHandler.Start)
-		api.GET("/instances/:id", instanceHandler.Get)
+			// Instance management
+			orgApi.POST("/instances", instanceHandler.Start)
+			orgApi.GET("/instances/:id", instanceHandler.Get)
 
-		// Task management
-		api.GET("/tasks", taskHandler.List)
-		api.PUT("/tasks/:id/:action", taskHandler.Action)
+			// Task management
+			orgApi.GET("/tasks", taskHandler.List)
+			orgApi.PUT("/tasks/:id/:action", taskHandler.Action)
+		}
 	}
 
-	// ── Start server ──────────────────────────────────────────────────────────
 	addr := ":" + cfg.Port
 	log.Printf("Workflow service running on http://localhost%s", addr)
 	if err := r.Run(addr); err != nil {

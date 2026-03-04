@@ -21,9 +21,10 @@ func NewWorkflowHandler(store storage.Store) *WorkflowHandler {
 	return &WorkflowHandler{Store: store}
 }
 
-// GET /api/workflows
+// GET /api/orgs/:orgId/workflows
 func (h *WorkflowHandler) List(c *gin.Context) {
-	wfs, err := h.Store.ListWorkflows()
+	orgId := c.Param("orgId")
+	wfs, err := h.Store.ListWorkflows(orgId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -31,8 +32,9 @@ func (h *WorkflowHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, wfs)
 }
 
-// POST /api/workflows
+// POST /api/orgs/:orgId/workflows
 func (h *WorkflowHandler) Create(c *gin.Context) {
+	orgId := c.Param("orgId")
 	var wf models.Workflow
 	if err := c.ShouldBindJSON(&wf); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON: " + err.Error()})
@@ -47,6 +49,7 @@ func (h *WorkflowHandler) Create(c *gin.Context) {
 	if wf.Status == "" {
 		wf.Status = models.WorkflowActive
 	}
+	wf.OrgID = orgId
 	wf.CreatedAt = now
 	wf.UpdatedAt = now
 	if wf.Version == 0 && wf.Status != "draft" {
@@ -67,7 +70,7 @@ func (h *WorkflowHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"id": id, "workflow": wf})
 }
 
-// GET /api/workflows/:id
+// GET /api/orgs/:orgId/workflows/:id
 func (h *WorkflowHandler) Get(c *gin.Context) {
 	id := c.Param("id")
 	wf, ok := h.Store.GetWorkflow(id)
@@ -78,7 +81,7 @@ func (h *WorkflowHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, wf)
 }
 
-// PUT /api/workflows/:id
+// PUT /api/orgs/:orgId/workflows/:id
 func (h *WorkflowHandler) Update(c *gin.Context) {
 	id := c.Param("id")
 
@@ -94,6 +97,9 @@ func (h *WorkflowHandler) Update(c *gin.Context) {
 	wf := req.Workflow
 	wf.ID = id
 	wf.UpdatedAt = time.Now()
+
+	orgId := c.Param("orgId")
+	wf.OrgID = orgId
 
 	if existing, ok := h.Store.GetWorkflow(id); ok {
 		wf.CreatedAt = existing.CreatedAt
@@ -124,7 +130,7 @@ func (h *WorkflowHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, wf)
 }
 
-// DELETE /api/workflows/:id
+// DELETE /api/orgs/:orgId/workflows/:id
 func (h *WorkflowHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.Store.DeleteWorkflow(id); err != nil {

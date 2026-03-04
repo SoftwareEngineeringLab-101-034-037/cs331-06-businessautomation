@@ -20,7 +20,7 @@ func NewInstanceHandler(store storage.Store, exec *executor.Executor) *InstanceH
 	return &InstanceHandler{Store: store, Exec: exec}
 }
 
-// POST /api/instances
+// POST /api/orgs/:orgId/instances
 func (h *InstanceHandler) Start(c *gin.Context) {
 	var req struct {
 		WorkflowID string                 `json:"workflow_id"`
@@ -49,7 +49,7 @@ func (h *InstanceHandler) Start(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"instance_id": instID})
 }
 
-// GET /api/instances/:id
+// GET /api/orgs/:orgId/instances/:id
 func (h *InstanceHandler) Get(c *gin.Context) {
 	id := c.Param("id")
 	inst, ok := h.Store.GetInstance(id)

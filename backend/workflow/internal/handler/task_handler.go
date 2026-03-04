@@ -19,8 +19,9 @@ func NewTaskHandler(store storage.Store) *TaskHandler {
 	return &TaskHandler{Store: store}
 }
 
-// GET /api/tasks?role=...  or  GET /api/tasks?instance_id=...
+// GET /api/orgs/:orgId/tasks?role=...  or  GET /api/orgs/:orgId/tasks?instance_id=...
 func (h *TaskHandler) List(c *gin.Context) {
+	orgId := c.Param("orgId")
 	role := c.Query("role")
 	instanceID := c.Query("instance_id")
 
@@ -31,7 +32,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 	case instanceID != "":
 		tasks, err = h.Store.ListTasksByInstance(instanceID)
 	case role != "":
-		tasks, err = h.Store.ListTasksByRole(role)
+		tasks, err = h.Store.ListTasksByRole(orgId, role)
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "provide ?role= or ?instance_id="})
 		return
@@ -47,7 +48,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, tasks)
 }
 
-// PUT /api/tasks/:id/:action  (action = approve | reject | clarify | complete)
+// PUT /api/orgs/:orgId/tasks/:id/:action  (action = approve | reject | clarify | complete)
 func (h *TaskHandler) Action(c *gin.Context) {
 	taskID := c.Param("id")
 	action := c.Param("action")

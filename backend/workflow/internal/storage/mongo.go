@@ -50,17 +50,18 @@ func NewMongoStore(ctx context.Context, uri string) (*MongoStore, error) {
 func (m *MongoStore) ensureIndexes(ctx context.Context) {
 	ictx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_, _ = m.wfCol.Indexes().CreateOne(ictx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "id", Value: 1}},
-		Options: options.Index().SetUnique(true),
+	_, _ = m.wfCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
+		{Keys: bson.D{{Key: "org_id", Value: 1}}},
 	})
 	_, _ = m.instCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "workflow_id", Value: 1}}},
+		{Keys: bson.D{{Key: "org_id", Value: 1}}},
 	})
 	_, _ = m.taskCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
-		{Keys: bson.D{{Key: "assigned_role", Value: 1}, {Key: "status", Value: 1}}},
+		{Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "assigned_role", Value: 1}, {Key: "status", Value: 1}}},
 		{Keys: bson.D{{Key: "instance_id", Value: 1}}},
 	})
 }
@@ -88,10 +89,10 @@ func (m *MongoStore) GetWorkflow(id string) (models.Workflow, bool) {
 	return w, true
 }
 
-func (m *MongoStore) ListWorkflows() ([]models.Workflow, error) {
+func (m *MongoStore) ListWorkflows(orgID string) ([]models.Workflow, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cursor, err := m.wfCol.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "updated_at", Value: -1}}))
+	cursor, err := m.wfCol.Find(ctx, bson.M{"org_id": orgID}, options.Find().SetSort(bson.D{{Key: "updated_at", Value: -1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -178,10 +179,11 @@ func (m *MongoStore) GetTask(id string) (models.TaskAssignment, bool) {
 	return t, true
 }
 
-func (m *MongoStore) ListTasksByRole(role string) ([]models.TaskAssignment, error) {
+func (m *MongoStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cursor, err := m.taskCol.Find(ctx, bson.M{
+		"org_id":        orgID,
 		"assigned_role": role,
 		"status":        string(models.TaskPending),
 	})

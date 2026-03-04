@@ -42,6 +42,7 @@ func (e *Executor) StartInstance(wf models.Workflow, data map[string]interface{}
 	now := time.Now()
 	inst := models.Instance{
 		WorkflowID: wf.ID,
+		OrgID:      wf.OrgID,
 		Status:     models.InstanceRunning,
 		Data:       data,
 		NodeStates: make(map[string]models.NodeState),
@@ -183,6 +184,7 @@ func (e *Executor) walkNext(instanceID string, node *models.WorkflowNode, result
 func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *models.WorkflowNode, data map[string]interface{}) string {
 	task := models.TaskAssignment{
 		InstanceID:       instanceID,
+		OrgID:            wf.OrgID,
 		WorkflowID:       wf.ID,
 		NodeID:           node.ID,
 		Title:            node.Title,

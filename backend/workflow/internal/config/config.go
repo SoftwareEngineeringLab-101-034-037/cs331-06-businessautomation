@@ -40,6 +40,9 @@ func Load() (*Config, error) {
 	if cfg.MongoURI == "" {
 		missing = append(missing, "MONGO_URI")
 	}
+	if cfg.ClerkIssuerURL == "" {
+		missing = append(missing, "CLERK_ISSUER_URL")
+	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
 	}

@@ -7,7 +7,7 @@ type Store interface {
 	// Workflows
 	SaveWorkflow(models.Workflow) (string, error)
 	GetWorkflow(id string) (models.Workflow, bool)
-	ListWorkflows() ([]models.Workflow, error)
+	ListWorkflows(orgID string) ([]models.Workflow, error)
 	DeleteWorkflow(id string) error
 
 	// Instances
@@ -18,6 +18,6 @@ type Store interface {
 	// Task Assignments
 	SaveTask(models.TaskAssignment) (string, error)
 	GetTask(id string) (models.TaskAssignment, bool)
-	ListTasksByRole(role string) ([]models.TaskAssignment, error)
+	ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error)
 	ListTasksByInstance(instanceID string) ([]models.TaskAssignment, error)
 }
