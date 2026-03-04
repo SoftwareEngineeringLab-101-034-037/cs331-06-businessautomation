@@ -13,6 +13,6 @@ type MockEmail struct{}
 func NewMockEmail() *MockEmail { return &MockEmail{} }
 
 func (m *MockEmail) Send(to, subject, body string) error {
-	log.Printf("[mock-email] to=%s subject=%q body=%q", to, subject, body)
+	log.Printf("[mock-email] to=%s subject=%q body_len=%d", to, subject, len(body))
 	return nil
 }
