@@ -4,10 +4,14 @@ import { useState, useMemo } from "react";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 import { MOCK_TEAM } from "@/lib/mock-data";
 import { ROLE_LABELS } from "@/types/dashboard";
+import InviteDialog from "@/components/dashboard/InviteDialog";
+import CreateDepartmentDialog from "@/components/dashboard/CreateDepartmentDialog";
 
 export default function TeamPage() {
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState<string>("all");
+  const [showInvite, setShowInvite] = useState(false);
+  const [showDept, setShowDept] = useState(false);
 
   const departments = [...new Set(MOCK_TEAM.map((m) => m.department))];
 
@@ -61,12 +65,20 @@ export default function TeamPage() {
             <h2 className="page-title">Team Observatory</h2>
             <p className="page-subtitle">Team performance, department breakdown, and member management</p>
           </div>
-          <button className="action-btn action-btn-primary">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3 19.235v-.11a6.375 6.375 0 0 1 12.75 0v.109A12.318 12.318 0 0 1 9.374 21c-2.331 0-4.512-.645-6.374-1.766Z" />
-            </svg>
-            Invite Employee
-          </button>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button className="action-btn action-btn-outline" onClick={() => setShowDept(true)}>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21m-3.75 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Z" />
+              </svg>
+              New Department
+            </button>
+            <button className="action-btn action-btn-primary" onClick={() => setShowInvite(true)}>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3 19.235v-.11a6.375 6.375 0 0 1 12.75 0v.109A12.318 12.318 0 0 1 9.374 21c-2.331 0-4.512-.645-6.374-1.766Z" />
+              </svg>
+              Invite Employee
+            </button>
+          </div>
         </div>
 
         {/* Observatory — KPI Row */}
@@ -230,6 +242,8 @@ export default function TeamPage() {
           </div>
         )}
       </div>
+      <InviteDialog isOpen={showInvite} onClose={() => setShowInvite(false)} />
+      <CreateDepartmentDialog isOpen={showDept} onClose={() => setShowDept(false)} />
     </RoleGate>
   );
 }
