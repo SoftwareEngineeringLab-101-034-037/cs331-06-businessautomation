@@ -45,6 +45,9 @@ func (h *WorkflowHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// Always generate a new server-side ID; ignore any client-supplied ID.
+	wf.ID = ""
+
 	now := time.Now()
 	if wf.Status == "" {
 		wf.Status = models.WorkflowActive
