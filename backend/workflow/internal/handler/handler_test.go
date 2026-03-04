@@ -258,6 +258,17 @@ func TestWorkflowHandlerListGetUpdateDelete(t *testing.T) {
 	}
 	store.workflows[existing.ID] = existing
 
+	// workflow owned by a different org — used for cross-org isolation checks below
+	crossOrg := models.Workflow{
+		ID:      "wf-x",
+		OrgID:   "org-2",
+		Name:    "Foreign",
+		Status:  models.WorkflowActive,
+		Version: 5,
+		Trigger: models.Trigger{Type: models.TriggerManual},
+	}
+	store.workflows[crossOrg.ID] = crossOrg
+
 	h := NewWorkflowHandler(store)
 	r := gin.New()
 	r.GET("/api/orgs/:orgId/workflows", h.List)
@@ -268,6 +279,15 @@ func TestWorkflowHandlerListGetUpdateDelete(t *testing.T) {
 	rec := testRequest(t, r, http.MethodGet, "/api/orgs/org-1/workflows", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 for list, got %d", rec.Code)
+	}
+	var listed []models.Workflow
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	for _, wf := range listed {
+		if wf.ID == crossOrg.ID {
+			t.Fatalf("org-2 workflow %q must not appear in org-1 list", crossOrg.ID)
+		}
 	}
 
 	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/workflows/wf-1", nil)
@@ -305,6 +325,32 @@ func TestWorkflowHandlerListGetUpdateDelete(t *testing.T) {
 	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/workflows/wf-1", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for deleted workflow, got %d", rec.Code)
+	}
+
+	// ── cross-org isolation ────────────────────────────────────────────────────
+	// Every operation under /api/orgs/org-1/... must be denied for data owned
+	// by org-2 and must never mutate that data.
+
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/workflows/wf-x", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-org Get: expected 404, got %d", rec.Code)
+	}
+
+	crossUpdateBody := []byte(`{"name":"Hijacked","status":"active","version":1,"trigger":{"type":"manual"}}`)
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/workflows/wf-x", crossUpdateBody)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-org Update: expected 404, got %d", rec.Code)
+	}
+	if after, ok := store.GetWorkflow("wf-x"); !ok || after.Name != crossOrg.Name || after.Version != crossOrg.Version {
+		t.Fatalf("cross-org Update must not mutate wf-x: %+v", after)
+	}
+
+	rec = testRequest(t, r, http.MethodDelete, "/api/orgs/org-1/workflows/wf-x", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-org Delete: expected 404, got %d", rec.Code)
+	}
+	if _, ok := store.GetWorkflow("wf-x"); !ok {
+		t.Fatalf("cross-org Delete must not remove wf-x")
 	}
 }
 
@@ -378,6 +424,35 @@ func TestWorkflowHandlerErrorsAndDraftVersion(t *testing.T) {
 	rec = testRequest(t, r, http.MethodDelete, "/api/orgs/org-1/workflows/not-found", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for missing delete, got %d", rec.Code)
+	}
+
+	// cross-org: Update and Delete under org-1 on an org-2 workflow must both fail
+	// and must leave the record untouched.
+	store.workflows["wf-cross"] = models.Workflow{
+		ID:      "wf-cross",
+		OrgID:   "org-2",
+		Name:    "CrossOrgWF",
+		Status:  models.WorkflowActive,
+		Version: 3,
+		Trigger: models.Trigger{Type: models.TriggerManual},
+	}
+
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/workflows/wf-cross",
+		[]byte(`{"name":"Hijacked","status":"active","trigger":{"type":"manual"}}`))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-org Update (errors test): expected 404, got %d", rec.Code)
+	}
+	crossWF, _ := store.GetWorkflow("wf-cross")
+	if crossWF.Name != "CrossOrgWF" || crossWF.Version != 3 {
+		t.Fatalf("cross-org Update must not mutate wf-cross: %+v", crossWF)
+	}
+
+	rec = testRequest(t, r, http.MethodDelete, "/api/orgs/org-1/workflows/wf-cross", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-org Delete (errors test): expected 404, got %d", rec.Code)
+	}
+	if _, ok := store.GetWorkflow("wf-cross"); !ok {
+		t.Fatalf("cross-org Delete must not remove wf-cross")
 	}
 }
 
@@ -467,6 +542,15 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 		Status:       models.TaskPending,
 		CreatedAt:    time.Now(),
 	}
+	// task owned by a different org — used for cross-org isolation checks below
+	store.tasks["task-x"] = models.TaskAssignment{
+		ID:           "task-x",
+		OrgID:        "org-2",
+		InstanceID:   "inst-cross",
+		AssignedRole: "manager",
+		Status:       models.TaskPending,
+		CreatedAt:    time.Now(),
+	}
 
 	h := NewTaskHandler(store)
 	r := gin.New()
@@ -510,6 +594,31 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/tasks/task-1/unknown", []byte(`{"comment":"x"}`))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for unknown action, got %d", rec.Code)
+	}
+
+	// ── cross-org isolation ────────────────────────────────────────────────────
+	// Action on a task owned by org-2 must return 404 and leave it unchanged.
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/tasks/task-x/approve", []byte(`{"comment":"hijack"}`))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-org task Action: expected 404, got %d", rec.Code)
+	}
+	if crossTask, ok := store.GetTask("task-x"); !ok || crossTask.Status != models.TaskPending {
+		t.Fatalf("cross-org task Action must not mutate task-x: %+v", crossTask)
+	}
+
+	// ListTasksByInstance for an org-2 instance queried under org-1 must return empty.
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks?instance_id=inst-cross", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cross-org instance list: expected 200, got %d", rec.Code)
+	}
+	var crossTasks []models.TaskAssignment
+	if err := json.Unmarshal(rec.Body.Bytes(), &crossTasks); err != nil {
+		t.Fatalf("decode cross-org instance list: %v", err)
+	}
+	for _, task := range crossTasks {
+		if task.ID == "task-x" {
+			t.Fatalf("org-2 task task-x must not appear in org-1 instance list")
+		}
 	}
 
 	tests := []struct {
