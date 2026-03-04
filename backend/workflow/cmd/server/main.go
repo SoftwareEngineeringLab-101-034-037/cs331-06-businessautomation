@@ -32,7 +32,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
-	log.Printf("Connected to MongoDB: %s", cfg.MongoURI)
+	log.Printf("Connected to MongoDB succesfully")
 
 	email := connectors.NewMockEmail()
 	exec := executor.NewExecutor(store, email)
