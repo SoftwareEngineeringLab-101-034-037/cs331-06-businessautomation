@@ -1,0 +1,549 @@
+package handler
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/example/business-automation/backend/workflow/internal/executor"
+	"github.com/example/business-automation/backend/workflow/internal/middleware"
+	"github.com/example/business-automation/backend/workflow/internal/models"
+)
+
+type handlerStore struct {
+	mu sync.RWMutex
+
+	workflows map[string]models.Workflow
+	instances map[string]models.Instance
+	tasks     map[string]models.TaskAssignment
+
+	nextWorkflowID int
+	nextInstanceID int
+	nextTaskID     int
+
+	saveWorkflowErr        error
+	listWorkflowsErr       error
+	deleteWorkflowErr      error
+	saveInstanceErr        error
+	listTasksByRoleErr     error
+	listTasksByInstanceErr error
+}
+
+func newHandlerStore() *handlerStore {
+	return &handlerStore{
+		workflows:      make(map[string]models.Workflow),
+		instances:      make(map[string]models.Instance),
+		tasks:          make(map[string]models.TaskAssignment),
+		nextWorkflowID: 1,
+		nextInstanceID: 1,
+		nextTaskID:     1,
+	}
+}
+
+func (s *handlerStore) SaveWorkflow(w models.Workflow) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.saveWorkflowErr != nil {
+		return "", s.saveWorkflowErr
+	}
+	if w.ID == "" {
+		w.ID = fmt.Sprintf("wf-%d", s.nextWorkflowID)
+		s.nextWorkflowID++
+	}
+	s.workflows[w.ID] = w
+	return w.ID, nil
+}
+
+func (s *handlerStore) GetWorkflow(id string) (models.Workflow, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	wf, ok := s.workflows[id]
+	return wf, ok
+}
+
+func (s *handlerStore) ListWorkflows(orgID string) ([]models.Workflow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.listWorkflowsErr != nil {
+		return nil, s.listWorkflowsErr
+	}
+	out := make([]models.Workflow, 0)
+	for _, wf := range s.workflows {
+		if wf.OrgID == orgID {
+			out = append(out, wf)
+		}
+	}
+	return out, nil
+}
+
+func (s *handlerStore) DeleteWorkflow(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deleteWorkflowErr != nil {
+		return s.deleteWorkflowErr
+	}
+	if _, ok := s.workflows[id]; !ok {
+		return errors.New("not found")
+	}
+	delete(s.workflows, id)
+	return nil
+}
+
+func (s *handlerStore) SaveInstance(inst models.Instance) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.saveInstanceErr != nil {
+		return "", s.saveInstanceErr
+	}
+	if inst.ID == "" {
+		inst.ID = fmt.Sprintf("inst-%d", s.nextInstanceID)
+		s.nextInstanceID++
+	}
+	s.instances[inst.ID] = inst
+	return inst.ID, nil
+}
+
+func (s *handlerStore) GetInstance(id string) (models.Instance, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	inst, ok := s.instances[id]
+	return inst, ok
+}
+
+func (s *handlerStore) ListInstancesByWorkflow(workflowID string) ([]models.Instance, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]models.Instance, 0)
+	for _, inst := range s.instances {
+		if inst.WorkflowID == workflowID {
+			out = append(out, inst)
+		}
+	}
+	return out, nil
+}
+
+func (s *handlerStore) SaveTask(task models.TaskAssignment) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if task.ID == "" {
+		task.ID = fmt.Sprintf("task-%d", s.nextTaskID)
+		s.nextTaskID++
+	}
+	s.tasks[task.ID] = task
+	return task.ID, nil
+}
+
+func (s *handlerStore) GetTask(id string) (models.TaskAssignment, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	task, ok := s.tasks[id]
+	return task, ok
+}
+
+func (s *handlerStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.listTasksByRoleErr != nil {
+		return nil, s.listTasksByRoleErr
+	}
+	out := make([]models.TaskAssignment, 0)
+	for _, task := range s.tasks {
+		if task.OrgID == orgID && task.AssignedRole == role {
+			out = append(out, task)
+		}
+	}
+	return out, nil
+}
+
+func (s *handlerStore) ListTasksByInstance(instanceID string) ([]models.TaskAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.listTasksByInstanceErr != nil {
+		return nil, s.listTasksByInstanceErr
+	}
+	out := make([]models.TaskAssignment, 0)
+	for _, task := range s.tasks {
+		if task.InstanceID == instanceID {
+			out = append(out, task)
+		}
+	}
+	return out, nil
+}
+
+type noopEmail struct{}
+
+func (n *noopEmail) Send(to, subject, body string) error { return nil }
+
+func testRequest(t *testing.T, r *gin.Engine, method, path string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestWorkflowHandlerCreate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newHandlerStore()
+	h := NewWorkflowHandler(store)
+
+	r := gin.New()
+	r.POST("/api/orgs/:orgId/workflows", func(c *gin.Context) {
+		c.Set(middleware.UserIDKey, "user-1")
+		h.Create(c)
+	})
+
+	rec := testRequest(t, r, http.MethodPost, "/api/orgs/org-1/workflows", []byte("{"))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid JSON, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, r, http.MethodPost, "/api/orgs/org-1/workflows", []byte(`{"trigger":{"type":"manual"}}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing name, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, r, http.MethodPost, "/api/orgs/org-1/workflows", []byte(`{"name":"WF","trigger":{"type":"manual"}}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		ID       string          `json:"id"`
+		Workflow models.Workflow `json:"workflow"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.ID == "" {
+		t.Fatalf("expected workflow id")
+	}
+	if resp.Workflow.OrgID != "org-1" || resp.Workflow.CreatedBy != "user-1" {
+		t.Fatalf("unexpected workflow metadata: %+v", resp.Workflow)
+	}
+	if resp.Workflow.Status != models.WorkflowActive {
+		t.Fatalf("expected default status active, got %s", resp.Workflow.Status)
+	}
+	if resp.Workflow.Version != 1 {
+		t.Fatalf("expected default version 1, got %d", resp.Workflow.Version)
+	}
+}
+
+func TestWorkflowHandlerListGetUpdateDelete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newHandlerStore()
+	existing := models.Workflow{
+		ID:        "wf-1",
+		OrgID:     "org-1",
+		Name:      "Old",
+		Status:    models.WorkflowActive,
+		Version:   2,
+		CreatedBy: "creator-1",
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now().Add(-time.Minute),
+		Trigger:   models.Trigger{Type: models.TriggerManual},
+	}
+	store.workflows[existing.ID] = existing
+
+	h := NewWorkflowHandler(store)
+	r := gin.New()
+	r.GET("/api/orgs/:orgId/workflows", h.List)
+	r.GET("/api/orgs/:orgId/workflows/:id", h.Get)
+	r.PUT("/api/orgs/:orgId/workflows/:id", h.Update)
+	r.DELETE("/api/orgs/:orgId/workflows/:id", h.Delete)
+
+	rec := testRequest(t, r, http.MethodGet, "/api/orgs/org-1/workflows", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for list, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/workflows/wf-1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for get, got %d", rec.Code)
+	}
+
+	updateBody := []byte(`{
+		"name":"Updated",
+		"status":"active",
+		"version":1,
+		"trigger":{"type":"manual"},
+		"commit_message":"update"
+	}`)
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/workflows/wf-1", updateBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for update, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	updated, ok := store.GetWorkflow("wf-1")
+	if !ok {
+		t.Fatalf("updated workflow not found")
+	}
+	if updated.Version != 3 {
+		t.Fatalf("expected version increment to 3, got %d", updated.Version)
+	}
+	if updated.CreatedBy != "creator-1" || !updated.CreatedAt.Equal(existing.CreatedAt) {
+		t.Fatalf("expected created metadata preserved, got %+v", updated)
+	}
+
+	rec = testRequest(t, r, http.MethodDelete, "/api/orgs/org-1/workflows/wf-1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for delete, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/workflows/wf-1", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for deleted workflow, got %d", rec.Code)
+	}
+}
+
+func TestWorkflowHandlerErrorsAndDraftVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newHandlerStore()
+	h := NewWorkflowHandler(store)
+	r := gin.New()
+	r.GET("/api/orgs/:orgId/workflows", h.List)
+	r.POST("/api/orgs/:orgId/workflows", h.Create)
+	r.PUT("/api/orgs/:orgId/workflows/:id", h.Update)
+	r.DELETE("/api/orgs/:orgId/workflows/:id", h.Delete)
+
+	store.listWorkflowsErr = errors.New("list failed")
+	rec := testRequest(t, r, http.MethodGet, "/api/orgs/org-1/workflows", nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for list error, got %d", rec.Code)
+	}
+	store.listWorkflowsErr = nil
+
+	store.saveWorkflowErr = errors.New("save failed")
+	rec = testRequest(t, r, http.MethodPost, "/api/orgs/org-1/workflows", []byte(`{"name":"WF","trigger":{"type":"manual"}}`))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for create save error, got %d", rec.Code)
+	}
+	store.saveWorkflowErr = nil
+
+	store.workflows["wf-new"] = models.Workflow{
+		ID:        "wf-new",
+		OrgID:     "org-1",
+		Name:      "Seed",
+		Status:    models.WorkflowActive,
+		Version:   1,
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now().Add(-time.Minute),
+		Trigger:   models.Trigger{Type: models.TriggerManual},
+	}
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/workflows/wf-new", []byte("{"))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid update json, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	store.workflows["wf-draft"] = models.Workflow{
+		ID:        "wf-draft",
+		OrgID:     "org-1",
+		Name:      "Seed Draft",
+		Status:    models.WorkflowActive,
+		Version:   2,
+		CreatedAt: time.Now().Add(-2 * time.Hour),
+		UpdatedAt: time.Now().Add(-time.Hour),
+		Trigger:   models.Trigger{Type: models.TriggerManual},
+	}
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/workflows/wf-draft", []byte(`{
+		"name":"Draft",
+		"status":"draft",
+		"version":100,
+		"trigger":{"type":"manual"}
+	}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for draft update, got %d", rec.Code)
+	}
+	draft, ok := store.GetWorkflow("wf-draft")
+	if !ok {
+		t.Fatalf("draft workflow not saved")
+	}
+	if draft.Version != 0 {
+		t.Fatalf("expected draft version 0, got %d", draft.Version)
+	}
+
+	rec = testRequest(t, r, http.MethodDelete, "/api/orgs/org-1/workflows/not-found", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing delete, got %d", rec.Code)
+	}
+}
+
+func TestInstanceHandlerStartAndGet(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newHandlerStore()
+	activeWF := models.Workflow{
+		ID:      "wf-active",
+		OrgID:   "org-1",
+		Name:    "Active",
+		Status:  models.WorkflowActive,
+		Trigger: models.Trigger{Type: models.TriggerManual},
+		Nodes: []models.WorkflowNode{
+			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "end"},
+			{ID: "end", Type: models.NodeEnd, Title: "End"},
+		},
+	}
+	inactiveWF := activeWF
+	inactiveWF.ID = "wf-inactive"
+	inactiveWF.Status = models.WorkflowDraft
+	store.workflows[activeWF.ID] = activeWF
+	store.workflows[inactiveWF.ID] = inactiveWF
+
+	exec := executor.NewExecutor(store, &noopEmail{})
+	h := NewInstanceHandler(store, exec)
+
+	r := gin.New()
+	r.POST("/api/orgs/:orgId/instances", h.Start)
+	r.GET("/api/orgs/:orgId/instances/:id", h.Get)
+
+	rec := testRequest(t, r, http.MethodPost, "/api/orgs/org-1/instances", []byte("{"))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid json, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, r, http.MethodPost, "/api/orgs/org-1/instances", []byte(`{"workflow_id":"missing"}`))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing workflow, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, r, http.MethodPost, "/api/orgs/org-1/instances", []byte(`{"workflow_id":"wf-inactive"}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for inactive workflow, got %d", rec.Code)
+	}
+
+	store.saveInstanceErr = errors.New("db down")
+	rec = testRequest(t, r, http.MethodPost, "/api/orgs/org-1/instances", []byte(`{"workflow_id":"wf-active","data":{"x":1}}`))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for start error, got %d", rec.Code)
+	}
+	store.saveInstanceErr = nil
+
+	rec = testRequest(t, r, http.MethodPost, "/api/orgs/org-1/instances", []byte(`{"workflow_id":"wf-active","data":{"x":1}}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for start success, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var startResp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &startResp); err != nil {
+		t.Fatalf("decode start response failed: %v", err)
+	}
+	instanceID := startResp["instance_id"]
+	if instanceID == "" {
+		t.Fatalf("expected instance_id in response")
+	}
+
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/instances/missing", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing instance, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/instances/"+instanceID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for get instance, got %d", rec.Code)
+	}
+}
+
+func TestTaskHandlerListAndAction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newHandlerStore()
+	store.tasks["task-1"] = models.TaskAssignment{
+		ID:           "task-1",
+		OrgID:        "org-1",
+		InstanceID:   "inst-1",
+		AssignedRole: "manager",
+		Status:       models.TaskPending,
+		CreatedAt:    time.Now(),
+	}
+
+	h := NewTaskHandler(store)
+	r := gin.New()
+	r.GET("/api/orgs/:orgId/tasks", h.List)
+	r.PUT("/api/orgs/:orgId/tasks/:id/:action", h.Action)
+
+	rec := testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing query, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks?role=manager", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for role list, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks?role=auditor", nil)
+	if rec.Code != http.StatusOK || rec.Body.String() != "[]" {
+		t.Fatalf("expected empty array for no tasks, got code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	store.listTasksByRoleErr = errors.New("list role failed")
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks?role=manager", nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for role list error, got %d", rec.Code)
+	}
+	store.listTasksByRoleErr = nil
+
+	store.listTasksByInstanceErr = errors.New("list instance failed")
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks?instance_id=inst-1", nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for instance list error, got %d", rec.Code)
+	}
+	store.listTasksByInstanceErr = nil
+
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/tasks/missing/approve", []byte(`{"comment":"ok"}`))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing task action, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/tasks/task-1/unknown", []byte(`{"comment":"x"}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown action, got %d", rec.Code)
+	}
+
+	tests := []struct {
+		action string
+		want   models.TaskStatus
+	}{
+		{action: "approve", want: models.TaskApproved},
+		{action: "reject", want: models.TaskRejected},
+		{action: "clarify", want: models.TaskClarify},
+		{action: "complete", want: models.TaskCompleted},
+	}
+	for i, tt := range tests {
+		taskID := fmt.Sprintf("task-action-%d", i)
+		store.tasks[taskID] = models.TaskAssignment{
+			ID:        taskID,
+			OrgID:     "org-1",
+			Status:    models.TaskPending,
+			CreatedAt: time.Now(),
+		}
+
+		rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/tasks/"+taskID+"/"+tt.action, []byte(`{"comment":"done"}`))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for action %s, got %d", tt.action, rec.Code)
+		}
+
+		updated, ok := store.GetTask(taskID)
+		if !ok {
+			t.Fatalf("task %s not found after action", taskID)
+		}
+		if updated.Status != tt.want {
+			t.Fatalf("unexpected status for action %s: got %s want %s", tt.action, updated.Status, tt.want)
+		}
+		if updated.Comment != "done" || updated.CompletedAt == nil {
+			t.Fatalf("expected comment/completion timestamp to be set: %+v", updated)
+		}
+	}
+}
