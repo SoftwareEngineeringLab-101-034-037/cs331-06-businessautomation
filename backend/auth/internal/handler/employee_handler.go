@@ -208,3 +208,26 @@ func (h *EmployeeHandler) GetDepartment(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, deptDetails)
 }
+
+// POST /api/orgs/:orgId/invitations/:invitationId/accept
+func (h *EmployeeHandler) AcceptInvitation(c *gin.Context) {
+	orgID := c.Param("orgId")
+	invitationID := c.Param("invitationId")
+	userID := c.GetString("user_id")
+
+	err := h.Service.AcceptInvitationByID(invitationID, orgID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		case err.Error() == "invitation email does not match user email":
+			c.JSON(http.StatusForbidden, gin.H{"error": "This invitation is not for your account"})
+		default:
+			log.Printf("AcceptInvitation error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Invitation accepted successfully"})
+}
