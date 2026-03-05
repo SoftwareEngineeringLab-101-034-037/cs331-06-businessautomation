@@ -121,23 +121,13 @@ func TestListEmployees(t *testing.T) {
 
 		now := time.Now()
 		if err := db.Exec(`
-			INSERT INTO users (id, email, first_name, last_name, is_active, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO users (id, email, first_name, last_name, organization_id, is_active, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?)
 		`,
-			"user_1", "one@example.com", "One", "User", true, now, now,
-			"user_2", "two@example.com", "Two", "User", true, now, now,
+			"user_1", "one@example.com", "One", "User", "org_1", true, now, now,
+			"user_2", "two@example.com", "Two", "User", "org_2", true, now, now,
 		).Error; err != nil {
 			t.Fatalf("failed seeding users: %v", err)
-		}
-
-		if err := db.Exec(`
-			INSERT INTO organization_memberships (id, user_id, organization_id, clerk_role, joined_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)
-		`,
-			"mem_1", "user_1", "org_1", "org:member", now, now, now,
-			"mem_2", "user_2", "org_2", "org:member", now, now, now,
-		).Error; err != nil {
-			t.Fatalf("failed seeding memberships: %v", err)
 		}
 
 		users, err := svc.ListEmployees("org_1")
@@ -703,9 +693,11 @@ func setupServiceTestDB(t *testing.T) *gorm.DB {
 			first_name TEXT,
 			last_name TEXT,
 			avatar_url TEXT,
+			organization_id TEXT,
 			department_id TEXT,
 			role_id TEXT,
 			job_title TEXT,
+			is_admin BOOLEAN DEFAULT 0,
 			preferences TEXT,
 			is_active BOOLEAN DEFAULT 1,
 			created_at DATETIME,
@@ -752,18 +744,6 @@ func setupServiceTestDB(t *testing.T) *gorm.DB {
 			expires_at DATETIME NOT NULL,
 			accepted_at DATETIME,
 			accepted_user_id TEXT,
-			created_at DATETIME,
-			updated_at DATETIME
-		)
-		`,
-		`
-		CREATE TABLE organization_memberships (
-			id TEXT PRIMARY KEY,
-			user_id TEXT NOT NULL,
-			organization_id TEXT NOT NULL,
-			clerk_role TEXT NOT NULL,
-			local_role_id TEXT,
-			joined_at DATETIME,
 			created_at DATETIME,
 			updated_at DATETIME
 		)

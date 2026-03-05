@@ -167,8 +167,9 @@ func (s *EmployeeService) AcceptInvitationByEmail(email, orgID, userID string) e
 
 		// Build user updates
 		userUpdates := map[string]interface{}{
-			"department_id": invitation.DepartmentID,
-			"updated_at":    now,
+			"organization_id": invitation.OrganizationID,
+			"department_id":   invitation.DepartmentID,
+			"updated_at":      now,
 		}
 		if invitation.JobTitle != "" {
 			userUpdates["job_title"] = invitation.JobTitle
@@ -221,4 +222,41 @@ func (s *EmployeeService) resolveDepartmentID(orgID, nameOrID string) (string, e
 	}
 
 	return "", fmt.Errorf("%w: department %q not found in organization %s", ErrNotFound, nameOrID, orgID)
+}
+
+// AcceptInvitationByID finds a pending invitation by its ID, verifies that the
+// accepting user's email matches, and then accepts it (marks as accepted, assigns
+// department/role to the user).
+func (s *EmployeeService) AcceptInvitationByID(invitationID, orgID, userID string) error {
+	// Look up the user to get their email
+	var user models.User
+	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		return fmt.Errorf("user not found: %w", err)
+	}
+
+	// Look up the invitation
+	var invitation models.EmployeeInvitation
+	err := s.db.Where(
+		"id = ? AND organization_id = ? AND status = ?",
+		invitationID, orgID, "pending",
+	).First(&invitation).Error
+	if err != nil {
+		return fmt.Errorf("%w: invitation not found or already processed", ErrNotFound)
+	}
+
+	// Verify the invitation is for this user
+	if invitation.Email != user.Email {
+		return fmt.Errorf("invitation email does not match user email")
+	}
+
+	// Check expiry
+	if invitation.IsExpired() {
+		if err := s.db.Model(&invitation).Update("status", "expired").Error; err != nil {
+			return fmt.Errorf("failed to mark invitation as expired: %w", err)
+		}
+		return fmt.Errorf("%w: invitation has expired", ErrNotFound)
+	}
+
+	// Delegate to existing acceptance logic
+	return s.AcceptInvitationByEmail(user.Email, orgID, userID)
 }

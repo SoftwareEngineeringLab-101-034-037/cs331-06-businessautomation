@@ -65,8 +65,7 @@ func (s *EmployeeService) ListDepartments(orgID string) ([]models.Department, er
 func (s *EmployeeService) ListEmployees(orgID string) ([]models.User, error) {
 	var users []models.User
 	err := s.db.
-		Joins("JOIN organization_memberships ON organization_memberships.user_id = users.id").
-		Where("organization_memberships.organization_id = ?", orgID).
+		Where("organization_id = ?", orgID).
 		Preload("Department").
 		Preload("Role").
 		Find(&users).Error
