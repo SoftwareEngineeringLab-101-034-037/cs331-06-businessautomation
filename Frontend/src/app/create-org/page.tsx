@@ -26,7 +26,7 @@ const countries = [
 export default function CreateOrgPage() {
   const { theme, toggle } = useTheme();
   const { isSignedIn, isLoaded, user } = useUser();
-  const { createOrganization } = useOrganizationList();
+  const { createOrganization, setActive } = useOrganizationList();
   const [step, setStep] = useState(0);
   const [orgName, setOrgName] = useState("");
   const [orgDomain, setOrgDomain] = useState("");
@@ -225,63 +225,63 @@ export default function CreateOrgPage() {
                   </div>
                 </div>
 
-            <div className="space-y-4 mb-6">
-              {/* Admin Card */}
-              <div className="bg-[var(--surface-alt)] border border-[var(--border)] rounded-[var(--radius-lg)] overflow-hidden">
-                <div className="flex items-center gap-2 px-5 py-3 border-b border-[var(--border)] bg-[var(--surface)]">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 text-[var(--primary)]"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" /></svg>
-                  <span className="font-semibold text-sm">Admin Account</span>
-                  <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-[var(--primary)]/10 text-[var(--primary)] font-medium">via Clerk</span>
-                </div>
-                <div className="divide-y divide-[var(--border)]">
-                  {[
-                    ["Admin", user?.primaryEmailAddress?.emailAddress || user?.firstName || "Authenticated"],
-                    ["Auth Provider", "Clerk (Email/SSO)"],
-                  ].map(([k, v]) => (
-                    <div key={k} className="flex justify-between px-5 py-2.5 text-sm">
-                      <span className="text-[var(--text-muted)]">{k}</span>
-                      <span className="font-medium">{v}</span>
+                <div className="space-y-4 mb-6">
+                  {/* Admin Card */}
+                  <div className="bg-[var(--surface-alt)] border border-[var(--border)] rounded-[var(--radius-lg)] overflow-hidden">
+                    <div className="flex items-center gap-2 px-5 py-3 border-b border-[var(--border)] bg-[var(--surface)]">
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 text-[var(--primary)]"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" /></svg>
+                      <span className="font-semibold text-sm">Admin Account</span>
+                      <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-[var(--primary)]/10 text-[var(--primary)] font-medium">via Clerk</span>
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Org Card */}
-              <div className="bg-[var(--surface-alt)] border border-[var(--border)] rounded-[var(--radius-lg)] overflow-hidden">
-                <div className="flex items-center gap-2 px-5 py-3 border-b border-[var(--border)] bg-[var(--surface)]">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 text-[var(--primary)]"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21" /></svg>
-                  <span className="font-semibold text-sm">Organisation</span>
-                </div>
-                <div className="divide-y divide-[var(--border)]">
-                  {[
-                    ["Organisation", orgName || "—"],
-                    ["Domain", orgDomain || "—"],
-                    ["Industry", industry || "—"],
-                    ["Size", orgSize || "—"],
-                    ["Country", country || "—"],
-                  ].map(([k, v]) => (
-                    <div key={k} className="flex justify-between px-5 py-2.5 text-sm">
-                      <span className="text-[var(--text-muted)]">{k}</span>
-                      <span className="font-medium">{v}</span>
+                    <div className="divide-y divide-[var(--border)]">
+                      {[
+                        ["Admin", user?.primaryEmailAddress?.emailAddress || user?.firstName || "Authenticated"],
+                        ["Auth Provider", "Clerk (Email/SSO)"],
+                      ].map(([k, v]) => (
+                        <div key={k} className="flex justify-between px-5 py-2.5 text-sm">
+                          <span className="text-[var(--text-muted)]">{k}</span>
+                          <span className="font-medium">{v}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </div>
+
+                  {/* Org Card */}
+                  <div className="bg-[var(--surface-alt)] border border-[var(--border)] rounded-[var(--radius-lg)] overflow-hidden">
+                    <div className="flex items-center gap-2 px-5 py-3 border-b border-[var(--border)] bg-[var(--surface)]">
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 text-[var(--primary)]"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21" /></svg>
+                      <span className="font-semibold text-sm">Organisation</span>
+                    </div>
+                    <div className="divide-y divide-[var(--border)]">
+                      {[
+                        ["Organisation", orgName || "—"],
+                        ["Domain", orgDomain || "—"],
+                        ["Industry", industry || "—"],
+                        ["Size", orgSize || "—"],
+                        ["Country", country || "—"],
+                      ].map(([k, v]) => (
+                        <div key={k} className="flex justify-between px-5 py-2.5 text-sm">
+                          <span className="text-[var(--text-muted)]">{k}</span>
+                          <span className="font-medium">{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            <label className="flex items-start gap-2.5 mb-6 cursor-pointer">
-              <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-1 w-4 h-4 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]/20" />
-              <span className="text-sm text-[var(--text-secondary)]">
-                I agree to the <a href="#" className="text-[var(--primary)] font-medium hover:underline">Terms of Service</a> and <a href="#" className="text-[var(--primary)] font-medium hover:underline">Privacy Policy</a>, and confirm I am authorised to create this organisation.
-              </span>
-            </label>
+                <label className="flex items-start gap-2.5 mb-6 cursor-pointer">
+                  <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-1 w-4 h-4 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]/20" />
+                  <span className="text-sm text-[var(--text-secondary)]">
+                    I agree to the <a href="#" className="text-[var(--primary)] font-medium hover:underline">Terms of Service</a> and <a href="#" className="text-[var(--primary)] font-medium hover:underline">Privacy Policy</a>, and confirm I am authorised to create this organisation.
+                  </span>
+                </label>
 
-            {error && (
-              <div className="flex items-center gap-2 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-[var(--radius)] p-3 mb-4 text-sm text-red-700 dark:text-red-300">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 shrink-0"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" /></svg>
-                {error}
-              </div>
-            )}
+                {error && (
+                  <div className="flex items-center gap-2 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-[var(--radius)] p-3 mb-4 text-sm text-red-700 dark:text-red-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-5 h-5 shrink-0"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" /></svg>
+                    {error}
+                  </div>
+                )}
               </>
             )}
 
@@ -311,9 +311,12 @@ export default function CreateOrgPage() {
                     setCreating(true);
                     setError("");
                     try {
-                      await createOrganization({
+                      const newOrg = await createOrganization({
                         name: orgName,
                       });
+                      if (setActive && newOrg) {
+                        await setActive({ organization: newOrg.id });
+                      }
                       setDone(true);
                     } catch (err: unknown) {
                       const msg = err instanceof Error ? err.message : "Failed to create organisation. Please try again.";

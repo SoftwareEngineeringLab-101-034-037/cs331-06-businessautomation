@@ -81,6 +81,10 @@ func main() {
 	api := r.Group("/api")
 	api.Use(middleware.ClerkAuthMiddleware(jwks.Keyfunc, cfg.ClerkIssuerURL))
 	{
+		// Routes accessible by any authenticated user
+		api.POST("/orgs/:orgId/invitations/:invitationId/accept", employeeHandler.AcceptInvitation)
+
+		// Routes restricted to org admins
 		orgApi := api.Group("/orgs/:orgId")
 		orgApi.Use(middleware.OrgAdminOnly())
 		{

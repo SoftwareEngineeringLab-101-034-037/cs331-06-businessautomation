@@ -70,6 +70,11 @@ type ClerkMembershipData struct {
 	} `json:"public_user_data"`
 }
 
+// IsAdmin checks if the Clerk membership role is an admin role.
+func (m *ClerkMembershipData) IsAdmin() bool {
+	return m.Role == "org:admin" || m.Role == "admin"
+}
+
 // Handle processes incoming Clerk webhooks
 func (h *WebhookHandler) Handle(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
@@ -144,6 +149,12 @@ func (h *WebhookHandler) Handle(c *gin.Context) {
 		if err := h.handleMembershipCreated(event.Data); err != nil {
 			log.Printf("Error handling membership created event: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error handling membership created event"})
+			return
+		}
+	case "organizationInvitation.accepted":
+		if err := h.handleInvitationAccepted(event.Data); err != nil {
+			log.Printf("Error handling invitation accepted event: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error handling invitation accepted event"})
 			return
 		}
 	default:
@@ -245,15 +256,13 @@ func (h *WebhookHandler) handleOrganizationCreated(data json.RawMessage) error {
 		return err
 	}
 
-	// Get the creator's user ID from the webhook - this will be the org admin
-	// Clerk sends created_by in the organization webhook
+	// Extract the creator's user ID from Clerk's webhook payload
 	var rawData map[string]interface{}
 	if err := json.Unmarshal(data, &rawData); err != nil {
 		log.Printf("Error parsing raw organization data: %v", err)
 		return err
 	}
-
-	orgAdminID := getString(rawData, "created_by")
+	creatorID := getString(rawData, "created_by")
 
 	org := models.Organization{
 		ID:        clerkOrg.ID,
@@ -263,18 +272,6 @@ func (h *WebhookHandler) handleOrganizationCreated(data json.RawMessage) error {
 		IsActive:  true,
 		CreatedAt: time.UnixMilli(clerkOrg.CreatedAt),
 		UpdatedAt: time.UnixMilli(clerkOrg.UpdatedAt),
-	}
-
-	// Only set org_admin_id if the user actually exists in our DB
-	// (the user.created webhook may arrive late or fail)
-	if orgAdminID != "" {
-		var userCount int64
-		database.DB.Model(&models.User{}).Where("id = ?", orgAdminID).Count(&userCount)
-		if userCount > 0 {
-			org.OrgAdminID = &orgAdminID
-		} else {
-			log.Printf("Admin user %s not yet in DB for org %s — will be linked via membership webhook", orgAdminID, clerkOrg.ID)
-		}
 	}
 
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
@@ -292,6 +289,20 @@ func (h *WebhookHandler) handleOrganizationCreated(data json.RawMessage) error {
 			return err
 		}
 
+		// Set the creator as an admin of the new org
+		if creatorID != "" {
+			result := tx.Model(&models.User{}).Where("id = ?", creatorID).Updates(map[string]interface{}{
+				"organization_id": clerkOrg.ID,
+				"is_admin":        true,
+				"updated_at":      time.Now(),
+			})
+			if result.Error != nil {
+				log.Printf("Warning: failed to set org creator %s as admin: %v", creatorID, result.Error)
+			} else if result.RowsAffected == 0 {
+				log.Printf("Warning: creator %s not yet in DB for org %s (will be set via membership webhook)", creatorID, clerkOrg.ID)
+			}
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -299,7 +310,7 @@ func (h *WebhookHandler) handleOrganizationCreated(data json.RawMessage) error {
 		return err
 	}
 
-	log.Printf("Organization created: %s (%s) with admin: %s", clerkOrg.ID, clerkOrg.Name, orgAdminID)
+	log.Printf("Organization created: %s (%s) by %s", clerkOrg.ID, clerkOrg.Name, creatorID)
 	return nil
 }
 
@@ -332,24 +343,26 @@ func (h *WebhookHandler) handleMembershipCreated(data json.RawMessage) error {
 	userID := memberData.PublicUserData.UserID
 	orgID := memberData.Organization.ID
 
-	// 1. Create OrganizationMembership record in our DB
-	membership := models.OrganizationMembership{
-		ID:             memberData.ID,
-		UserID:         userID,
-		OrganizationID: orgID,
-		ClerkRole:      memberData.Role,
-		JoinedAt:       time.UnixMilli(memberData.CreatedAt),
-		CreatedAt:      time.UnixMilli(memberData.CreatedAt),
-		UpdatedAt:      time.UnixMilli(memberData.UpdatedAt),
+	// 1. Update the user's organization and admin status
+	userUpdates := map[string]interface{}{
+		"organization_id": orgID,
+		"is_admin":        memberData.IsAdmin(),
+		"updated_at":      time.Now(),
 	}
-	if err := database.DB.Create(&membership).Error; err != nil {
-		log.Printf("Error creating membership record (may already exist): %v", err)
+	result := database.DB.Model(&models.User{}).Where("id = ?", userID).Updates(userUpdates)
+	if result.Error != nil {
+		log.Printf("Error updating user %s with org membership: %v", userID, result.Error)
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		log.Printf("User %s not found for membership linking (user.created webhook may not have arrived yet)", userID)
+		return nil
 	}
 
 	// 2. Look up user's email to match against pending invitations
 	var user models.User
 	if err := database.DB.Where("id = ?", userID).First(&user).Error; err != nil {
-		log.Printf("User %s not found for membership linking: %v", userID, err)
+		log.Printf("User %s not found for invitation matching: %v", userID, err)
 		return nil
 	}
 
@@ -360,7 +373,58 @@ func (h *WebhookHandler) handleMembershipCreated(data json.RawMessage) error {
 		}
 	}
 
-	log.Printf("Membership created: user %s joined org %s as %s", userID, orgID, memberData.Role)
+	log.Printf("Membership created: user %s joined org %s (is_admin=%v)", userID, orgID, memberData.IsAdmin())
+	return nil
+}
+
+// ClerkInvitationAcceptedData represents data from an organizationInvitation.accepted webhook
+type ClerkInvitationAcceptedData struct {
+	ID             string `json:"id"`
+	EmailAddress   string `json:"email_address"`
+	OrganizationID string `json:"organization_id"`
+	Role           string `json:"role"`
+	Status         string `json:"status"`
+}
+
+func (h *WebhookHandler) handleInvitationAccepted(data json.RawMessage) error {
+	var invData ClerkInvitationAcceptedData
+	if err := json.Unmarshal(data, &invData); err != nil {
+		log.Printf("Error parsing invitation accepted data: %v", err)
+		return err
+	}
+
+	email := invData.EmailAddress
+	orgID := invData.OrganizationID
+
+	log.Printf("Invitation accepted: email=%s org=%s role=%s", email, orgID, invData.Role)
+
+	// Look up user by email
+	var user models.User
+	if err := database.DB.Where("email = ?", email).First(&user).Error; err != nil {
+		log.Printf("User with email %s not found for invitation acceptance: %v", email, err)
+		return nil
+	}
+
+	// Set the user's organization and admin status
+	isAdmin := invData.Role == "org:admin" || invData.Role == "admin"
+	userUpdates := map[string]interface{}{
+		"organization_id": orgID,
+		"is_admin":        isAdmin,
+		"updated_at":      time.Now(),
+	}
+	if err := database.DB.Model(&models.User{}).Where("id = ?", user.ID).Updates(userUpdates).Error; err != nil {
+		log.Printf("Error updating user %s with org: %v", user.ID, err)
+		return err
+	}
+
+	// Auto-accept matching local employee invitation
+	if h.employeeService != nil {
+		if err := h.employeeService.AcceptInvitationByEmail(email, orgID, user.ID); err != nil {
+			log.Printf("Local invitation auto-accept note: %v", err)
+		}
+	}
+
+	log.Printf("Invitation accepted: user %s (%s) joined org %s", user.ID, email, orgID)
 	return nil
 }
 

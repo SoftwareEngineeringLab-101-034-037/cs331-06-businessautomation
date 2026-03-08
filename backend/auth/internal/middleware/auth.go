@@ -1,14 +1,12 @@
 package middleware
 
 import (
-	"errors"
 	"log"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
-	"gorm.io/gorm"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/database"
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
@@ -78,36 +76,19 @@ func OrgAdminOnly() gin.HandlerFunc {
 			return
 		}
 
-		// First try: check organization_memberships table
-		var membership models.OrganizationMembership
-		err := database.DB.Where(
-			"user_id = ? AND organization_id = ?", userID, orgID,
-		).First(&membership).Error
-
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			log.Printf("[OrgAdminOnly] database error checking membership: %v", err)
+		// Look up the user and check they belong to this org as an admin
+		var user models.User
+		err := database.DB.Where("id = ?", userID).First(&user).Error
+		if err != nil {
+			log.Printf("[OrgAdminOnly] database error looking up user: %v", err)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
 			return
 		}
 
-		if err == nil && membership.IsOrgAdmin() {
-			c.Set(OrgIDKey, orgID)
-			c.Next()
-			return
-		}
-
-		// Fallback: check if user is the org_admin_id on the organizations table
-		var org models.Organization
-		err = database.DB.Where("id = ? AND org_admin_id = ?", orgID, userID).First(&org).Error
-
-		if err != nil {
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				log.Printf("[OrgAdminOnly] database error checking org admin: %v", err)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
-				return
-			}
-			log.Printf("[OrgAdminOnly] denied: user_id=%s org_id=%s (not found in memberships or org_admin)", userID, orgID)
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Not a member of this organization"})
+		if user.OrganizationID == nil || *user.OrganizationID != orgID || !user.IsAdmin {
+			log.Printf("[OrgAdminOnly] denied: user_id=%s org_id=%s (org_id=%v is_admin=%v)",
+				userID, orgID, user.OrganizationID, user.IsAdmin)
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Not an admin of this organization"})
 			return
 		}
 

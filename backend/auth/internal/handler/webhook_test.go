@@ -314,7 +314,7 @@ func TestHandleOrganizationDeletedMarksInactive(t *testing.T) {
 	}
 }
 
-func TestHandleMembershipCreatedCreatesMembershipWhenUserMissing(t *testing.T) {
+func TestHandleMembershipCreatedWhenUserMissing(t *testing.T) {
 	restoreDB(t)
 	db := setupWebhookTestDB(t)
 	database.DB = db
@@ -334,19 +334,11 @@ func TestHandleMembershipCreatedCreatesMembershipWhenUserMissing(t *testing.T) {
 	})
 
 	if err := handler.handleMembershipCreated(data); err != nil {
-		t.Fatalf("expected no error handling membership created, got %v", err)
-	}
-
-	var count int64
-	if err := db.Table("organization_memberships").Where("id = ?", "mem_1").Count(&count).Error; err != nil {
-		t.Fatalf("failed counting memberships: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("expected 1 membership row, got %d", count)
+		t.Fatalf("expected no error handling membership created for missing user, got %v", err)
 	}
 }
 
-func TestHandleMembershipCreatedCreatesMembershipWhenUserExists(t *testing.T) {
+func TestHandleMembershipCreatedUpdatesUserOrgAndAdmin(t *testing.T) {
 	restoreDB(t)
 	db := setupWebhookTestDB(t)
 	database.DB = db
@@ -376,12 +368,18 @@ func TestHandleMembershipCreatedCreatesMembershipWhenUserExists(t *testing.T) {
 		t.Fatalf("expected no error handling membership created, got %v", err)
 	}
 
-	var membershipRole string
-	if err := db.Table("organization_memberships").Select("clerk_role").Where("id = ?", "mem_2").Scan(&membershipRole).Error; err != nil {
-		t.Fatalf("failed reading membership row: %v", err)
+	var row struct {
+		OrganizationID string `gorm:"column:organization_id"`
+		IsAdmin        bool   `gorm:"column:is_admin"`
 	}
-	if membershipRole != "org:admin" {
-		t.Fatalf("expected membership role org:admin, got %q", membershipRole)
+	if err := db.Table("users").Select("organization_id, is_admin").Where("id = ?", "user_4").Take(&row).Error; err != nil {
+		t.Fatalf("failed reading user row: %v", err)
+	}
+	if row.OrganizationID != "org_1" {
+		t.Fatalf("expected organization_id=org_1, got %q", row.OrganizationID)
+	}
+	if !row.IsAdmin {
+		t.Fatal("expected is_admin=true for org:admin role")
 	}
 }
 
@@ -433,9 +431,11 @@ func setupWebhookTestDB(t *testing.T) *gorm.DB {
 			first_name TEXT,
 			last_name TEXT,
 			avatar_url TEXT,
+			organization_id TEXT,
 			department_id TEXT,
 			role_id TEXT,
 			job_title TEXT,
+			is_admin BOOLEAN DEFAULT 0,
 			preferences TEXT,
 			is_active BOOLEAN DEFAULT 1,
 			created_at DATETIME,
@@ -449,7 +449,6 @@ func setupWebhookTestDB(t *testing.T) *gorm.DB {
 			name TEXT NOT NULL,
 			slug TEXT UNIQUE,
 			image_url TEXT,
-			org_admin_id TEXT,
 			is_active BOOLEAN DEFAULT 1,
 			created_at DATETIME,
 			updated_at DATETIME
@@ -464,18 +463,6 @@ func setupWebhookTestDB(t *testing.T) *gorm.DB {
 			size TEXT,
 			country TEXT,
 			use_case TEXT,
-			created_at DATETIME,
-			updated_at DATETIME
-		)
-		`,
-		`
-		CREATE TABLE organization_memberships (
-			id TEXT PRIMARY KEY,
-			user_id TEXT NOT NULL,
-			organization_id TEXT NOT NULL,
-			clerk_role TEXT NOT NULL,
-			local_role_id TEXT,
-			joined_at DATETIME,
 			created_at DATETIME,
 			updated_at DATETIME
 		)

@@ -1,44 +1,126 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
-import { MOCK_TEAM } from "@/lib/mock-data";
-import { ROLE_LABELS } from "@/types/dashboard";
+import InviteDialog from "@/components/dashboard/InviteDialog";
+import CreateDepartmentDialog from "@/components/dashboard/CreateDepartmentDialog";
+
+const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
+
+/* ── Backend response shapes ─────────────────────────── */
+
+interface BackendDepartment {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+interface BackendRole {
+  id: string;
+  name: string;
+  display_name?: string;
+}
+
+interface BackendUser {
+  id: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  avatar_url?: string;
+  department_id?: string;
+  role_id?: string;
+  job_title?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  last_sign_in_at?: string;
+  department?: BackendDepartment;
+  role?: BackendRole;
+}
+
+/* ── Helpers ─────────────────────────────────────────── */
+
+function initials(first: string, last: string): string {
+  return ((first?.[0] || "") + (last?.[0] || "")).toUpperCase() || "?";
+}
+
+function roleLabel(role?: BackendRole): string {
+  if (!role) return "Employee";
+  return role.display_name || role.name || "Employee";
+}
 
 export default function TeamPage() {
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState<string>("all");
+  const [showInvite, setShowInvite] = useState(false);
+  const [showDept, setShowDept] = useState(false);
 
-  const departments = [...new Set(MOCK_TEAM.map((m) => m.department))];
+  const [employees, setEmployees] = useState<BackendUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const filtered = MOCK_TEAM.filter((m) => {
-    if (deptFilter !== "all" && m.department !== deptFilter) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      return m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q);
+  const { getToken } = useAuth();
+  const { organization } = useOrganization();
+
+  /* ── Fetch employees from backend ───────────────────── */
+  const fetchEmployees = useCallback(async () => {
+    if (!organization?.id) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const token = await getToken();
+      const res = await fetch(`${AUTH_API}/api/orgs/${organization.id}/employees`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: BackendUser[] = await res.json();
+      setEmployees(data ?? []);
+    } catch (err: any) {
+      console.error("Failed to load employees:", err);
+      setError(err.message || "Could not reach auth service");
+    } finally {
+      setLoading(false);
     }
-    return true;
-  });
+  }, [organization?.id, getToken]);
 
-  // Stats
-  const totalMembers = MOCK_TEAM.length;
-  const activeMembers = MOCK_TEAM.filter((m) => m.isActive).length;
-  const totalCompleted = MOCK_TEAM.reduce((a, m) => a + m.tasksCompleted, 0);
-  const totalPending = MOCK_TEAM.reduce((a, m) => a + m.tasksPending, 0);
+  useEffect(() => {
+    fetchEmployees();
+  }, [fetchEmployees]);
 
-  // Dept breakdown
+  /* ── Derived data ───────────────────────────────────── */
+  const departments = useMemo(
+    () => [...new Set(employees.map((e) => e.department?.name).filter(Boolean) as string[])].sort(),
+    [employees]
+  );
+
+  const filtered = useMemo(() => {
+    return employees.filter((e) => {
+      const deptName = e.department?.name || "";
+      if (deptFilter !== "all" && deptName !== deptFilter) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        const name = `${e.first_name} ${e.last_name}`.toLowerCase();
+        return name.includes(q) || e.email.toLowerCase().includes(q);
+      }
+      return true;
+    });
+  }, [employees, deptFilter, search]);
+
+  const totalMembers = employees.length;
+  const activeMembers = employees.filter((e) => e.is_active).length;
+
   const deptBreakdown = useMemo(() => {
-    const map = new Map<string, { count: number; active: number; completed: number; pending: number }>();
-    MOCK_TEAM.forEach((m) => {
-      const entry = map.get(m.department) || { count: 0, active: 0, completed: 0, pending: 0 };
+    const map = new Map<string, { count: number; active: number }>();
+    employees.forEach((e) => {
+      const dept = e.department?.name || "Unassigned";
+      const entry = map.get(dept) || { count: 0, active: 0 };
       entry.count++;
-      if (m.isActive) entry.active++;
-      entry.completed += m.tasksCompleted;
-      entry.pending += m.tasksPending;
-      map.set(m.department, entry);
+      if (e.is_active) entry.active++;
+      map.set(dept, entry);
     });
     return Array.from(map.entries()).map(([dept, data]) => ({ dept, ...data }));
-  }, []);
+  }, [employees]);
 
   return (
     <RoleGate
@@ -61,12 +143,20 @@ export default function TeamPage() {
             <h2 className="page-title">Team Observatory</h2>
             <p className="page-subtitle">Team performance, department breakdown, and member management</p>
           </div>
-          <button className="action-btn action-btn-primary">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3 19.235v-.11a6.375 6.375 0 0 1 12.75 0v.109A12.318 12.318 0 0 1 9.374 21c-2.331 0-4.512-.645-6.374-1.766Z" />
-            </svg>
-            Invite Employee
-          </button>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button className="action-btn action-btn-outline" onClick={() => setShowDept(true)}>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21m-3.75 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Z" />
+              </svg>
+              New Department
+            </button>
+            <button className="action-btn action-btn-primary" onClick={() => setShowInvite(true)}>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3 19.235v-.11a6.375 6.375 0 0 1 12.75 0v.109A12.318 12.318 0 0 1 9.374 21c-2.331 0-4.512-.645-6.374-1.766Z" />
+              </svg>
+              Invite Employee
+            </button>
+          </div>
         </div>
 
         {/* Observatory — KPI Row */}
@@ -90,18 +180,18 @@ export default function TeamPage() {
             </div>
             <div className="obs-metric-data">
               <span className="obs-metric-value">{activeMembers}</span>
-              <span className="obs-metric-label">Active Now</span>
+              <span className="obs-metric-label">Active</span>
             </div>
           </div>
           <div className="obs-metric-card">
             <div className="obs-metric-icon" style={{ background: "rgba(139,92,246,0.1)", color: "#8b5cf6" }}>
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="20" height="20">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M11.35 3.836c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15a2.25 2.25 0 0 1 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m8.9-4.414c.376.023.75.05 1.124.08 1.131.094 1.976 1.057 1.976 2.192V16.5A2.25 2.25 0 0 1 18 18.75h-2.25m-7.5-10.5H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V18.75m-7.5-10.5h6.375c.621 0 1.125.504 1.125 1.125v9.375m-8.25-3 1.5 1.5 3-3.75" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21m-3.75 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Z" />
               </svg>
             </div>
             <div className="obs-metric-data">
-              <span className="obs-metric-value">{totalCompleted}</span>
-              <span className="obs-metric-label">Tasks Completed</span>
+              <span className="obs-metric-value">{departments.length}</span>
+              <span className="obs-metric-label">Departments</span>
             </div>
           </div>
           <div className="obs-metric-card">
@@ -111,37 +201,35 @@ export default function TeamPage() {
               </svg>
             </div>
             <div className="obs-metric-data">
-              <span className="obs-metric-value">{totalPending}</span>
-              <span className="obs-metric-label">Tasks Pending</span>
+              <span className="obs-metric-value">{totalMembers - activeMembers}</span>
+              <span className="obs-metric-label">Inactive</span>
             </div>
           </div>
         </div>
 
         {/* Department Breakdown */}
-        <div className="obs-chart-grid" style={{ marginBottom: 28 }}>
-          {deptBreakdown.map((d) => (
-            <div key={d.dept} className="obs-chart-panel">
-              <div className="obs-chart-panel-header">
-                <h4>{d.dept}</h4>
-                <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{d.count} members</span>
-              </div>
-              <div className="obs-breakdown">
-                <div className="obs-breakdown-item">
-                  <span className="obs-breakdown-value">{d.active}</span>
-                  <span className="obs-breakdown-label">Active</span>
+        {deptBreakdown.length > 0 && (
+          <div className="obs-chart-grid" style={{ marginBottom: 28 }}>
+            {deptBreakdown.map((d) => (
+              <div key={d.dept} className="obs-chart-panel">
+                <div className="obs-chart-panel-header">
+                  <h4>{d.dept}</h4>
+                  <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{d.count} members</span>
                 </div>
-                <div className="obs-breakdown-item">
-                  <span className="obs-breakdown-value">{d.completed}</span>
-                  <span className="obs-breakdown-label">Completed</span>
-                </div>
-                <div className="obs-breakdown-item">
-                  <span className="obs-breakdown-value">{d.pending}</span>
-                  <span className="obs-breakdown-label">Pending</span>
+                <div className="obs-breakdown">
+                  <div className="obs-breakdown-item">
+                    <span className="obs-breakdown-value">{d.active}</span>
+                    <span className="obs-breakdown-label">Active</span>
+                  </div>
+                  <div className="obs-breakdown-item">
+                    <span className="obs-breakdown-value">{d.count - d.active}</span>
+                    <span className="obs-breakdown-label">Inactive</span>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
 
         {/* Search + Filters */}
         <div className="filters-bar" style={{ marginBottom: 16 }}>
@@ -170,66 +258,82 @@ export default function TeamPage() {
               ))}
             </select>
           </div>
+          <button className="action-btn action-btn-outline action-btn-sm" onClick={fetchEmployees} style={{ marginLeft: "auto" }}>
+            Refresh
+          </button>
         </div>
 
-        {/* Observatory-style Team Cards */}
-        <div className="obs-team-grid">
-          {filtered.map((member) => (
-            <div key={member.id} className="obs-team-card">
-              <div className="obs-team-card-top">
-                <div className="obs-team-avatar">
-                  {member.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
-                </div>
-                <div className="obs-team-info">
-                  <h4 className="obs-team-name">{member.name}</h4>
-                  <p className="obs-team-email">{member.email}</p>
-                </div>
-                <span className={`status-dot ${member.isActive ? "active" : "inactive"}`}>
-                  {member.isActive ? "Active" : "Offline"}
-                </span>
-              </div>
+        {/* Loading state */}
+        {loading && (
+          <div className="empty-state" style={{ padding: "40px 0" }}>
+            <p className="table-muted">Loading team members…</p>
+          </div>
+        )}
 
-              <div className="obs-team-details">
-                <div className="obs-team-detail">
-                  <span className="obs-team-detail-label">Department</span>
-                  <span className="obs-team-detail-value">{member.department}</span>
+        {/* Error state */}
+        {error && !loading && (
+          <div className="empty-state" style={{ padding: "40px 0" }}>
+            <p style={{ color: "#ef4444" }}>⚠ {error}</p>
+            <button className="action-btn action-btn-outline action-btn-sm" style={{ marginTop: 12 }} onClick={fetchEmployees}>Retry</button>
+          </div>
+        )}
+
+        {/* Team Cards */}
+        {!loading && !error && (
+          <div className="obs-team-grid">
+            {filtered.map((member) => (
+              <div key={member.id} className="obs-team-card">
+                <div className="obs-team-card-top">
+                  <div className="obs-team-avatar">
+                    {initials(member.first_name, member.last_name)}
+                  </div>
+                  <div className="obs-team-info">
+                    <h4 className="obs-team-name">{member.first_name} {member.last_name}</h4>
+                    <p className="obs-team-email">{member.email}</p>
+                  </div>
+                  <span className={`status-dot ${member.is_active ? "active" : "inactive"}`}>
+                    {member.is_active ? "Active" : "Inactive"}
+                  </span>
                 </div>
-                <div className="obs-team-detail">
-                  <span className="obs-team-detail-label">Role</span>
-                  <span className="role-badge">{ROLE_LABELS[member.role]}</span>
+
+                <div className="obs-team-details">
+                  <div className="obs-team-detail">
+                    <span className="obs-team-detail-label">Department</span>
+                    <span className="obs-team-detail-value">{member.department?.name || "—"}</span>
+                  </div>
+                  <div className="obs-team-detail">
+                    <span className="obs-team-detail-label">Role</span>
+                    <span className="role-badge">{roleLabel(member.role)}</span>
+                  </div>
+                </div>
+
+                {member.job_title && (
+                  <div className="obs-team-details">
+                    <div className="obs-team-detail">
+                      <span className="obs-team-detail-label">Job Title</span>
+                      <span className="obs-team-detail-value">{member.job_title}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="obs-team-actions">
+                  <button className="action-btn action-btn-outline action-btn-sm">View Profile</button>
+                  <button className="action-btn action-btn-primary action-btn-sm">Assign Task</button>
                 </div>
               </div>
+            ))}
+          </div>
+        )}
 
-              <div className="obs-team-stats">
-                <div className="obs-team-stat">
-                  <span className="obs-team-stat-value" style={{ color: "#22c55e" }}>{member.tasksCompleted}</span>
-                  <span className="obs-team-stat-label">Done</span>
-                </div>
-                <div className="obs-team-stat">
-                  <span className="obs-team-stat-value" style={{ color: "#f59e0b" }}>{member.tasksPending}</span>
-                  <span className="obs-team-stat-label">Pending</span>
-                </div>
-                <div className="obs-team-stat">
-                  <span className="obs-team-stat-value">{member.tasksCompleted + member.tasksPending}</span>
-                  <span className="obs-team-stat-label">Total</span>
-                </div>
-              </div>
-
-              <div className="obs-team-actions">
-                <button className="action-btn action-btn-outline action-btn-sm">View Profile</button>
-                <button className="action-btn action-btn-primary action-btn-sm">Assign Task</button>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {filtered.length === 0 && (
+        {!loading && !error && filtered.length === 0 && (
           <div className="empty-state">
             <h3>No team members found</h3>
-            <p>Try adjusting your search or department filter.</p>
+            <p>{employees.length === 0 ? "Invite employees to get started." : "Try adjusting your search or department filter."}</p>
           </div>
         )}
       </div>
+      <InviteDialog isOpen={showInvite} onClose={() => setShowInvite(false)} />
+      <CreateDepartmentDialog isOpen={showDept} onClose={() => setShowDept(false)} />
     </RoleGate>
   );
 }

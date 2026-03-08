@@ -144,7 +144,7 @@ func TestClerkAuthMiddlewareSetsUserIDOnSuccess(t *testing.T) {
 
 func TestOrgAdminOnlyRequiresAuthentication(t *testing.T) {
 	restoreDB(t)
-	db := setupMiddlewareTestDB(t, true, true)
+	db := setupMiddlewareTestDB(t)
 	database.DB = db
 
 	gin.SetMode(gin.TestMode)
@@ -164,7 +164,7 @@ func TestOrgAdminOnlyRequiresAuthentication(t *testing.T) {
 
 func TestOrgAdminOnlyRequiresOrgID(t *testing.T) {
 	restoreDB(t)
-	db := setupMiddlewareTestDB(t, true, true)
+	db := setupMiddlewareTestDB(t)
 	database.DB = db
 
 	gin.SetMode(gin.TestMode)
@@ -186,41 +186,18 @@ func TestOrgAdminOnlyRequiresOrgID(t *testing.T) {
 	}
 }
 
-func TestOrgAdminOnlyReturnsInternalErrorWhenMembershipLookupFails(t *testing.T) {
+func TestOrgAdminOnlyAllowsAdmin(t *testing.T) {
 	restoreDB(t)
-	db := setupMiddlewareTestDB(t, false, true)
+	db := setupMiddlewareTestDB(t)
 	database.DB = db
 
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.Use(func(c *gin.Context) {
-		c.Set(UserIDKey, "user_1")
-		c.Next()
-	})
-	r.GET("/orgs/:orgId/admin", OrgAdminOnly(), func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true})
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/orgs/org_1/admin", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d; body=%s", w.Code, w.Body.String())
-	}
-}
-
-func TestOrgAdminOnlyAllowsAdminMembership(t *testing.T) {
-	restoreDB(t)
-	db := setupMiddlewareTestDB(t, true, true)
-	database.DB = db
-
+	orgID := "org_1"
 	now := time.Now()
 	if err := db.Exec(`
-		INSERT INTO organization_memberships (id, user_id, organization_id, clerk_role, joined_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, "mem_1", "user_admin", "org_1", "org:admin", now, now, now).Error; err != nil {
-		t.Fatalf("failed seeding membership: %v", err)
+		INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_admin", "admin@example.com", "Admin", "User", orgID, true, true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
 	}
 
 	gin.SetMode(gin.TestMode)
@@ -245,51 +222,18 @@ func TestOrgAdminOnlyAllowsAdminMembership(t *testing.T) {
 	}
 }
 
-func TestOrgAdminOnlyFallsBackToOrganizationAdmin(t *testing.T) {
-	restoreDB(t)
-	db := setupMiddlewareTestDB(t, true, true)
-	database.DB = db
-
-	now := time.Now()
-	if err := db.Exec(`
-		INSERT INTO organizations (id, name, slug, org_admin_id, is_active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, "org_1", "Org One", "org-one", "user_owner", true, now, now).Error; err != nil {
-		t.Fatalf("failed seeding organization: %v", err)
-	}
-
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.Use(func(c *gin.Context) {
-		c.Set(UserIDKey, "user_owner")
-		c.Next()
-	})
-	r.GET("/orgs/:orgId/admin", OrgAdminOnly(), func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"org_id": GetOrgID(c),
-		})
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/orgs/org_1/admin", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
-	}
-}
-
 func TestOrgAdminOnlyForbiddenWhenNotAdmin(t *testing.T) {
 	restoreDB(t)
-	db := setupMiddlewareTestDB(t, true, true)
+	db := setupMiddlewareTestDB(t)
 	database.DB = db
 
+	orgID := "org_1"
 	now := time.Now()
 	if err := db.Exec(`
-		INSERT INTO organization_memberships (id, user_id, organization_id, clerk_role, joined_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, "mem_2", "user_member", "org_1", "org:member", now, now, now).Error; err != nil {
-		t.Fatalf("failed seeding membership: %v", err)
+		INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_member", "member@example.com", "Member", "User", orgID, false, true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
 	}
 
 	gin.SetMode(gin.TestMode)
@@ -311,31 +255,40 @@ func TestOrgAdminOnlyForbiddenWhenNotAdmin(t *testing.T) {
 	}
 }
 
-func TestOrgAdminOnlyReturnsInternalErrorWhenFallbackLookupFails(t *testing.T) {
+func TestOrgAdminOnlyForbiddenWhenDifferentOrg(t *testing.T) {
 	restoreDB(t)
-	db := setupMiddlewareTestDB(t, true, false)
+	db := setupMiddlewareTestDB(t)
 	database.DB = db
+
+	now := time.Now()
+	if err := db.Exec(`
+		INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_admin", "admin@example.com", "Admin", "User", "org_2", true, true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
-		c.Set(UserIDKey, "user_1")
+		c.Set(UserIDKey, "user_admin")
 		c.Next()
 	})
 	r.GET("/orgs/:orgId/admin", OrgAdminOnly(), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
+	// User is admin of org_2, trying to access org_1
 	req := httptest.NewRequest(http.MethodGet, "/orgs/org_1/admin", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d; body=%s", w.Code, w.Body.String())
 	}
 }
 
-func setupMiddlewareTestDB(t *testing.T, withMembershipsTable, withOrganizationsTable bool) *gorm.DB {
+func setupMiddlewareTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
@@ -352,38 +305,26 @@ func setupMiddlewareTestDB(t *testing.T, withMembershipsTable, withOrganizations
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
 
-	if withMembershipsTable {
-		if err := db.Exec(`
-			CREATE TABLE organization_memberships (
-				id TEXT PRIMARY KEY,
-				user_id TEXT NOT NULL,
-				organization_id TEXT NOT NULL,
-				clerk_role TEXT NOT NULL,
-				local_role_id TEXT,
-				joined_at DATETIME,
-				created_at DATETIME,
-				updated_at DATETIME
-			)
-		`).Error; err != nil {
-			t.Fatalf("failed creating organization_memberships table: %v", err)
-		}
-	}
-
-	if withOrganizationsTable {
-		if err := db.Exec(`
-			CREATE TABLE organizations (
-				id TEXT PRIMARY KEY,
-				name TEXT NOT NULL,
-				slug TEXT UNIQUE,
-				image_url TEXT,
-				org_admin_id TEXT,
-				is_active BOOLEAN DEFAULT 1,
-				created_at DATETIME,
-				updated_at DATETIME
-			)
-		`).Error; err != nil {
-			t.Fatalf("failed creating organizations table: %v", err)
-		}
+	if err := db.Exec(`
+		CREATE TABLE users (
+			id TEXT PRIMARY KEY,
+			email TEXT NOT NULL UNIQUE,
+			first_name TEXT,
+			last_name TEXT,
+			avatar_url TEXT,
+			organization_id TEXT,
+			department_id TEXT,
+			role_id TEXT,
+			job_title TEXT,
+			is_admin BOOLEAN DEFAULT 0,
+			preferences TEXT,
+			is_active BOOLEAN DEFAULT 1,
+			created_at DATETIME,
+			updated_at DATETIME,
+			last_sign_in_at DATETIME
+		)
+	`).Error; err != nil {
+		t.Fatalf("failed creating users table: %v", err)
 	}
 
 	return db
