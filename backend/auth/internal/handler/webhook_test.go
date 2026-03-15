@@ -218,6 +218,13 @@ func TestHandleOrganizationCreatedCreatesOrgAndSettings(t *testing.T) {
 	db := setupWebhookTestDB(t)
 	database.DB = db
 
+	if err := db.Exec(`
+		INSERT INTO users (id, email, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, "user_admin", "admin@example.com", true, time.Now(), time.Now()).Error; err != nil {
+		t.Fatalf("failed seeding org creator user: %v", err)
+	}
+
 	handler := NewWebhookHandler("", nil)
 	data := mustMarshal(t, map[string]interface{}{
 		"id":         "org_1",
@@ -247,6 +254,35 @@ func TestHandleOrganizationCreatedCreatesOrgAndSettings(t *testing.T) {
 	}
 	if settingsCount != 1 {
 		t.Fatalf("expected 1 organization_settings row, got %d", settingsCount)
+	}
+
+	var dept struct {
+		ID   string
+		Name string
+	}
+	if err := db.Table("departments").Select("id, name").Where("organization_id = ?", "org_1").Take(&dept).Error; err != nil {
+		t.Fatalf("expected admin department row, got error: %v", err)
+	}
+	if dept.Name != "Admin" {
+		t.Fatalf("expected default admin department, got %q", dept.Name)
+	}
+
+	var creator struct {
+		OrganizationID *string `gorm:"column:organization_id"`
+		DepartmentID   *string `gorm:"column:department_id"`
+		IsAdmin        bool    `gorm:"column:is_admin"`
+	}
+	if err := db.Table("users").Select("organization_id, department_id, is_admin").Where("id = ?", "user_admin").Take(&creator).Error; err != nil {
+		t.Fatalf("failed reading creator row: %v", err)
+	}
+	if creator.OrganizationID == nil || *creator.OrganizationID != "org_1" {
+		t.Fatalf("expected creator organization_id org_1, got %+v", creator.OrganizationID)
+	}
+	if creator.DepartmentID == nil || *creator.DepartmentID != dept.ID {
+		t.Fatalf("expected creator department_id %s, got %+v", dept.ID, creator.DepartmentID)
+	}
+	if !creator.IsAdmin {
+		t.Fatal("expected creator to be marked admin")
 	}
 }
 
@@ -370,13 +406,17 @@ func TestHandleMembershipCreatedUpdatesUserOrgAndAdmin(t *testing.T) {
 
 	var row struct {
 		OrganizationID string `gorm:"column:organization_id"`
+		DepartmentID   string `gorm:"column:department_id"`
 		IsAdmin        bool   `gorm:"column:is_admin"`
 	}
-	if err := db.Table("users").Select("organization_id, is_admin").Where("id = ?", "user_4").Take(&row).Error; err != nil {
+	if err := db.Table("users").Select("organization_id, department_id, is_admin").Where("id = ?", "user_4").Take(&row).Error; err != nil {
 		t.Fatalf("failed reading user row: %v", err)
 	}
 	if row.OrganizationID != "org_1" {
 		t.Fatalf("expected organization_id=org_1, got %q", row.OrganizationID)
+	}
+	if row.DepartmentID == "" {
+		t.Fatal("expected admin membership to assign default admin department")
 	}
 	if !row.IsAdmin {
 		t.Fatal("expected is_admin=true for org:admin role")
@@ -465,6 +505,18 @@ func setupWebhookTestDB(t *testing.T) *gorm.DB {
 			use_case TEXT,
 			created_at DATETIME,
 			updated_at DATETIME
+		)
+		`,
+		`
+		CREATE TABLE departments (
+			id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+			name TEXT NOT NULL,
+			organization_id TEXT NOT NULL,
+			description TEXT,
+			created_by_user_id TEXT,
+			created_at DATETIME,
+			updated_at DATETIME,
+			UNIQUE(name, organization_id)
 		)
 		`,
 	}

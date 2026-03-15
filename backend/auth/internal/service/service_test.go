@@ -30,7 +30,7 @@ func TestCreateDepartment(t *testing.T) {
 		db := setupServiceTestDB(t)
 		svc := NewEmployeeService(db, "")
 
-		dept, err := svc.CreateDepartment("org_1", "Engineering", "Core team")
+		dept, err := svc.CreateDepartment("org_1", "Engineering", "Core team", "")
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -59,7 +59,7 @@ func TestCreateDepartment(t *testing.T) {
 			t.Fatalf("failed seeding department: %v", err)
 		}
 
-		_, err := svc.CreateDepartment("org_1", "Engineering", "Dup")
+		_, err := svc.CreateDepartment("org_1", "Engineering", "Dup", "")
 		if err == nil {
 			t.Fatal("expected duplicate error")
 		}
@@ -72,7 +72,7 @@ func TestCreateDepartment(t *testing.T) {
 		db := setupEmptyServiceTestDB(t)
 		svc := NewEmployeeService(db, "")
 
-		_, err := svc.CreateDepartment("org_1", "Engineering", "Core")
+		_, err := svc.CreateDepartment("org_1", "Engineering", "Core", "")
 		if err == nil || !strings.Contains(err.Error(), "failed to check existing department") {
 			t.Fatalf("expected lookup db error, got %v", err)
 		}
