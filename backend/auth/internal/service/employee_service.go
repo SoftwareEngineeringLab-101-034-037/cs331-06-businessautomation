@@ -13,6 +13,7 @@ import (
 )
 
 var ErrDuplicateDepartment = errors.New("duplicate department")
+var ErrDuplicateRole = errors.New("duplicate role")
 
 // EmployeeService handles department, employee, and invitation operations.
 type EmployeeService struct {
@@ -25,7 +26,7 @@ func NewEmployeeService(db *gorm.DB, clerkSecretKey string) *EmployeeService {
 	return &EmployeeService{db: db, clerkSecretKey: clerkSecretKey}
 }
 
-func (s *EmployeeService) CreateDepartment(orgID, name, description string) (*models.Department, error) {
+func (s *EmployeeService) CreateDepartment(orgID, name, description, createdBy string) (*models.Department, error) {
 	var existing models.Department
 	err := s.db.Where("name = ? AND organization_id = ?", name, orgID).First(&existing).Error
 	if err == nil {
@@ -41,6 +42,9 @@ func (s *EmployeeService) CreateDepartment(orgID, name, description string) (*mo
 		Description:    description,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
+	}
+	if createdBy != "" {
+		dept.CreatedByUserID = &createdBy
 	}
 	if err := s.db.Create(&dept).Error; err != nil {
 		var pgErr *pgconn.PgError
@@ -67,7 +71,6 @@ func (s *EmployeeService) ListEmployees(orgID string) ([]models.User, error) {
 	err := s.db.
 		Where("organization_id = ?", orgID).
 		Preload("Department").
-		Preload("Role").
 		Find(&users).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to list employees: %w", err)

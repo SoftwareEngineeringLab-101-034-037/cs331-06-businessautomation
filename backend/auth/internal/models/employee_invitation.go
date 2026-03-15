@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/datatypes"
+)
 
 // EmployeeInvitation represents a pending invitation for an employee to join an organization
 type EmployeeInvitation struct {
@@ -11,6 +15,7 @@ type EmployeeInvitation struct {
 	FirstName      string     `json:"first_name"`
 	LastName       string     `json:"last_name"`
 	RoleName       string     `json:"role_name"`                                // Local role name to assign on accept
+	RoleNames      datatypes.JSON `gorm:"type:jsonb" json:"role_names,omitempty"`  // Optional workflow roles to tag the invite with
 	JobTitle       string     `json:"job_title"`                                // Optional job title
 	Token          string     `gorm:"uniqueIndex;not null" json:"-"`            // SHA-256 hash of invite token (never exposed in JSON)
 	Status         string     `gorm:"not null;default:'pending'" json:"status"` // pending, accepted, expired, revoked

@@ -33,6 +33,7 @@ type InviteInput struct {
 	LastName     string
 	DepartmentID string
 	Role         string
+	Roles        []string
 	JobTitle     string
 	InvitedBy    string
 }
@@ -74,6 +75,7 @@ func (s *EmployeeService) InviteAndNotify(input InviteInput) (*InviteResult, err
 		FirstName:      input.FirstName,
 		LastName:       input.LastName,
 		RoleName:       input.Role,
+		RoleNames:      mustMarshalJSONStringArray(uniqueStrings(input.Roles)),
 		JobTitle:       input.JobTitle,
 		Token:          hashedToken,
 		Status:         "pending",
@@ -175,22 +177,17 @@ func (s *EmployeeService) AcceptInvitationByEmail(email, orgID, userID string) e
 			userUpdates["job_title"] = invitation.JobTitle
 		}
 
-		// Resolve and assign role if specified
-		if invitation.RoleName != "" {
-			var role models.Role
-			if err := tx.Where("name = ? AND organization_id = ?", invitation.RoleName, orgID).First(&role).Error; err == nil {
-				userUpdates["role_id"] = role.ID
-			} else {
-				log.Printf("Role %q not found for org %s, skipping role assignment", invitation.RoleName, orgID)
-			}
-		}
-
 		result := tx.Model(&models.User{}).Where("id = ?", userID).Updates(userUpdates)
 		if result.Error != nil {
 			return fmt.Errorf("failed to update user after invitation acceptance: %w", result.Error)
 		}
 		if result.RowsAffected == 0 {
 			return fmt.Errorf("user %s not found, rolling back invitation acceptance", userID)
+		}
+
+		roleNames := invitedRoleNames(invitation)
+		if err := s.AssignRoleNamesToUser(tx, orgID, userID, invitation.InvitedBy, roleNames); err != nil {
+			return err
 		}
 
 		log.Printf("Invitation accepted: user %s joined org %s, assigned to department %s",
@@ -259,4 +256,28 @@ func (s *EmployeeService) AcceptInvitationByID(invitationID, orgID, userID strin
 
 	// Delegate to existing acceptance logic
 	return s.AcceptInvitationByEmail(user.Email, orgID, userID)
+}
+
+func mustMarshalJSONStringArray(values []string) []byte {
+	if len(values) == 0 {
+		return []byte("[]")
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return []byte("[]")
+	}
+	return encoded
+}
+
+func invitedRoleNames(invitation models.EmployeeInvitation) []string {
+	var roleNames []string
+	if len(invitation.RoleNames) > 0 {
+		if err := json.Unmarshal(invitation.RoleNames, &roleNames); err != nil {
+			log.Printf("failed to decode invitation role tags for invitation %s: %v", invitation.ID, err)
+		}
+	}
+	if invitation.RoleName != "" {
+		roleNames = append(roleNames, invitation.RoleName)
+	}
+	return uniqueStrings(roleNames)
 }

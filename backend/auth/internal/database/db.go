@@ -19,6 +19,7 @@ var openDatabase = func(databaseURL string) (*gorm.DB, error) {
 		PreferSimpleProtocol: true, // disables prepared statement caching
 	}), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Error),
+		DisableForeignKeyConstraintWhenMigrating: true,
 	})
 }
 
@@ -28,6 +29,8 @@ var runAutoMigrate = func(db *gorm.DB) error {
 		&models.Organization{},
 		&models.OrganizationSettings{},
 		&models.Department{},
+		&models.Role{},
+		&models.UserRoleMembership{},
 		&models.EmployeeInvitation{},
 	)
 }
