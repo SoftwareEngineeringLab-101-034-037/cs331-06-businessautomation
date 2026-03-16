@@ -13,10 +13,9 @@ type User struct {
 	FirstName      string         `json:"first_name"`
 	LastName       string         `json:"last_name"`
 	AvatarURL      string         `json:"avatar_url"`
-	OrganizationID *string        `json:"organization_id"`               // FK to organizations table
-	DepartmentID   *string        `json:"department_id"`                 // FK to departments table
-	RoleID         *string        `json:"role_id"`                       // FK to Role
-	JobTitle       string         `json:"job_title"`                     // Employee's job title
+	OrganizationID *string        `gorm:"type:text" json:"organization_id"` // FK to organizations table
+	DepartmentID   *string        `gorm:"type:text" json:"department_id"`
+	JobTitle       string         `json:"job_title"`
 	IsAdmin        bool           `gorm:"default:false" json:"is_admin"` // Whether user is an admin of their org
 	Preferences    datatypes.JSON `gorm:"type:jsonb" json:"preferences"` // Local extension
 	IsActive       bool           `gorm:"default:true" json:"is_active"`
@@ -26,7 +25,6 @@ type User struct {
 
 	// Relationships
 	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
-	Role         *Role         `gorm:"foreignKey:RoleID" json:"role,omitempty"`
 	Department   *Department   `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
 }
 

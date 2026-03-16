@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -104,6 +105,26 @@ func TestMigrateCallsAutoMigrateAndSucceeds(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("expected runAutoMigrate to be called")
+	}
+}
+
+func TestRunAutoMigrateCreatesRoleAndMembershipTables(t *testing.T) {
+	testDB := newSQLiteDB(t)
+
+	if err := runAutoMigrate(testDB); err != nil {
+		// SQLite does not support some PostgreSQL-oriented default expressions in model tags.
+		if strings.Contains(strings.ToLower(err.Error()), "syntax error") {
+			t.Skipf("skipping on sqlite due to postgres-specific migration SQL: %v", err)
+		}
+		t.Fatalf("expected runAutoMigrate to succeed, got: %v", err)
+	}
+
+	if !testDB.Migrator().HasTable(&models.Role{}) {
+		t.Fatal("expected roles table to be migrated")
+	}
+
+	if !testDB.Migrator().HasTable(&models.UserRoleMembership{}) {
+		t.Fatal("expected user_role_memberships table to be migrated")
 	}
 }
 

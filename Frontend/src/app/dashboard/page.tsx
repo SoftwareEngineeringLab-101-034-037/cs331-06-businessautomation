@@ -314,7 +314,7 @@ export default function DashboardOverview() {
           </section>
 
           {/* Workflow Performance (role-gated) */}
-          <RoleGate allowed={["org_admin", "admin", "analyst"]}>
+          <RoleGate allowed={["admin"]}>
             <section className="dashboard-section">
               <div className="section-header">
                 <h3 className="section-title">Workflow Performance</h3>
@@ -394,7 +394,7 @@ export default function DashboardOverview() {
             </div>
             <div className="cc-panel-body">
               <div className="cc-quick-grid">
-                <RoleGate allowed={["org_admin", "admin", "employee"]}>
+                <RoleGate allowed={["admin", "employee"]}>
                   <Link href="/dashboard/tasks" className="cc-quick-card">
                     <div className="cc-quick-icon" style={{ background: "var(--accent-subtle)", color: "var(--accent)" }}>
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="18" height="18">
@@ -404,7 +404,7 @@ export default function DashboardOverview() {
                     View Tasks
                   </Link>
                 </RoleGate>
-                <RoleGate allowed={["org_admin", "admin", "employee"]}>
+                <RoleGate allowed={["admin", "employee"]}>
                   <Link href="/dashboard/requests" className="cc-quick-card">
                     <div className="cc-quick-icon" style={{ background: "var(--info-subtle)", color: "var(--info)" }}>
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="18" height="18">
@@ -414,7 +414,7 @@ export default function DashboardOverview() {
                     New Request
                   </Link>
                 </RoleGate>
-                <RoleGate allowed={["org_admin", "admin"]}>
+                <RoleGate allowed={["admin"]}>
                   <Link href="/workflow-builder" className="cc-quick-card">
                     <div className="cc-quick-icon" style={{ background: "var(--success-subtle)", color: "var(--success)" }}>
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="18" height="18">
@@ -425,7 +425,7 @@ export default function DashboardOverview() {
                     Create Workflow
                   </Link>
                 </RoleGate>
-                <RoleGate allowed={["org_admin", "admin"]}>
+                <RoleGate allowed={["admin"]}>
                   <Link href="/dashboard/team" className="cc-quick-card">
                     <div className="cc-quick-icon" style={{ background: "var(--warning-subtle)", color: "var(--warning)" }}>
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="18" height="18">

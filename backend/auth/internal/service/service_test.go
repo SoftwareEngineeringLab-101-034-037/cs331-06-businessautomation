@@ -30,7 +30,7 @@ func TestCreateDepartment(t *testing.T) {
 		db := setupServiceTestDB(t)
 		svc := NewEmployeeService(db, "")
 
-		dept, err := svc.CreateDepartment("org_1", "Engineering", "Core team")
+		dept, err := svc.CreateDepartment("org_1", "Engineering", "Core team", "")
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -59,7 +59,7 @@ func TestCreateDepartment(t *testing.T) {
 			t.Fatalf("failed seeding department: %v", err)
 		}
 
-		_, err := svc.CreateDepartment("org_1", "Engineering", "Dup")
+		_, err := svc.CreateDepartment("org_1", "Engineering", "Dup", "")
 		if err == nil {
 			t.Fatal("expected duplicate error")
 		}
@@ -68,11 +68,42 @@ func TestCreateDepartment(t *testing.T) {
 		}
 	})
 
+	t.Run("trim and case-insensitive duplicate", func(t *testing.T) {
+		db := setupServiceTestDB(t)
+		svc := NewEmployeeService(db, "")
+
+		created, err := svc.CreateDepartment("org_1", "  Engineering  ", "Core", "")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if created.Name != "Engineering" {
+			t.Fatalf("expected trimmed department name Engineering, got %q", created.Name)
+		}
+
+		_, err = svc.CreateDepartment("org_1", " engineering ", "Dup", "")
+		if err == nil {
+			t.Fatal("expected duplicate error")
+		}
+		if !errors.Is(err, ErrDuplicateDepartment) {
+			t.Fatalf("expected ErrDuplicateDepartment, got %v", err)
+		}
+	})
+
+	t.Run("empty name after trim", func(t *testing.T) {
+		db := setupServiceTestDB(t)
+		svc := NewEmployeeService(db, "")
+
+		_, err := svc.CreateDepartment("org_1", "   ", "Core", "")
+		if err == nil || !strings.Contains(err.Error(), "department name is required") {
+			t.Fatalf("expected required department name error, got %v", err)
+		}
+	})
+
 	t.Run("lookup database error", func(t *testing.T) {
 		db := setupEmptyServiceTestDB(t)
 		svc := NewEmployeeService(db, "")
 
-		_, err := svc.CreateDepartment("org_1", "Engineering", "Core")
+		_, err := svc.CreateDepartment("org_1", "Engineering", "Core", "")
 		if err == nil || !strings.Contains(err.Error(), "failed to check existing department") {
 			t.Fatalf("expected lookup db error, got %v", err)
 		}
@@ -495,11 +526,10 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 
 		var user struct {
 			DepartmentID *string `gorm:"column:department_id"`
-			RoleID       *string `gorm:"column:role_id"`
 			JobTitle     string  `gorm:"column:job_title"`
 		}
 		if err := db.Table("users").
-			Select("department_id, role_id, job_title").
+			Select("department_id, job_title").
 			Where("id = ?", "user_1").
 			Take(&user).Error; err != nil {
 			t.Fatalf("failed reading user: %v", err)
@@ -507,15 +537,19 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 		if user.DepartmentID == nil || *user.DepartmentID != "dept_1" {
 			t.Fatalf("expected department_id dept_1, got %+v", user.DepartmentID)
 		}
-		if user.RoleID == nil || *user.RoleID != "role_1" {
-			t.Fatalf("expected role_id role_1, got %+v", user.RoleID)
-		}
 		if user.JobTitle != "Senior Analyst" {
 			t.Fatalf("expected job title update, got %q", user.JobTitle)
 		}
+		var membershipCount int64
+		if err := db.Table("user_role_memberships").Where("user_id = ? AND role_id = ?", "user_1", "role_1").Count(&membershipCount).Error; err != nil {
+			t.Fatalf("failed counting memberships: %v", err)
+		}
+		if membershipCount != 1 {
+			t.Fatalf("expected 1 role membership for user_1/role_1, got %d", membershipCount)
+		}
 	})
 
-	t.Run("success when role missing skips role assignment", func(t *testing.T) {
+	t.Run("unknown invited role returns error", func(t *testing.T) {
 		db := setupServiceTestDB(t)
 		svc := NewEmployeeService(db, "")
 
@@ -537,16 +571,25 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 			t.Fatalf("failed seeding invitation: %v", err)
 		}
 
-		if err := svc.AcceptInvitationByEmail("user2@example.com", "org_1", "user_2"); err != nil {
-			t.Fatalf("expected no error, got %v", err)
+		err := svc.AcceptInvitationByEmail("user2@example.com", "org_1", "user_2")
+		if err == nil || !strings.Contains(err.Error(), "unknown role names") {
+			t.Fatalf("expected unknown role names error, got %v", err)
 		}
 
-		var roleID *string
-		if err := db.Table("users").Select("role_id").Where("id = ?", "user_2").Scan(&roleID).Error; err != nil {
-			t.Fatalf("failed reading user role_id: %v", err)
+		var membershipCount int64
+		if err := db.Table("user_role_memberships").Where("user_id = ?", "user_2").Count(&membershipCount).Error; err != nil {
+			t.Fatalf("failed counting memberships: %v", err)
 		}
-		if roleID != nil {
-			t.Fatalf("expected role_id to remain nil, got %v", *roleID)
+		if membershipCount != 0 {
+			t.Fatalf("expected no role membership for user_2, got %d", membershipCount)
+		}
+
+		var inviteStatus string
+		if err := db.Table("employee_invitations").Select("status").Where("id = ?", "inv_no_role").Scan(&inviteStatus).Error; err != nil {
+			t.Fatalf("failed reading invitation status: %v", err)
+		}
+		if inviteStatus != "pending" {
+			t.Fatalf("expected invitation status pending after rollback, got %q", inviteStatus)
 		}
 	})
 
@@ -695,7 +738,6 @@ func setupServiceTestDB(t *testing.T) *gorm.DB {
 			avatar_url TEXT,
 			organization_id TEXT,
 			department_id TEXT,
-			role_id TEXT,
 			job_title TEXT,
 			is_admin BOOLEAN DEFAULT 0,
 			preferences TEXT,
@@ -711,6 +753,7 @@ func setupServiceTestDB(t *testing.T) *gorm.DB {
 			name TEXT NOT NULL,
 			organization_id TEXT NOT NULL,
 			description TEXT,
+			created_by_user_id TEXT,
 			created_at DATETIME,
 			updated_at DATETIME,
 			UNIQUE(name, organization_id)
@@ -722,10 +765,23 @@ func setupServiceTestDB(t *testing.T) *gorm.DB {
 			name TEXT NOT NULL,
 			description TEXT,
 			organization_id TEXT,
+			created_by_user_id TEXT,
 			permissions TEXT,
 			is_system_role BOOLEAN DEFAULT 0,
 			created_at DATETIME,
 			updated_at DATETIME
+		)
+		`,
+		`
+		CREATE TABLE user_role_memberships (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			role_id TEXT NOT NULL,
+			assigned_by TEXT,
+			created_at DATETIME,
+			updated_at DATETIME,
+			UNIQUE(organization_id, user_id, role_id)
 		)
 		`,
 		`
@@ -737,6 +793,7 @@ func setupServiceTestDB(t *testing.T) *gorm.DB {
 			first_name TEXT,
 			last_name TEXT,
 			role_name TEXT,
+			role_names TEXT,
 			job_title TEXT,
 			token TEXT NOT NULL UNIQUE,
 			status TEXT NOT NULL DEFAULT 'pending',

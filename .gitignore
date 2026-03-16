@@ -1,0 +1,44 @@
+.vscode/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node / Next.js
+node_modules/
+Frontend/node_modules/
+Frontend/.next/
+Frontend/out/
+Frontend/.turbo/
+Frontend/coverage/
+
+# TypeScript
+*.tsbuildinfo
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+
+# Build artifacts
+dist/
+build/
+tmp/
+temp/

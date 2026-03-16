@@ -34,6 +34,11 @@ func TestTableNames(t *testing.T) {
 			tableName: "roles",
 		},
 		{
+			name:      "user role memberships",
+			model:     UserRoleMembership{},
+			tableName: "user_role_memberships",
+		},
+		{
 			name:      "permissions",
 			model:     Permission{},
 			tableName: "permissions",

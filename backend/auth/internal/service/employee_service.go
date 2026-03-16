@@ -13,6 +13,7 @@ import (
 )
 
 var ErrDuplicateDepartment = errors.New("duplicate department")
+var ErrDuplicateRole = errors.New("duplicate role")
 
 // EmployeeService handles department, employee, and invitation operations.
 type EmployeeService struct {
@@ -25,11 +26,17 @@ func NewEmployeeService(db *gorm.DB, clerkSecretKey string) *EmployeeService {
 	return &EmployeeService{db: db, clerkSecretKey: clerkSecretKey}
 }
 
-func (s *EmployeeService) CreateDepartment(orgID, name, description string) (*models.Department, error) {
+func (s *EmployeeService) CreateDepartment(orgID, name, description, createdBy string) (*models.Department, error) {
+	trimmedName := normalizeName(name)
+	if trimmedName == "" {
+		return nil, fmt.Errorf("department name is required")
+	}
+	normalizedNameKey := normalizeNameKey(trimmedName)
+
 	var existing models.Department
-	err := s.db.Where("name = ? AND organization_id = ?", name, orgID).First(&existing).Error
+	err := s.db.Where("organization_id = ? AND lower(trim(name)) = ?", orgID, normalizedNameKey).First(&existing).Error
 	if err == nil {
-		return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, name)
+		return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, trimmedName)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("failed to check existing department: %w", err)
@@ -37,15 +44,18 @@ func (s *EmployeeService) CreateDepartment(orgID, name, description string) (*mo
 
 	dept := models.Department{
 		OrganizationID: orgID,
-		Name:           name,
+		Name:           trimmedName,
 		Description:    description,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
+	if createdBy != "" {
+		dept.CreatedByUserID = &createdBy
+	}
 	if err := s.db.Create(&dept).Error; err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, name)
+			return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, trimmedName)
 		}
 		return nil, fmt.Errorf("failed to create department: %w", err)
 	}
@@ -67,7 +77,6 @@ func (s *EmployeeService) ListEmployees(orgID string) ([]models.User, error) {
 	err := s.db.
 		Where("organization_id = ?", orgID).
 		Preload("Department").
-		Preload("Role").
 		Find(&users).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to list employees: %w", err)

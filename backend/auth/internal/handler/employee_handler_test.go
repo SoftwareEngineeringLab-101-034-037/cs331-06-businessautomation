@@ -54,6 +54,50 @@ func TestCreateDepartmentCreatedThenConflict(t *testing.T) {
 	}
 }
 
+func TestCreateDepartmentAttributesCreatedByUserID(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	body := `{"name":"Finance","description":"Finance team"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/orgs/org_1/departments", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", "user_admin")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed unmarshalling response: %v", err)
+	}
+	if resp["created_by_user_id"] != "user_admin" {
+		t.Fatalf("expected created_by_user_id user_admin, got %v", resp["created_by_user_id"])
+	}
+
+	var stored struct {
+		CreatedByUserID *string `gorm:"column:created_by_user_id"`
+	}
+	if err := db.Table("departments").Select("created_by_user_id").Where("name = ? AND organization_id = ?", "Finance", "org_1").Take(&stored).Error; err != nil {
+		t.Fatalf("failed reading stored department: %v", err)
+	}
+	if stored.CreatedByUserID == nil || *stored.CreatedByUserID != "user_admin" {
+		t.Fatalf("expected stored created_by_user_id user_admin, got %v", stored.CreatedByUserID)
+	}
+
+	// Duplicate should still return conflict
+	req2 := httptest.NewRequest(http.MethodPost, "/api/orgs/org_1/departments", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-User-ID", "user_admin")
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusConflict {
+		t.Fatalf("expected status 409, got %d; body=%s", w2.Code, w2.Body.String())
+	}
+}
+
 func TestListDepartmentsReturnsOrgDepartments(t *testing.T) {
 	h, db := newEmployeeHandlerForTest(t)
 	r := newEmployeeTestRouter(h)
@@ -398,6 +442,306 @@ func TestGetDepartmentSuccessThenNotFound(t *testing.T) {
 	}
 }
 
+func TestUpdateDepartmentSuccess(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	now := time.Now()
+	if err := db.Exec(`
+		INSERT INTO departments (id, name, organization_id, description, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, "dept_1", "Engineering", "org_1", "Core team", now, now).Error; err != nil {
+		t.Fatalf("failed seeding department: %v", err)
+	}
+
+	body := `{"name":"Platform","description":"Updated team"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/orgs/org_1/departments/dept_1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var name string
+	if err := db.Table("departments").Select("name").Where("id = ?", "dept_1").Scan(&name).Error; err != nil {
+		t.Fatalf("failed reading updated department: %v", err)
+	}
+	if name != "Platform" {
+		t.Fatalf("expected updated department name Platform, got %q", name)
+	}
+}
+
+func TestUpdateDepartmentConflict(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	now := time.Now()
+	if err := db.Exec(`
+		INSERT INTO departments (id, name, organization_id, description, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)
+	`,
+		"dept_1", "Engineering", "org_1", "Eng", now, now,
+		"dept_2", "Support", "org_1", "Support", now, now,
+	).Error; err != nil {
+		t.Fatalf("failed seeding departments: %v", err)
+	}
+
+	body := `{"name":"Support","description":"Duplicate name"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/orgs/org_1/departments/dept_1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected status 409, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteDepartmentSuccess(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	now := time.Now()
+	if err := db.Exec(`
+		INSERT INTO departments (id, name, organization_id, description, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, "dept_1", "Engineering", "org_1", "Eng", now, now).Error; err != nil {
+		t.Fatalf("failed seeding department: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/orgs/org_1/departments/dept_1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var count int64
+	if err := db.Table("departments").Where("id = ?", "dept_1").Count(&count).Error; err != nil {
+		t.Fatalf("failed counting departments: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected department to be deleted, remaining rows=%d", count)
+	}
+}
+
+func TestDeleteDepartmentNotFound(t *testing.T) {
+	h, _ := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/orgs/org_1/departments/missing", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteDepartmentWithAssignedEmployeeReturnsBadRequest(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	now := time.Now()
+	if err := db.Exec(`
+		INSERT INTO departments (id, name, organization_id, description, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, "dept_1", "Engineering", "org_1", "Eng", now, now).Error; err != nil {
+		t.Fatalf("failed seeding department: %v", err)
+	}
+
+	if err := db.Exec(`
+		INSERT INTO users (id, email, first_name, last_name, organization_id, department_id, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_1", "one@example.com", "One", "User", "org_1", "dept_1", true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/orgs/org_1/departments/dept_1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateRoleSuccess(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+	now := time.Now()
+
+	if err := db.Exec(`
+		INSERT INTO roles (id, name, description, organization_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, "role_1", "IT", "", "org_1", now, now).Error; err != nil {
+		t.Fatalf("failed seeding role: %v", err)
+	}
+
+	if err := db.Exec(`
+		INSERT INTO users (id, email, first_name, last_name, organization_id, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_1", "one@example.com", "One", "User", "org_1", true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
+
+	body := `{"name":"IT Ops","description":"Updated","member_ids":["user_1"]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/orgs/org_1/roles/role_1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", "user_admin")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var roleName string
+	if err := db.Table("roles").Select("name").Where("id = ?", "role_1").Scan(&roleName).Error; err != nil {
+		t.Fatalf("failed reading role name: %v", err)
+	}
+	if roleName != "IT Ops" {
+		t.Fatalf("expected role name IT Ops, got %q", roleName)
+	}
+}
+
+func TestUpdateRolePreservesNameWhenOmitted(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+	now := time.Now()
+
+	if err := db.Exec(`
+		INSERT INTO roles (id, name, description, organization_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, "role_1", "IT", "Original", "org_1", now, now).Error; err != nil {
+		t.Fatalf("failed seeding role: %v", err)
+	}
+
+	if err := db.Exec(`
+		INSERT INTO users (id, email, first_name, last_name, organization_id, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_1", "one@example.com", "One", "User", "org_1", true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
+
+	body := `{"description":"Updated","member_ids":["user_1"]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/orgs/org_1/roles/role_1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", "user_admin")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var stored struct {
+		Name        string
+		Description string
+	}
+	if err := db.Table("roles").Select("name, description").Where("id = ?", "role_1").Take(&stored).Error; err != nil {
+		t.Fatalf("failed reading role row: %v", err)
+	}
+	if stored.Name != "IT" {
+		t.Fatalf("expected role name to remain IT, got %q", stored.Name)
+	}
+	if stored.Description != "Updated" {
+		t.Fatalf("expected description Updated, got %q", stored.Description)
+	}
+
+	var membershipCount int64
+	if err := db.Table("user_role_memberships").Where("organization_id = ? AND role_id = ? AND user_id = ?", "org_1", "role_1", "user_1").Count(&membershipCount).Error; err != nil {
+		t.Fatalf("failed counting memberships: %v", err)
+	}
+	if membershipCount != 1 {
+		t.Fatalf("expected user_1 membership for role_1, got %d", membershipCount)
+	}
+}
+
+func TestUpdateRoleNotFound(t *testing.T) {
+	h, _ := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	body := `{"name":"IT Ops","description":"Updated","member_ids":[]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/orgs/org_1/roles/missing", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", "user_admin")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteRoleSuccessClearsMemberships(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+	now := time.Now()
+
+	if err := db.Exec(`
+		INSERT INTO roles (id, name, description, organization_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, "role_1", "IT", "", "org_1", now, now).Error; err != nil {
+		t.Fatalf("failed seeding role: %v", err)
+	}
+
+	if err := db.Exec(`
+		INSERT INTO users (id, email, first_name, last_name, organization_id, role_id, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_1", "one@example.com", "One", "User", "org_1", "role_1", true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
+
+	if err := db.Exec(`
+		INSERT INTO user_role_memberships (id, organization_id, user_id, role_id, assigned_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, "m_1", "org_1", "user_1", "role_1", "user_admin", now, now).Error; err != nil {
+		t.Fatalf("failed seeding role membership: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/orgs/org_1/roles/role_1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var roleCount int64
+	if err := db.Table("roles").Where("id = ?", "role_1").Count(&roleCount).Error; err != nil {
+		t.Fatalf("failed counting roles: %v", err)
+	}
+	if roleCount != 0 {
+		t.Fatalf("expected role to be deleted, remaining rows=%d", roleCount)
+	}
+
+	var membershipCount int64
+	if err := db.Table("user_role_memberships").Where("role_id = ?", "role_1").Count(&membershipCount).Error; err != nil {
+		t.Fatalf("failed counting memberships: %v", err)
+	}
+	if membershipCount != 0 {
+		t.Fatalf("expected memberships to be deleted, remaining rows=%d", membershipCount)
+	}
+
+}
+
+func TestDeleteRoleNotFound(t *testing.T) {
+	h, _ := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/orgs/org_1/roles/missing", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
 func newEmployeeHandlerForTest(t *testing.T) (*EmployeeHandler, *gorm.DB) {
 	t.Helper()
 	db := setupEmployeeHandlerTestDB(t)
@@ -417,11 +761,17 @@ func newEmployeeTestRouter(h *EmployeeHandler) *gin.Engine {
 
 	r.POST("/api/orgs/:orgId/departments", h.CreateDepartment)
 	r.GET("/api/orgs/:orgId/departments", h.ListDepartments)
+	r.PUT("/api/orgs/:orgId/departments/:deptID", h.UpdateDepartment)
+	r.DELETE("/api/orgs/:orgId/departments/:deptID", h.DeleteDepartment)
 	r.POST("/api/orgs/:orgId/employees/invite", h.InviteSingle)
 	r.GET("/api/orgs/:orgId/invitations", h.ListInvitations)
 	r.DELETE("/api/orgs/:orgId/invitations/:invitationId", h.RevokeInvitation)
 	r.POST("/api/orgs/:orgId/employees/invite/bulk", h.InviteBulk)
 	r.GET("/api/orgs/:orgId/employees", h.ListEmployees)
+	r.POST("/api/orgs/:orgId/roles", h.CreateRole)
+	r.GET("/api/orgs/:orgId/roles", h.ListRoles)
+	r.PUT("/api/orgs/:orgId/roles/:roleID", h.UpdateRole)
+	r.DELETE("/api/orgs/:orgId/roles/:roleID", h.DeleteRole)
 	r.GET("/api/orgs/:orgId/departments/:deptID", h.GetDepartment)
 	r.POST("/api/orgs/:orgId/invitations/:invitationId/accept", h.AcceptInvitation)
 	return r
@@ -470,6 +820,7 @@ func setupEmployeeHandlerTestDB(t *testing.T) *gorm.DB {
 			name TEXT NOT NULL,
 			organization_id TEXT NOT NULL,
 			description TEXT,
+			created_by_user_id TEXT,
 			created_at DATETIME,
 			updated_at DATETIME,
 			UNIQUE(name, organization_id)
@@ -481,10 +832,23 @@ func setupEmployeeHandlerTestDB(t *testing.T) *gorm.DB {
 			name TEXT NOT NULL,
 			description TEXT,
 			organization_id TEXT,
+			created_by_user_id TEXT,
 			permissions TEXT,
 			is_system_role BOOLEAN DEFAULT 0,
 			created_at DATETIME,
 			updated_at DATETIME
+		)
+		`,
+		`
+		CREATE TABLE user_role_memberships (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			role_id TEXT NOT NULL,
+			assigned_by TEXT,
+			created_at DATETIME,
+			updated_at DATETIME,
+			UNIQUE(organization_id, user_id, role_id)
 		)
 		`,
 		`
@@ -496,6 +860,7 @@ func setupEmployeeHandlerTestDB(t *testing.T) *gorm.DB {
 			first_name TEXT,
 			last_name TEXT,
 			role_name TEXT,
+			role_names TEXT,
 			job_title TEXT,
 			token TEXT NOT NULL UNIQUE,
 			status TEXT NOT NULL DEFAULT 'pending',

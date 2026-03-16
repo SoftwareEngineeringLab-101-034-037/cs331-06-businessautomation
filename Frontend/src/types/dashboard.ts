@@ -1,11 +1,9 @@
 // ─── Role System ───────────────────────────────────────────────
-export type UserRole = "org_admin" | "admin" | "employee" | "analyst";
+export type UserRole = "admin" | "employee";
 
 export const ROLE_LABELS: Record<UserRole, string> = {
-  org_admin: "Organisation Admin",
   admin: "Admin",
   employee: "Employee",
-  analyst: "Analyst",
 };
 
 // ─── Task Types ────────────────────────────────────────────────
@@ -168,36 +166,36 @@ export const DASHBOARD_NAV: NavItem[] = [
     label: "Overview",
     href: "/dashboard",
     icon: "home",
-    roles: ["org_admin", "admin", "employee", "analyst"],
+    roles: ["admin", "employee"],
   },
   {
     label: "My Tasks",
     href: "/dashboard/tasks",
     icon: "tasks",
-    roles: ["org_admin", "admin", "employee"],
+    roles: ["admin", "employee"],
   },
   {
     label: "Requests",
     href: "/dashboard/requests",
     icon: "requests",
-    roles: ["org_admin", "admin", "employee"],
+    roles: ["admin", "employee"],
   },
   {
     label: "Workstation",
     href: "/dashboard/workstation",
     icon: "workstation",
-    roles: ["org_admin", "admin"],
+    roles: ["admin"],
   },
   {
     label: "Analytics",
     href: "/dashboard/analytics",
     icon: "analytics",
-    roles: ["org_admin", "admin", "analyst"],
+    roles: ["admin"],
   },
   {
     label: "Team",
     href: "/dashboard/team",
     icon: "team",
-    roles: ["org_admin", "admin"],
+    roles: ["admin"],
   },
 ];

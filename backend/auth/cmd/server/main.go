@@ -34,7 +34,7 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	// Run migrations (optional via startup flag)
+	// Run migrations by default so workflow-role membership support is always available.
 	if *runMigrations {
 		if err := database.Migrate(); err != nil {
 			log.Fatalf("Failed to run migrations: %v", err)
@@ -91,6 +91,12 @@ func main() {
 			orgApi.POST("/departments", employeeHandler.CreateDepartment)
 			orgApi.GET("/departments", employeeHandler.ListDepartments)
 			orgApi.GET("/departments/:deptID", employeeHandler.GetDepartment)
+			orgApi.PUT("/departments/:deptID", employeeHandler.UpdateDepartment)
+			orgApi.DELETE("/departments/:deptID", employeeHandler.DeleteDepartment)
+			orgApi.POST("/roles", employeeHandler.CreateRole)
+			orgApi.GET("/roles", employeeHandler.ListRoles)
+			orgApi.PUT("/roles/:roleID", employeeHandler.UpdateRole)
+			orgApi.DELETE("/roles/:roleID", employeeHandler.DeleteRole)
 			orgApi.POST("/employees/invite", employeeHandler.InviteSingle)
 			orgApi.POST("/employees/invite/bulk", employeeHandler.InviteBulk)
 			orgApi.GET("/employees", employeeHandler.ListEmployees)

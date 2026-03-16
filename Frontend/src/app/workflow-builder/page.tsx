@@ -22,9 +22,21 @@ import type {
   NodeType,
 } from "@/types/workflow";
 import { createBlankStep, generateStepId, NODE_TYPE_CONFIG } from "@/types/workflow";
-import { MOCK_DEPARTMENTS } from "@/lib/mock-data";
 
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
+const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
+
+interface BackendDepartment {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+interface BackendRole {
+  id: string;
+  name: string;
+  description?: string;
+}
 
 /* ── Initial draft ── */
 const INITIAL_STEPS: WorkflowStep[] = [
@@ -92,6 +104,8 @@ export default function WorkflowBuilderPage() {
   const [publishErrors, setPublishErrors] = useState<string[]>([]);
   const [showDetailsDialog, setShowDetailsDialog] = useState(true);
   const [detailsSidebarOpen, setDetailsSidebarOpen] = useState(false);
+  const [departments, setDepartments] = useState<BackendDepartment[]>([]);
+  const [roles, setRoles] = useState<BackendRole[]>([]);
 
   /* ── Editing existing workflow (via ?id=) ── */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -167,6 +181,44 @@ export default function WorkflowBuilderPage() {
 
     return () => { cancelled = true; };
   }, [searchParams, showToast, authFetch, orgApiBase]);
+
+  useEffect(() => {
+    if (!organization?.id) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const token = await getToken();
+        const [deptsRes, rolesRes] = await Promise.all([
+          fetch(`${AUTH_API}/api/orgs/${organization.id}/departments`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`${AUTH_API}/api/orgs/${organization.id}/roles`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
+
+        if (!cancelled && deptsRes.ok) {
+          const deptsData = await deptsRes.json();
+          setDepartments(Array.isArray(deptsData) ? deptsData : []);
+        }
+
+        if (!cancelled && rolesRes.ok) {
+          const rolesData = await rolesRes.json();
+          setRoles(Array.isArray(rolesData) ? rolesData : []);
+        }
+      } catch {
+        if (!cancelled) {
+          setDepartments([]);
+          setRoles([]);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [organization?.id, getToken]);
 
   /* Dialog form local state */
   const [dlgName, setDlgName] = useState("");
@@ -798,7 +850,7 @@ export default function WorkflowBuilderPage() {
   return (
     <>
     <RoleGate
-      allowed={["org_admin", "admin"]}
+      allowed={["admin"]}
       fallback={
         <div className="wfb-fullscreen">
           <div className="wfb-access-denied">
@@ -851,7 +903,7 @@ export default function WorkflowBuilderPage() {
                   onChange={(e) => setDlgDept(e.target.value)}
                 >
                   <option value="">Select department...</option>
-                  {MOCK_DEPARTMENTS.map((d) => (
+                  {departments.map((d) => (
                     <option key={d.id} value={d.name}>
                       {d.name}
                     </option>
@@ -1095,7 +1147,7 @@ export default function WorkflowBuilderPage() {
                   <label className="wf-field-label">Department</label>
                   <select className="wf-select" value={draft.department} onChange={(e) => setDraft((d) => ({ ...d, department: e.target.value }))}>
                     <option value="">Select department...</option>
-                    {MOCK_DEPARTMENTS.map((dep) => (<option key={dep.id} value={dep.name}>{dep.name}</option>))}
+                    {departments.map((dep) => (<option key={dep.id} value={dep.name}>{dep.name}</option>))}
                   </select>
                 </div>
                 <div className="wf-field">
@@ -1171,6 +1223,7 @@ export default function WorkflowBuilderPage() {
                 <StepEditor
                   step={selectedStep}
                   stepIndex={selectedStepIndex}
+                  availableRoles={roles.map((r) => r.name)}
                   onChange={handleStepChange}
                   onClose={handleCloseEditor}
                 />

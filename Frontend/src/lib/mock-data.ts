@@ -300,7 +300,7 @@ export const MOCK_TEAM: TeamMember[] = [
   { id: "tm-3", name: "Amy Liu", email: "amy@flowengine.io", role: "employee", department: "Finance", isActive: true, tasksCompleted: 58, tasksPending: 2, lastActive: "2026-02-16T08:30:00Z" },
   { id: "tm-4", name: "Nina Kapoor", email: "nina@flowengine.io", role: "employee", department: "Marketing", isActive: true, tasksCompleted: 29, tasksPending: 7, lastActive: "2026-02-15T17:00:00Z" },
   { id: "tm-5", name: "Jake Morrison", email: "jake@flowengine.io", role: "employee", department: "DevOps", isActive: false, tasksCompleted: 41, tasksPending: 1, lastActive: "2026-02-14T12:00:00Z" },
-  { id: "tm-6", name: "David Kim", email: "david@flowengine.io", role: "analyst", department: "Legal", isActive: true, tasksCompleted: 23, tasksPending: 4, lastActive: "2026-02-16T10:15:00Z" },
+  { id: "tm-6", name: "David Kim", email: "david@flowengine.io", role: "employee", department: "Legal", isActive: true, tasksCompleted: 23, tasksPending: 4, lastActive: "2026-02-16T10:15:00Z" },
   { id: "tm-7", name: "Lisa Wong", email: "lisa@flowengine.io", role: "employee", department: "Engineering", isActive: true, tasksCompleted: 36, tasksPending: 6, lastActive: "2026-02-16T09:00:00Z" },
   { id: "tm-8", name: "Raj Patel", email: "raj@flowengine.io", role: "employee", department: "Engineering", isActive: true, tasksCompleted: 0, tasksPending: 1, lastActive: "2026-02-16T07:30:00Z" },
 ];

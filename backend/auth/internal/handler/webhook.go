@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	svix "github.com/svix/svix-webhooks/go"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/database"
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
@@ -69,6 +72,19 @@ type ClerkMembershipData struct {
 		UserID string `json:"user_id"`
 	} `json:"public_user_data"`
 }
+
+type queuedReconciliation struct {
+	ID           string
+	UserID       string
+	OrgID        string
+	MembershipID string
+	Reason       string
+	Status       string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+const defaultAdminDepartmentName = "Admin"
 
 // IsAdmin checks if the Clerk membership role is an admin role.
 func (m *ClerkMembershipData) IsAdmin() bool {
@@ -289,10 +305,16 @@ func (h *WebhookHandler) handleOrganizationCreated(data json.RawMessage) error {
 			return err
 		}
 
+		adminDeptID, err := ensureAdminDepartment(tx, clerkOrg.ID, creatorID)
+		if err != nil {
+			return err
+		}
+
 		// Set the creator as an admin of the new org
 		if creatorID != "" {
 			result := tx.Model(&models.User{}).Where("id = ?", creatorID).Updates(map[string]interface{}{
 				"organization_id": clerkOrg.ID,
+				"department_id":   adminDeptID,
 				"is_admin":        true,
 				"updated_at":      time.Now(),
 			})
@@ -342,26 +364,64 @@ func (h *WebhookHandler) handleMembershipCreated(data json.RawMessage) error {
 
 	userID := memberData.PublicUserData.UserID
 	orgID := memberData.Organization.ID
+	isAdmin := memberData.IsAdmin()
 
-	// 1. Update the user's organization and admin status
-	userUpdates := map[string]interface{}{
+	updates := map[string]interface{}{
 		"organization_id": orgID,
-		"is_admin":        memberData.IsAdmin(),
+		"is_admin":        isAdmin,
 		"updated_at":      time.Now(),
 	}
-	result := database.DB.Model(&models.User{}).Where("id = ?", userID).Updates(userUpdates)
-	if result.Error != nil {
-		log.Printf("Error updating user %s with org membership: %v", userID, result.Error)
-		return result.Error
+	if !isAdmin {
+		updates["department_id"] = nil
 	}
-	if result.RowsAffected == 0 {
-		log.Printf("User %s not found for membership linking (user.created webhook may not have arrived yet)", userID)
-		return nil
+
+	if isAdmin {
+		userLinked := false
+		err := database.DB.Transaction(func(tx *gorm.DB) error {
+			adminDeptID, err := ensureAdminDepartment(tx, orgID, userID)
+			if err != nil {
+				return err
+			}
+			updates["department_id"] = adminDeptID
+			result := tx.Model(&models.User{}).Where("id = ?", userID).Updates(updates)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				log.Printf("User %s not found for membership linking (user.created webhook may not have arrived yet)", userID)
+				return nil
+			}
+			userLinked = true
+			return nil
+		})
+		if err != nil {
+			log.Printf("Error updating admin membership for user %s: %v", userID, err)
+			return err
+		}
+		if !userLinked {
+			h.enqueueUserReconciliation(userID, orgID, memberData.ID, "membership_created_user_missing")
+			return nil
+		}
+	} else {
+		result := database.DB.Model(&models.User{}).Where("id = ?", userID).Updates(updates)
+		if result.Error != nil {
+			log.Printf("Error updating user %s with org membership: %v", userID, result.Error)
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			log.Printf("User %s not found for membership linking (user.created webhook may not have arrived yet)", userID)
+			h.enqueueUserReconciliation(userID, orgID, memberData.ID, "membership_created_user_missing")
+			return nil
+		}
 	}
 
 	// 2. Look up user's email to match against pending invitations
 	var user models.User
 	if err := database.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			h.enqueueUserReconciliation(userID, orgID, memberData.ID, "membership_created_user_lookup_missing")
+			return nil
+		}
 		log.Printf("User %s not found for invitation matching: %v", userID, err)
 		return nil
 	}
@@ -373,7 +433,7 @@ func (h *WebhookHandler) handleMembershipCreated(data json.RawMessage) error {
 		}
 	}
 
-	log.Printf("Membership created: user %s joined org %s (is_admin=%v)", userID, orgID, memberData.IsAdmin())
+	log.Printf("Membership created: user %s joined org %s (is_admin=%v)", userID, orgID, isAdmin)
 	return nil
 }
 
@@ -407,14 +467,35 @@ func (h *WebhookHandler) handleInvitationAccepted(data json.RawMessage) error {
 
 	// Set the user's organization and admin status
 	isAdmin := invData.Role == "org:admin" || invData.Role == "admin"
-	userUpdates := map[string]interface{}{
-		"organization_id": orgID,
-		"is_admin":        isAdmin,
-		"updated_at":      time.Now(),
-	}
-	if err := database.DB.Model(&models.User{}).Where("id = ?", user.ID).Updates(userUpdates).Error; err != nil {
-		log.Printf("Error updating user %s with org: %v", user.ID, err)
-		return err
+	if isAdmin {
+		err := database.DB.Transaction(func(tx *gorm.DB) error {
+			adminDeptID, err := ensureAdminDepartment(tx, orgID, user.ID)
+			if err != nil {
+				return err
+			}
+			updates := map[string]interface{}{
+				"organization_id": orgID,
+				"department_id":   adminDeptID,
+				"is_admin":        true,
+				"updated_at":      time.Now(),
+			}
+			return tx.Model(&models.User{}).Where("id = ?", user.ID).Updates(updates).Error
+		})
+		if err != nil {
+			log.Printf("Error updating admin invitation acceptance for user %s: %v", user.ID, err)
+			return err
+		}
+	} else {
+		updates := map[string]interface{}{
+			"organization_id": orgID,
+			"department_id":   nil,
+			"is_admin":        false,
+			"updated_at":      time.Now(),
+		}
+		if err := database.DB.Model(&models.User{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
+			log.Printf("Error updating user %s with org: %v", user.ID, err)
+			return err
+		}
 	}
 
 	// Auto-accept matching local employee invitation
@@ -433,4 +514,80 @@ func getString(m map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
+}
+
+func (h *WebhookHandler) enqueueUserReconciliation(userID, orgID, membershipID, reason string) {
+	if database.DB == nil || userID == "" || orgID == "" {
+		return
+	}
+
+	if err := database.DB.Exec(`
+		CREATE TABLE IF NOT EXISTS webhook_user_reconciliation_jobs (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			org_id TEXT NOT NULL,
+			membership_id TEXT,
+			reason TEXT NOT NULL,
+			status TEXT NOT NULL,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
+			UNIQUE(user_id, org_id, membership_id)
+		)
+	`).Error; err != nil {
+		log.Printf("Failed to create reconciliation job table: %v", err)
+		return
+	}
+
+	now := time.Now()
+	job := queuedReconciliation{
+		ID:           fmt.Sprintf("recon_%d", now.UnixNano()),
+		UserID:       userID,
+		OrgID:        orgID,
+		MembershipID: membershipID,
+		Reason:       reason,
+		Status:       "pending",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	if err := database.DB.Exec(`
+		INSERT INTO webhook_user_reconciliation_jobs
+			(id, user_id, org_id, membership_id, reason, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, org_id, membership_id) DO NOTHING
+	`, job.ID, job.UserID, job.OrgID, job.MembershipID, job.Reason, job.Status, job.CreatedAt, job.UpdatedAt).Error; err != nil {
+		log.Printf("Failed to enqueue reconciliation for user %s in org %s: %v", userID, orgID, err)
+		return
+	}
+
+	log.Printf("Queued user reconciliation: user=%s org=%s membership=%s reason=%s", userID, orgID, membershipID, reason)
+}
+
+func ensureAdminDepartment(tx *gorm.DB, orgID, createdBy string) (string, error) {
+	var department models.Department
+	err := tx.Where("organization_id = ? AND name = ?", orgID, defaultAdminDepartmentName).First(&department).Error
+	if err == nil {
+		return department.ID, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", err
+	}
+
+	department = models.Department{
+		OrganizationID: orgID,
+		Name:           defaultAdminDepartmentName,
+		Description:    "Special executive/admin bucket for members not assigned to a functional department.",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	if createdBy != "" {
+		department.CreatedByUserID = &createdBy
+	}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&department).Error; err != nil {
+		return "", err
+	}
+	if err := tx.Where("organization_id = ? AND name = ?", orgID, defaultAdminDepartmentName).First(&department).Error; err != nil {
+		return "", err
+	}
+	return department.ID, nil
 }

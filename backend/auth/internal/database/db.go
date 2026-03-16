@@ -28,6 +28,8 @@ var runAutoMigrate = func(db *gorm.DB) error {
 		&models.Organization{},
 		&models.OrganizationSettings{},
 		&models.Department{},
+		&models.Role{},
+		&models.UserRoleMembership{},
 		&models.EmployeeInvitation{},
 	)
 }

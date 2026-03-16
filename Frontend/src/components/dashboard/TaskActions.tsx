@@ -20,7 +20,7 @@ export default function TaskActions({ task, onAction }: TaskActionsProps) {
   const canSendBack = ["pending", "in_progress"].includes(task.status);
   const canCancel = ["pending", "in_progress", "sent_back"].includes(task.status);
   const canReopen = ["cancelled", "completed"].includes(task.status);
-  const canReassign = ["org_admin", "admin"].includes(role) && !["completed", "cancelled"].includes(task.status);
+  const canReassign = role === "admin" && !["completed", "cancelled"].includes(task.status);
   const canStartProgress = task.status === "pending";
 
   return (
