@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/service"
 	"github.com/gin-gonic/gin"
@@ -26,7 +27,7 @@ func (h *EmployeeHandler) CreateDepartment(c *gin.Context) {
 		Description string `json:"description"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Name is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	dept, err := h.Service.CreateDepartment(orgID, body.Name, body.Description, userID)
@@ -75,7 +76,7 @@ func (h *EmployeeHandler) UpdateDepartment(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		default:
 			log.Printf("UpdateDepartment error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		}
 		return
 	}
@@ -90,8 +91,11 @@ func (h *EmployeeHandler) DeleteDepartment(c *gin.Context) {
 		switch {
 		case errors.Is(err, service.ErrNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		default:
+		case strings.Contains(err.Error(), "still has"):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			log.Printf("DeleteDepartment error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		}
 		return
 	}
@@ -146,12 +150,12 @@ func (h *EmployeeHandler) UpdateRole(c *gin.Context) {
 	roleID := c.Param("roleID")
 	userID := c.GetString("user_id")
 	var body struct {
-		Name        string   `json:"name" binding:"required"`
+		Name        string   `json:"name"`
 		Description string   `json:"description"`
 		MemberIDs   []string `json:"member_ids"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Name is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	role, err := h.Service.UpdateRole(orgID, roleID, body.Name, body.Description, userID, body.MemberIDs)
@@ -163,7 +167,7 @@ func (h *EmployeeHandler) UpdateRole(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		default:
 			log.Printf("UpdateRole error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		}
 		return
 	}
@@ -179,7 +183,8 @@ func (h *EmployeeHandler) DeleteRole(c *gin.Context) {
 		case errors.Is(err, service.ErrNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			log.Printf("DeleteRole error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		}
 		return
 	}
@@ -255,7 +260,8 @@ func (h *EmployeeHandler) RevokeInvitation(c *gin.Context) {
 		if errors.Is(err, service.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Printf("RevokeInvitation error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		}
 		return
 	}

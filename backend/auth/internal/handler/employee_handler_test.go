@@ -608,6 +608,59 @@ func TestUpdateRoleSuccess(t *testing.T) {
 	}
 }
 
+func TestUpdateRolePreservesNameWhenOmitted(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+	now := time.Now()
+
+	if err := db.Exec(`
+		INSERT INTO roles (id, name, description, organization_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, "role_1", "IT", "Original", "org_1", now, now).Error; err != nil {
+		t.Fatalf("failed seeding role: %v", err)
+	}
+
+	if err := db.Exec(`
+		INSERT INTO users (id, email, first_name, last_name, organization_id, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_1", "one@example.com", "One", "User", "org_1", true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
+
+	body := `{"description":"Updated","member_ids":["user_1"]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/orgs/org_1/roles/role_1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", "user_admin")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var stored struct {
+		Name        string
+		Description string
+	}
+	if err := db.Table("roles").Select("name, description").Where("id = ?", "role_1").Take(&stored).Error; err != nil {
+		t.Fatalf("failed reading role row: %v", err)
+	}
+	if stored.Name != "IT" {
+		t.Fatalf("expected role name to remain IT, got %q", stored.Name)
+	}
+	if stored.Description != "Updated" {
+		t.Fatalf("expected description Updated, got %q", stored.Description)
+	}
+
+	var membershipCount int64
+	if err := db.Table("user_role_memberships").Where("organization_id = ? AND role_id = ? AND user_id = ?", "org_1", "role_1", "user_1").Count(&membershipCount).Error; err != nil {
+		t.Fatalf("failed counting memberships: %v", err)
+	}
+	if membershipCount != 1 {
+		t.Fatalf("expected user_1 membership for role_1, got %d", membershipCount)
+	}
+}
+
 func TestUpdateRoleNotFound(t *testing.T) {
 	h, _ := newEmployeeHandlerForTest(t)
 	r := newEmployeeTestRouter(h)
