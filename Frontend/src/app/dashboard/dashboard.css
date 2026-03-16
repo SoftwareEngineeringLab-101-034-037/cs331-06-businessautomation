@@ -2939,7 +2939,7 @@
   margin: 0;
   font-size: 0.88rem;
   color: var(--text-secondary);
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .employee-drawer-badges {
@@ -6298,7 +6298,7 @@
   font-weight: 700;
   color: #1e293b;
   line-height: 1.3;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .rf-node-desc {

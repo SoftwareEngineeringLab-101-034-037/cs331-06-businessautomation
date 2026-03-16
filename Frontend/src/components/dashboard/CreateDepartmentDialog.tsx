@@ -96,8 +96,10 @@ export default function CreateDepartmentDialog({ isOpen, onClose, onCreated, ini
                 }
             } else {
                 setSuccess(`Department "${data.name || name}" ${initialDepartment ? "updated" : "created"} successfully!`);
-                setName("");
-                setDescription("");
+                if (!initialDepartment) {
+                    setName("");
+                    setDescription("");
+                }
                 onCreated?.();
             }
         } catch {

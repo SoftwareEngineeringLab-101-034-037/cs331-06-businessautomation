@@ -106,8 +106,8 @@ export default function InviteDialog({ isOpen, onClose }: InviteDialogProps) {
           const data = await rolesRes.json();
           setRoles(Array.isArray(data) ? data : []);
         }
-      } catch {
-        // Silently fail — user can still type
+      } catch (err) {
+        console.warn('InviteDialog: failed to load departments/roles', err)
       } finally {
         setDeptsLoading(false);
         setRolesLoading(false);

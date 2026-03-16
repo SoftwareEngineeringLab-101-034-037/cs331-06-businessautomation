@@ -122,9 +122,11 @@ export default function CreateRoleDialog({ isOpen, onClose, onCreated, employees
         }
       } else {
         setSuccess(`Role "${data.name || name}" ${initialRole ? "updated" : "created"} successfully!`);
-        setName("");
-        setDescription("");
-        setSelectedMemberIDs([]);
+        if (!initialRole) {
+          setName("");
+          setDescription("");
+          setSelectedMemberIDs([]);
+        }
         onCreated?.();
       }
     } catch {
