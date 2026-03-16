@@ -495,11 +495,10 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 
 		var user struct {
 			DepartmentID *string `gorm:"column:department_id"`
-			RoleID       *string `gorm:"column:role_id"`
 			JobTitle     string  `gorm:"column:job_title"`
 		}
 		if err := db.Table("users").
-			Select("department_id, role_id, job_title").
+			Select("department_id, job_title").
 			Where("id = ?", "user_1").
 			Take(&user).Error; err != nil {
 			t.Fatalf("failed reading user: %v", err)
@@ -507,11 +506,15 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 		if user.DepartmentID == nil || *user.DepartmentID != "dept_1" {
 			t.Fatalf("expected department_id dept_1, got %+v", user.DepartmentID)
 		}
-		if user.RoleID == nil || *user.RoleID != "role_1" {
-			t.Fatalf("expected role_id role_1, got %+v", user.RoleID)
-		}
 		if user.JobTitle != "Senior Analyst" {
 			t.Fatalf("expected job title update, got %q", user.JobTitle)
+		}
+		var membershipCount int64
+		if err := db.Table("user_role_memberships").Where("user_id = ? AND role_id = ?", "user_1", "role_1").Count(&membershipCount).Error; err != nil {
+			t.Fatalf("failed counting memberships: %v", err)
+		}
+		if membershipCount != 1 {
+			t.Fatalf("expected 1 role membership for user_1/role_1, got %d", membershipCount)
 		}
 	})
 
@@ -541,12 +544,12 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 			t.Fatalf("expected no error, got %v", err)
 		}
 
-		var roleID *string
-		if err := db.Table("users").Select("role_id").Where("id = ?", "user_2").Scan(&roleID).Error; err != nil {
-			t.Fatalf("failed reading user role_id: %v", err)
+		var membershipCount int64
+		if err := db.Table("user_role_memberships").Where("user_id = ?", "user_2").Count(&membershipCount).Error; err != nil {
+			t.Fatalf("failed counting memberships: %v", err)
 		}
-		if roleID != nil {
-			t.Fatalf("expected role_id to remain nil, got %v", *roleID)
+		if membershipCount != 0 {
+			t.Fatalf("expected no role membership for user_2, got %d", membershipCount)
 		}
 	})
 
@@ -695,7 +698,6 @@ func setupServiceTestDB(t *testing.T) *gorm.DB {
 			avatar_url TEXT,
 			organization_id TEXT,
 			department_id TEXT,
-			role_id TEXT,
 			job_title TEXT,
 			is_admin BOOLEAN DEFAULT 0,
 			preferences TEXT,
@@ -711,6 +713,7 @@ func setupServiceTestDB(t *testing.T) *gorm.DB {
 			name TEXT NOT NULL,
 			organization_id TEXT NOT NULL,
 			description TEXT,
+			created_by_user_id TEXT,
 			created_at DATETIME,
 			updated_at DATETIME,
 			UNIQUE(name, organization_id)
@@ -722,10 +725,23 @@ func setupServiceTestDB(t *testing.T) *gorm.DB {
 			name TEXT NOT NULL,
 			description TEXT,
 			organization_id TEXT,
+			created_by_user_id TEXT,
 			permissions TEXT,
 			is_system_role BOOLEAN DEFAULT 0,
 			created_at DATETIME,
 			updated_at DATETIME
+		)
+		`,
+		`
+		CREATE TABLE user_role_memberships (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			role_id TEXT NOT NULL,
+			assigned_by TEXT,
+			created_at DATETIME,
+			updated_at DATETIME,
+			UNIQUE(organization_id, user_id, role_id)
 		)
 		`,
 		`
@@ -737,6 +753,7 @@ func setupServiceTestDB(t *testing.T) *gorm.DB {
 			first_name TEXT,
 			last_name TEXT,
 			role_name TEXT,
+			role_names TEXT,
 			job_title TEXT,
 			token TEXT NOT NULL UNIQUE,
 			status TEXT NOT NULL DEFAULT 'pending',

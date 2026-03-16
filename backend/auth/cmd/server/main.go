@@ -20,7 +20,7 @@ import (
 )
 
 func main() {
-	runMigrations := flag.Bool("migrate", true, "run database migrations on startup")
+	runMigrations := flag.Bool("migrate", false, "run database migrations on startup")
 	flag.Parse()
 
 	//Load env vars

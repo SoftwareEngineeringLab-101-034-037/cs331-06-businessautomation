@@ -257,14 +257,18 @@ func TestHandleOrganizationCreatedCreatesOrgAndSettings(t *testing.T) {
 	}
 
 	var dept struct {
-		ID   string
-		Name string
+		ID              string
+		Name            string
+		CreatedByUserID string `gorm:"column:created_by_user_id"`
 	}
-	if err := db.Table("departments").Select("id, name").Where("organization_id = ?", "org_1").Take(&dept).Error; err != nil {
+	if err := db.Table("departments").Select("id, name, created_by_user_id").Where("organization_id = ?", "org_1").Take(&dept).Error; err != nil {
 		t.Fatalf("expected admin department row, got error: %v", err)
 	}
 	if dept.Name != "Admin" {
 		t.Fatalf("expected default admin department, got %q", dept.Name)
+	}
+	if dept.CreatedByUserID != "user_admin" {
+		t.Fatalf("expected department created_by_user_id user_admin, got %q", dept.CreatedByUserID)
 	}
 
 	var creator struct {

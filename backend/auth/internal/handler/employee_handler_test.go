@@ -54,6 +54,50 @@ func TestCreateDepartmentCreatedThenConflict(t *testing.T) {
 	}
 }
 
+func TestCreateDepartmentAttributesCreatedByUserID(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	body := `{"name":"Finance","description":"Finance team"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/orgs/org_1/departments", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", "user_admin")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed unmarshalling response: %v", err)
+	}
+	if resp["created_by_user_id"] != "user_admin" {
+		t.Fatalf("expected created_by_user_id user_admin, got %v", resp["created_by_user_id"])
+	}
+
+	var stored struct {
+		CreatedByUserID *string `gorm:"column:created_by_user_id"`
+	}
+	if err := db.Table("departments").Select("created_by_user_id").Where("name = ? AND organization_id = ?", "Finance", "org_1").Take(&stored).Error; err != nil {
+		t.Fatalf("failed reading stored department: %v", err)
+	}
+	if stored.CreatedByUserID == nil || *stored.CreatedByUserID != "user_admin" {
+		t.Fatalf("expected stored created_by_user_id user_admin, got %v", stored.CreatedByUserID)
+	}
+
+	// Duplicate should still return conflict
+	req2 := httptest.NewRequest(http.MethodPost, "/api/orgs/org_1/departments", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-User-ID", "user_admin")
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusConflict {
+		t.Fatalf("expected status 409, got %d; body=%s", w2.Code, w2.Body.String())
+	}
+}
+
 func TestListDepartmentsReturnsOrgDepartments(t *testing.T) {
 	h, db := newEmployeeHandlerForTest(t)
 	r := newEmployeeTestRouter(h)
@@ -580,7 +624,7 @@ func TestUpdateRoleNotFound(t *testing.T) {
 	}
 }
 
-func TestDeleteRoleSuccessClearsMembershipsAndLegacyRole(t *testing.T) {
+func TestDeleteRoleSuccessClearsMemberships(t *testing.T) {
 	h, db := newEmployeeHandlerForTest(t)
 	r := newEmployeeTestRouter(h)
 	now := time.Now()
@@ -630,13 +674,6 @@ func TestDeleteRoleSuccessClearsMembershipsAndLegacyRole(t *testing.T) {
 		t.Fatalf("expected memberships to be deleted, remaining rows=%d", membershipCount)
 	}
 
-	var userRoleID *string
-	if err := db.Table("users").Select("role_id").Where("id = ?", "user_1").Scan(&userRoleID).Error; err != nil {
-		t.Fatalf("failed reading user role_id: %v", err)
-	}
-	if userRoleID != nil {
-		t.Fatalf("expected user role_id to be cleared, got %q", *userRoleID)
-	}
 }
 
 func TestDeleteRoleNotFound(t *testing.T) {

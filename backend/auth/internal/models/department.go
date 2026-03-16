@@ -10,8 +10,6 @@ type Department struct {
 	CreatedByUserID *string   `gorm:"index" json:"created_by_user_id,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
-
-	CreatedBy *User `gorm:"foreignKey:CreatedByUserID" json:"created_by,omitempty"`
 }
 
 func (Department) TableName() string {

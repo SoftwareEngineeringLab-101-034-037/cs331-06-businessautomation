@@ -493,7 +493,7 @@ func ensureAdminDepartment(tx *gorm.DB, orgID, createdBy string) (string, error)
 	if err == nil {
 		return department.ID, nil
 	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", err
 	}
 

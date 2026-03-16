@@ -17,8 +17,8 @@ type UserRoleMembership struct {
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 
-	User User `gorm:"foreignKey:UserID" json:"user,omitempty"`
-	Role Role `gorm:"foreignKey:RoleID" json:"role,omitempty"`
+	User *User `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	Role *Role `gorm:"foreignKey:RoleID" json:"role,omitempty"`
 }
 
 func (UserRoleMembership) TableName() string {

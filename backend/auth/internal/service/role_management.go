@@ -80,9 +80,7 @@ func uniqueStrings(values []string) []string {
 	return result
 }
 
-func hasUserRoleMembershipsTable(tx *gorm.DB) bool {
-	return tx.Migrator().HasTable(&models.UserRoleMembership{})
-}
+
 
 func (s *EmployeeService) CreateRole(orgID, name, description, createdBy string, memberIDs []string) (*models.Role, error) {
 	var existing models.Role
@@ -140,15 +138,6 @@ func (s *EmployeeService) addUsersToRole(tx *gorm.DB, orgID, roleID, assignedBy 
 		return fmt.Errorf("one or more selected users do not belong to this organization")
 	}
 
-	if !hasUserRoleMembershipsTable(tx) {
-		if err := tx.Model(&models.User{}).
-			Where("organization_id = ? AND id IN ?", orgID, memberIDs).
-			Updates(map[string]interface{}{"role_id": roleID, "updated_at": time.Now()}).Error; err != nil {
-			return fmt.Errorf("failed to assign users to role via legacy role_id: %w", err)
-		}
-		return nil
-	}
-
 	memberships := make([]models.UserRoleMembership, 0, len(users))
 	for _, user := range users {
 		membership := models.UserRoleMembership{
@@ -188,16 +177,6 @@ func (s *EmployeeService) AssignRoleNamesToUser(tx *gorm.DB, orgID, userID, assi
 		return nil
 	}
 
-	if !hasUserRoleMembershipsTable(tx) {
-		// Legacy schema supports only one role pointer on users.
-		if err := tx.Model(&models.User{}).
-			Where("organization_id = ? AND id = ?", orgID, userID).
-			Updates(map[string]interface{}{"role_id": roles[0].ID, "updated_at": time.Now()}).Error; err != nil {
-			return fmt.Errorf("failed to assign invited role via legacy role_id: %w", err)
-		}
-		return nil
-	}
-
 	memberships := make([]models.UserRoleMembership, 0, len(roles))
 	for _, role := range roles {
 		membership := models.UserRoleMembership{
@@ -230,12 +209,25 @@ func (s *EmployeeService) ListDepartmentSummaries(orgID string) ([]DepartmentSum
 	}
 
 	memberCounts := make(map[string]int64, len(departments))
-	for _, department := range departments {
-		var count int64
-		if err := s.db.Model(&models.User{}).Where("organization_id = ? AND department_id = ?", orgID, department.ID).Count(&count).Error; err != nil {
+	if len(departments) > 0 {
+		deptIDs := make([]string, len(departments))
+		for i, d := range departments {
+			deptIDs[i] = d.ID
+		}
+		var countRows []struct {
+			DepartmentID string `gorm:"column:department_id"`
+			Count        int64  `gorm:"column:count"`
+		}
+		if err := s.db.Model(&models.User{}).
+			Select("department_id, COUNT(*) AS count").
+			Where("organization_id = ? AND department_id IN ?", orgID, deptIDs).
+			Group("department_id").
+			Scan(&countRows).Error; err != nil {
 			return nil, fmt.Errorf("failed to count department members: %w", err)
 		}
-		memberCounts[department.ID] = count
+		for _, row := range countRows {
+			memberCounts[row.DepartmentID] = row.Count
+		}
 	}
 
 	creatorIDs := make([]string, 0, len(departments))
@@ -294,63 +286,32 @@ func (s *EmployeeService) ListRoleSummaries(orgID string) ([]RoleSummary, error)
 
 	membersByRole := make(map[string][]RoleMemberSummary, len(roles))
 
-	if hasUserRoleMembershipsTable(s.db) {
-		var memberships []models.UserRoleMembership
-		if err := s.db.
-			Where("organization_id = ?", orgID).
-			Preload("User").
-			Preload("User.Department").
-			Find(&memberships).Error; err != nil {
-			return nil, fmt.Errorf("failed to load role memberships: %w", err)
-		}
+	var memberships []models.UserRoleMembership
+	if err := s.db.
+		Where("organization_id = ?", orgID).
+		Preload("User").
+		Preload("User.Department").
+		Find(&memberships).Error; err != nil {
+		return nil, fmt.Errorf("failed to load role memberships: %w", err)
+	}
 
-		for _, membership := range memberships {
-			membersByRole[membership.RoleID] = append(membersByRole[membership.RoleID], RoleMemberSummary{
-				ID:        membership.User.ID,
-				FirstName: membership.User.FirstName,
-				LastName:  membership.User.LastName,
-				Email:     membership.User.Email,
-				JobTitle:  membership.User.JobTitle,
-				Department: func() string {
-					if membership.User.Department != nil {
-						return membership.User.Department.Name
-					}
-					return ""
-				}(),
-			})
+	for _, membership := range memberships {
+		if membership.User == nil {
+			continue
 		}
-	} else {
-		roleIDs := make([]string, 0, len(roles))
-		for _, role := range roles {
-			roleIDs = append(roleIDs, role.ID)
-		}
-		if len(roleIDs) > 0 {
-			var users []models.User
-			if err := s.db.
-				Where("organization_id = ? AND role_id IN ?", orgID, roleIDs).
-				Preload("Department").
-				Find(&users).Error; err != nil {
-				return nil, fmt.Errorf("failed to load role members via legacy role_id: %w", err)
-			}
-			for _, user := range users {
-				if user.RoleID == nil {
-					continue
+		membersByRole[membership.RoleID] = append(membersByRole[membership.RoleID], RoleMemberSummary{
+			ID:        membership.User.ID,
+			FirstName: membership.User.FirstName,
+			LastName:  membership.User.LastName,
+			Email:     membership.User.Email,
+			JobTitle:  membership.User.JobTitle,
+			Department: func() string {
+				if membership.User.Department != nil {
+					return membership.User.Department.Name
 				}
-				membersByRole[*user.RoleID] = append(membersByRole[*user.RoleID], RoleMemberSummary{
-					ID:        user.ID,
-					FirstName: user.FirstName,
-					LastName:  user.LastName,
-					Email:     user.Email,
-					JobTitle:  user.JobTitle,
-					Department: func() string {
-						if user.Department != nil {
-							return user.Department.Name
-						}
-						return ""
-					}(),
-				})
-			}
-		}
+				return ""
+			}(),
+		})
 	}
 
 	for roleID := range membersByRole {
@@ -503,21 +464,47 @@ func (s *EmployeeService) UpdateRole(orgID, roleID, name, description, updatedBy
 			return fmt.Errorf("failed to update role: %w", err)
 		}
 
-		if hasUserRoleMembershipsTable(tx) {
-			if err := tx.Where("organization_id = ? AND role_id = ?", orgID, roleID).Delete(&models.UserRoleMembership{}).Error; err != nil {
-				return fmt.Errorf("failed to reset role memberships: %w", err)
-			}
-		} else {
-			if err := tx.Model(&models.User{}).
+			// Diff-based update: read existing, add new, remove stale.
+			var existingUserIDs []string
+			if err := tx.Model(&models.UserRoleMembership{}).
 				Where("organization_id = ? AND role_id = ?", orgID, roleID).
-				Updates(map[string]interface{}{"role_id": nil, "updated_at": time.Now()}).Error; err != nil {
-				return fmt.Errorf("failed to reset legacy role assignments: %w", err)
+				Pluck("user_id", &existingUserIDs).Error; err != nil {
+				return fmt.Errorf("failed to read existing role memberships: %w", err)
 			}
-		}
 
-		if err := s.addUsersToRole(tx, orgID, roleID, updatedBy, memberIDs); err != nil {
-			return err
-		}
+			existingSet := make(map[string]struct{}, len(existingUserIDs))
+			for _, uid := range existingUserIDs {
+				existingSet[uid] = struct{}{}
+			}
+			intendedSet := make(map[string]struct{}, len(memberIDs))
+			for _, uid := range uniqueStrings(memberIDs) {
+				intendedSet[uid] = struct{}{}
+			}
+
+			var toRemove []string
+			for uid := range existingSet {
+				if _, ok := intendedSet[uid]; !ok {
+					toRemove = append(toRemove, uid)
+				}
+			}
+			var toAdd []string
+			for uid := range intendedSet {
+				if _, ok := existingSet[uid]; !ok {
+					toAdd = append(toAdd, uid)
+				}
+			}
+
+			if len(toRemove) > 0 {
+				if err := tx.Where("organization_id = ? AND role_id = ? AND user_id IN ?", orgID, roleID, toRemove).
+					Delete(&models.UserRoleMembership{}).Error; err != nil {
+					return fmt.Errorf("failed to remove stale role memberships: %w", err)
+				}
+			}
+			if len(toAdd) > 0 {
+				if err := s.addUsersToRole(tx, orgID, roleID, updatedBy, toAdd); err != nil {
+					return err
+				}
+			}
 		return nil
 	})
 	if err != nil {
@@ -532,13 +519,8 @@ func (s *EmployeeService) UpdateRole(orgID, roleID, name, description, updatedBy
 
 func (s *EmployeeService) DeleteRole(orgID, roleID string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		if hasUserRoleMembershipsTable(tx) {
-			if err := tx.Where("organization_id = ? AND role_id = ?", orgID, roleID).Delete(&models.UserRoleMembership{}).Error; err != nil {
-				return fmt.Errorf("failed to remove role memberships: %w", err)
-			}
-		}
-		if err := tx.Model(&models.User{}).Where("organization_id = ? AND role_id = ?", orgID, roleID).Update("role_id", nil).Error; err != nil {
-			return fmt.Errorf("failed to clear legacy user role reference: %w", err)
+		if err := tx.Where("organization_id = ? AND role_id = ?", orgID, roleID).Delete(&models.UserRoleMembership{}).Error; err != nil {
+			return fmt.Errorf("failed to remove role memberships: %w", err)
 		}
 		result := tx.Where("organization_id = ? AND id = ?", orgID, roleID).Delete(&models.Role{})
 		if result.Error != nil {

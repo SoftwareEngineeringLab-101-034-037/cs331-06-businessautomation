@@ -18,8 +18,7 @@ var openDatabase = func(databaseURL string) (*gorm.DB, error) {
 		DSN:                  databaseURL,
 		PreferSimpleProtocol: true, // disables prepared statement caching
 	}), &gorm.Config{
-		Logger:                                   logger.Default.LogMode(logger.Error),
-		DisableForeignKeyConstraintWhenMigrating: true,
+		Logger: logger.Default.LogMode(logger.Error),
 	})
 }
 

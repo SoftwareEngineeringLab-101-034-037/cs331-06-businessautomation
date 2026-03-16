@@ -291,6 +291,7 @@ func (h *EmployeeHandler) InviteBulk(c *gin.Context) {
 			LastName:     row.LastName,
 			DepartmentID: row.Department,
 			Role:         row.Role,
+			Roles:        []string{row.Role},
 			JobTitle:     row.JobTitle,
 			InvitedBy:    userID,
 		})

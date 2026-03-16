@@ -75,7 +75,7 @@ func (s *EmployeeService) InviteAndNotify(input InviteInput) (*InviteResult, err
 		FirstName:      input.FirstName,
 		LastName:       input.LastName,
 		RoleName:       input.Role,
-		RoleNames:      mustMarshalJSONStringArray(uniqueStrings(input.Roles)),
+		RoleNames:      mustMarshalJSONStringArray(uniqueStrings(append(input.Roles, input.Role))),
 		JobTitle:       input.JobTitle,
 		Token:          hashedToken,
 		Status:         "pending",

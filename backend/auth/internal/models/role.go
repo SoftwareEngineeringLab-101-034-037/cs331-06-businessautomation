@@ -19,8 +19,6 @@ type Role struct {
 	IsSystemRole    bool           `gorm:"default:false" json:"is_system_role"`
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
-
-	CreatedBy *User `gorm:"foreignKey:CreatedByUserID" json:"created_by,omitempty"`
 }
 
 // TableName specifies the table name for GORM
