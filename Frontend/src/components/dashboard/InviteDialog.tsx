@@ -86,6 +86,8 @@ export default function InviteDialog({ isOpen, onClose }: InviteDialogProps) {
     const fetchDeptsAndRoles = async () => {
       setDeptsLoading(true);
       setRolesLoading(true);
+      setDepartments([]);
+      setRoles([]);
       try {
         const token = await getToken();
         const [deptsRes, rolesRes] = await Promise.all([
@@ -122,6 +124,8 @@ export default function InviteDialog({ isOpen, onClose }: InviteDialogProps) {
         }
       } catch (err) {
         console.warn('InviteDialog: failed to load departments/roles', err)
+        setDepartments([]);
+        setRoles([]);
       } finally {
         setDeptsLoading(false);
         setRolesLoading(false);
@@ -449,6 +453,7 @@ export default function InviteDialog({ isOpen, onClose }: InviteDialogProps) {
                             {roleName}
                             <button
                               type="button"
+                              aria-label={`Remove ${roleName} role`}
                               onClick={() => setForm((prev) => ({ ...prev, roles: prev.roles.filter((item) => item !== roleName) }))}
                             >
                               ×
