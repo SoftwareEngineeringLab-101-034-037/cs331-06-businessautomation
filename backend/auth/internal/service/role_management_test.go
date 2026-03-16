@@ -1,9 +1,63 @@
 package service
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
+
+func TestCreateRoleTrimsNameAndDetectsCaseInsensitiveDuplicate(t *testing.T) {
+	db := setupServiceTestDB(t)
+	svc := NewEmployeeService(db, "")
+
+	created, err := svc.CreateRole("org_1", "  Admin  ", "", "", nil)
+	if err != nil {
+		t.Fatalf("expected no error creating trimmed role, got %v", err)
+	}
+	if created.Name != "Admin" {
+		t.Fatalf("expected trimmed role name Admin, got %q", created.Name)
+	}
+
+	_, err = svc.CreateRole("org_1", " admin ", "", "", nil)
+	if err == nil {
+		t.Fatal("expected duplicate error for case/whitespace variant")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected duplicate role error, got %v", err)
+	}
+}
+
+func TestAssignRoleNamesToUserRejectsUnknownNames(t *testing.T) {
+	db := setupServiceTestDB(t)
+	svc := NewEmployeeService(db, "")
+	now := time.Now()
+
+	if err := db.Exec(`
+		INSERT INTO users (id, email, first_name, last_name, organization_id, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_1", "u1@example.com", "U", "One", "org_1", true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
+
+	if err := db.Exec(`
+		INSERT INTO roles (id, name, description, organization_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, "role_1", "Reviewer", "", "org_1", now, now).Error; err != nil {
+		t.Fatalf("failed seeding role: %v", err)
+	}
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return svc.AssignRoleNamesToUser(tx, "org_1", "user_1", "", []string{"Reviewer", "MissingRole"})
+	})
+	if err == nil {
+		t.Fatal("expected unknown role names error")
+	}
+	if !strings.Contains(err.Error(), "unknown role names") {
+		t.Fatalf("expected unknown role names error, got %v", err)
+	}
+}
 
 func TestUpdateRole_UserRoleMembershipsWithoutLegacyTable(t *testing.T) {
 	db := setupServiceTestDB(t)

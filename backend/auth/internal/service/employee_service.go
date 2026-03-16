@@ -27,10 +27,16 @@ func NewEmployeeService(db *gorm.DB, clerkSecretKey string) *EmployeeService {
 }
 
 func (s *EmployeeService) CreateDepartment(orgID, name, description, createdBy string) (*models.Department, error) {
+	trimmedName := normalizeName(name)
+	if trimmedName == "" {
+		return nil, fmt.Errorf("department name is required")
+	}
+	normalizedNameKey := normalizeNameKey(trimmedName)
+
 	var existing models.Department
-	err := s.db.Where("name = ? AND organization_id = ?", name, orgID).First(&existing).Error
+	err := s.db.Where("organization_id = ? AND lower(trim(name)) = ?", orgID, normalizedNameKey).First(&existing).Error
 	if err == nil {
-		return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, name)
+		return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, trimmedName)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("failed to check existing department: %w", err)
@@ -38,7 +44,7 @@ func (s *EmployeeService) CreateDepartment(orgID, name, description, createdBy s
 
 	dept := models.Department{
 		OrganizationID: orgID,
-		Name:           name,
+		Name:           trimmedName,
 		Description:    description,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
@@ -49,7 +55,7 @@ func (s *EmployeeService) CreateDepartment(orgID, name, description, createdBy s
 	if err := s.db.Create(&dept).Error; err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, name)
+			return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, trimmedName)
 		}
 		return nil, fmt.Errorf("failed to create department: %w", err)
 	}

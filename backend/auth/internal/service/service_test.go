@@ -68,6 +68,37 @@ func TestCreateDepartment(t *testing.T) {
 		}
 	})
 
+	t.Run("trim and case-insensitive duplicate", func(t *testing.T) {
+		db := setupServiceTestDB(t)
+		svc := NewEmployeeService(db, "")
+
+		created, err := svc.CreateDepartment("org_1", "  Engineering  ", "Core", "")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if created.Name != "Engineering" {
+			t.Fatalf("expected trimmed department name Engineering, got %q", created.Name)
+		}
+
+		_, err = svc.CreateDepartment("org_1", " engineering ", "Dup", "")
+		if err == nil {
+			t.Fatal("expected duplicate error")
+		}
+		if !errors.Is(err, ErrDuplicateDepartment) {
+			t.Fatalf("expected ErrDuplicateDepartment, got %v", err)
+		}
+	})
+
+	t.Run("empty name after trim", func(t *testing.T) {
+		db := setupServiceTestDB(t)
+		svc := NewEmployeeService(db, "")
+
+		_, err := svc.CreateDepartment("org_1", "   ", "Core", "")
+		if err == nil || !strings.Contains(err.Error(), "department name is required") {
+			t.Fatalf("expected required department name error, got %v", err)
+		}
+	})
+
 	t.Run("lookup database error", func(t *testing.T) {
 		db := setupEmptyServiceTestDB(t)
 		svc := NewEmployeeService(db, "")
@@ -518,7 +549,7 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 		}
 	})
 
-	t.Run("success when role missing skips role assignment", func(t *testing.T) {
+	t.Run("unknown invited role returns error", func(t *testing.T) {
 		db := setupServiceTestDB(t)
 		svc := NewEmployeeService(db, "")
 
@@ -540,8 +571,9 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 			t.Fatalf("failed seeding invitation: %v", err)
 		}
 
-		if err := svc.AcceptInvitationByEmail("user2@example.com", "org_1", "user_2"); err != nil {
-			t.Fatalf("expected no error, got %v", err)
+		err := svc.AcceptInvitationByEmail("user2@example.com", "org_1", "user_2")
+		if err == nil || !strings.Contains(err.Error(), "unknown role names") {
+			t.Fatalf("expected unknown role names error, got %v", err)
 		}
 
 		var membershipCount int64
@@ -550,6 +582,14 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 		}
 		if membershipCount != 0 {
 			t.Fatalf("expected no role membership for user_2, got %d", membershipCount)
+		}
+
+		var inviteStatus string
+		if err := db.Table("employee_invitations").Select("status").Where("id = ?", "inv_no_role").Scan(&inviteStatus).Error; err != nil {
+			t.Fatalf("failed reading invitation status: %v", err)
+		}
+		if inviteStatus != "pending" {
+			t.Fatalf("expected invitation status pending after rollback, got %q", inviteStatus)
 		}
 	})
 

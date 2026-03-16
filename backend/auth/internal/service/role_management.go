@@ -80,11 +80,43 @@ func uniqueStrings(values []string) []string {
 	return result
 }
 
+func normalizeName(raw string) string {
+	return strings.TrimSpace(raw)
+}
+
+func normalizeNameKey(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func normalizeNameList(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized := normalizeName(value)
+		if normalized == "" {
+			continue
+		}
+		key := normalizeNameKey(normalized)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, normalized)
+	}
+	return result
+}
+
 func (s *EmployeeService) CreateRole(orgID, name, description, createdBy string, memberIDs []string) (*models.Role, error) {
+	trimmedName := normalizeName(name)
+	if trimmedName == "" {
+		return nil, fmt.Errorf("role name is required")
+	}
+	normalizedNameKey := normalizeNameKey(trimmedName)
+
 	var existing models.Role
-	err := s.db.Where("name = ? AND organization_id = ?", name, orgID).First(&existing).Error
+	err := s.db.Where("organization_id = ? AND lower(trim(name)) = ?", orgID, normalizedNameKey).First(&existing).Error
 	if err == nil {
-		return nil, fmt.Errorf("%w: role %q already exists in this organization", ErrDuplicateRole, name)
+		return nil, fmt.Errorf("%w: role %q already exists in this organization", ErrDuplicateRole, trimmedName)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("failed to check existing role: %w", err)
@@ -92,7 +124,7 @@ func (s *EmployeeService) CreateRole(orgID, name, description, createdBy string,
 
 	role := models.Role{
 		OrganizationID: orgID,
-		Name:           name,
+		Name:           trimmedName,
 		Description:    description,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
@@ -105,7 +137,7 @@ func (s *EmployeeService) CreateRole(orgID, name, description, createdBy string,
 		if err := tx.Create(&role).Error; err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-				return fmt.Errorf("%w: role %q already exists in this organization", ErrDuplicateRole, name)
+				return fmt.Errorf("%w: role %q already exists in this organization", ErrDuplicateRole, trimmedName)
 			}
 			return fmt.Errorf("failed to create role: %w", err)
 		}
@@ -162,17 +194,40 @@ func (s *EmployeeService) addUsersToRole(tx *gorm.DB, orgID, roleID, assignedBy 
 }
 
 func (s *EmployeeService) AssignRoleNamesToUser(tx *gorm.DB, orgID, userID, assignedBy string, roleNames []string) error {
-	roleNames = uniqueStrings(roleNames)
+	roleNames = normalizeNameList(roleNames)
 	if len(roleNames) == 0 {
 		return nil
 	}
 
+	normalizedRequested := make(map[string]string, len(roleNames))
+	for _, roleName := range roleNames {
+		normalizedRequested[normalizeNameKey(roleName)] = roleName
+	}
+
+	normalizedKeys := make([]string, 0, len(normalizedRequested))
+	for key := range normalizedRequested {
+		normalizedKeys = append(normalizedKeys, key)
+	}
+
 	var roles []models.Role
-	if err := tx.Where("organization_id = ? AND name IN ?", orgID, roleNames).Find(&roles).Error; err != nil {
+	if err := tx.Where("organization_id = ? AND lower(trim(name)) IN ?", orgID, normalizedKeys).Find(&roles).Error; err != nil {
 		return fmt.Errorf("failed to resolve invited roles: %w", err)
 	}
-	if len(roles) == 0 {
-		return nil
+
+	resolved := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		resolved[normalizeNameKey(role.Name)] = struct{}{}
+	}
+
+	missing := make([]string, 0)
+	for key, original := range normalizedRequested {
+		if _, ok := resolved[key]; !ok {
+			missing = append(missing, original)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("unknown role names: %v", missing)
 	}
 
 	memberships := make([]models.UserRoleMembership, 0, len(roles))
@@ -379,13 +434,16 @@ func (s *EmployeeService) UpdateDepartment(orgID, deptID, name, description stri
 		return nil, fmt.Errorf("failed to load department: %w", err)
 	}
 
-	trimmedName := name
-	if trimmedName == "" {
+	trimmedName := normalizeName(name)
+	if name == "" {
 		trimmedName = department.Name
+	} else if trimmedName == "" {
+		return nil, fmt.Errorf("department name is required")
 	}
+	normalizedNameKey := normalizeNameKey(trimmedName)
 
 	var existing models.Department
-	err := s.db.Where("organization_id = ? AND name = ? AND id <> ?", orgID, trimmedName, deptID).First(&existing).Error
+	err := s.db.Where("organization_id = ? AND lower(trim(name)) = ? AND id <> ?", orgID, normalizedNameKey, deptID).First(&existing).Error
 	if err == nil {
 		return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, trimmedName)
 	}
@@ -409,19 +467,25 @@ func (s *EmployeeService) UpdateDepartment(orgID, deptID, name, description stri
 }
 
 func (s *EmployeeService) DeleteDepartment(orgID, deptID string) error {
-	var memberCount int64
-	if err := s.db.Model(&models.User{}).Where("organization_id = ? AND department_id = ?", orgID, deptID).Count(&memberCount).Error; err != nil {
-		return fmt.Errorf("failed to check department membership: %w", err)
-	}
-	if memberCount > 0 {
-		return fmt.Errorf("department still has %d assigned employee(s)", memberCount)
-	}
-
-	result := s.db.Where("organization_id = ? AND id = ?", orgID, deptID).Delete(&models.Department{})
+	result := s.db.Where(
+		"organization_id = ? AND id = ? AND NOT EXISTS (?)",
+		orgID,
+		deptID,
+		s.db.Model(&models.User{}).
+			Select("1").
+			Where("organization_id = ? AND department_id = ?", orgID, deptID),
+	).Delete(&models.Department{})
 	if result.Error != nil {
 		return fmt.Errorf("failed to delete department: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
+		var memberCount int64
+		if err := s.db.Model(&models.User{}).Where("organization_id = ? AND department_id = ?", orgID, deptID).Count(&memberCount).Error; err != nil {
+			return fmt.Errorf("failed to check department membership: %w", err)
+		}
+		if memberCount > 0 {
+			return fmt.Errorf("department still has %d assigned employee(s)", memberCount)
+		}
 		return fmt.Errorf("%w: department %s in org %s", ErrNotFound, deptID, orgID)
 	}
 	return nil
@@ -436,13 +500,16 @@ func (s *EmployeeService) UpdateRole(orgID, roleID, name, description, updatedBy
 		return nil, fmt.Errorf("failed to load role: %w", err)
 	}
 
-	trimmedName := name
-	if trimmedName == "" {
+	trimmedName := normalizeName(name)
+	if name == "" {
 		trimmedName = role.Name
+	} else if trimmedName == "" {
+		return nil, fmt.Errorf("role name is required")
 	}
+	normalizedNameKey := normalizeNameKey(trimmedName)
 
 	var existing models.Role
-	err := s.db.Where("organization_id = ? AND name = ? AND id <> ?", orgID, trimmedName, roleID).First(&existing).Error
+	err := s.db.Where("organization_id = ? AND lower(trim(name)) = ? AND id <> ?", orgID, normalizedNameKey, roleID).First(&existing).Error
 	if err == nil {
 		return nil, fmt.Errorf("%w: role %q already exists in this organization", ErrDuplicateRole, trimmedName)
 	}
