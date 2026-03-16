@@ -16,8 +16,8 @@ type User struct {
 	OrganizationID *string        `gorm:"type:text" json:"organization_id"` // FK to organizations table
 	DepartmentID   *string        `gorm:"type:text" json:"department_id"`
 	JobTitle       string         `json:"job_title"`
-	IsAdmin        bool           `gorm:"default:false" json:"is_admin"`    // Whether user is an admin of their org
-	Preferences    datatypes.JSON `gorm:"type:jsonb" json:"preferences"`    // Local extension
+	IsAdmin        bool           `gorm:"default:false" json:"is_admin"` // Whether user is an admin of their org
+	Preferences    datatypes.JSON `gorm:"type:jsonb" json:"preferences"` // Local extension
 	IsActive       bool           `gorm:"default:true" json:"is_active"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`

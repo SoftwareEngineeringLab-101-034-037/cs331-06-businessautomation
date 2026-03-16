@@ -80,8 +80,6 @@ func uniqueStrings(values []string) []string {
 	return result
 }
 
-
-
 func (s *EmployeeService) CreateRole(orgID, name, description, createdBy string, memberIDs []string) (*models.Role, error) {
 	var existing models.Role
 	err := s.db.Where("name = ? AND organization_id = ?", name, orgID).First(&existing).Error
@@ -464,47 +462,47 @@ func (s *EmployeeService) UpdateRole(orgID, roleID, name, description, updatedBy
 			return fmt.Errorf("failed to update role: %w", err)
 		}
 
-			// Diff-based update: read existing, add new, remove stale.
-			var existingUserIDs []string
-			if err := tx.Model(&models.UserRoleMembership{}).
-				Where("organization_id = ? AND role_id = ?", orgID, roleID).
-				Pluck("user_id", &existingUserIDs).Error; err != nil {
-				return fmt.Errorf("failed to read existing role memberships: %w", err)
-			}
+		// Diff-based update: read existing, add new, remove stale.
+		var existingUserIDs []string
+		if err := tx.Model(&models.UserRoleMembership{}).
+			Where("organization_id = ? AND role_id = ?", orgID, roleID).
+			Pluck("user_id", &existingUserIDs).Error; err != nil {
+			return fmt.Errorf("failed to read existing role memberships: %w", err)
+		}
 
-			existingSet := make(map[string]struct{}, len(existingUserIDs))
-			for _, uid := range existingUserIDs {
-				existingSet[uid] = struct{}{}
-			}
-			intendedSet := make(map[string]struct{}, len(memberIDs))
-			for _, uid := range uniqueStrings(memberIDs) {
-				intendedSet[uid] = struct{}{}
-			}
+		existingSet := make(map[string]struct{}, len(existingUserIDs))
+		for _, uid := range existingUserIDs {
+			existingSet[uid] = struct{}{}
+		}
+		intendedSet := make(map[string]struct{}, len(memberIDs))
+		for _, uid := range uniqueStrings(memberIDs) {
+			intendedSet[uid] = struct{}{}
+		}
 
-			var toRemove []string
-			for uid := range existingSet {
-				if _, ok := intendedSet[uid]; !ok {
-					toRemove = append(toRemove, uid)
-				}
+		var toRemove []string
+		for uid := range existingSet {
+			if _, ok := intendedSet[uid]; !ok {
+				toRemove = append(toRemove, uid)
 			}
-			var toAdd []string
-			for uid := range intendedSet {
-				if _, ok := existingSet[uid]; !ok {
-					toAdd = append(toAdd, uid)
-				}
+		}
+		var toAdd []string
+		for uid := range intendedSet {
+			if _, ok := existingSet[uid]; !ok {
+				toAdd = append(toAdd, uid)
 			}
+		}
 
-			if len(toRemove) > 0 {
-				if err := tx.Where("organization_id = ? AND role_id = ? AND user_id IN ?", orgID, roleID, toRemove).
-					Delete(&models.UserRoleMembership{}).Error; err != nil {
-					return fmt.Errorf("failed to remove stale role memberships: %w", err)
-				}
+		if len(toRemove) > 0 {
+			if err := tx.Where("organization_id = ? AND role_id = ? AND user_id IN ?", orgID, roleID, toRemove).
+				Delete(&models.UserRoleMembership{}).Error; err != nil {
+				return fmt.Errorf("failed to remove stale role memberships: %w", err)
 			}
-			if len(toAdd) > 0 {
-				if err := s.addUsersToRole(tx, orgID, roleID, updatedBy, toAdd); err != nil {
-					return err
-				}
+		}
+		if len(toAdd) > 0 {
+			if err := s.addUsersToRole(tx, orgID, roleID, updatedBy, toAdd); err != nil {
+				return err
 			}
+		}
 		return nil
 	})
 	if err != nil {
