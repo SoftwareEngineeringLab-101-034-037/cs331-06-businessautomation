@@ -117,8 +117,10 @@ export default function CreateDepartmentDialog({ isOpen, onClose, onCreated, ini
                 {/* Header */}
                 <div className="invite-header">
                     <div className="invite-header-text">
-                        <h3 className="invite-title">Create Department</h3>
-                        <p className="invite-subtitle">Add a new department to your organisation</p>
+                        <h3 className="invite-title">{initialDepartment ? "Edit Department" : "Create Department"}</h3>
+                        <p className="invite-subtitle">
+                            {initialDepartment ? "Modify existing department details" : "Add a new department to your organisation"}
+                        </p>
                     </div>
                     <button className="invite-close" onClick={onClose} aria-label="Close">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="18" height="18">

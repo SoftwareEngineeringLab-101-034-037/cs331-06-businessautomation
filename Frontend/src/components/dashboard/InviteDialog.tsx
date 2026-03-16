@@ -100,11 +100,25 @@ export default function InviteDialog({ isOpen, onClose }: InviteDialogProps) {
         if (deptsRes.ok) {
           const data = await deptsRes.json();
           setDepartments(Array.isArray(data) ? data : []);
+        } else {
+          const bodyText = await deptsRes.text();
+          console.error("InviteDialog: failed to fetch departments", {
+            status: deptsRes.status,
+            body: bodyText,
+          });
+          setDepartments([]);
         }
 
         if (rolesRes.ok) {
           const data = await rolesRes.json();
           setRoles(Array.isArray(data) ? data : []);
+        } else {
+          const bodyText = await rolesRes.text();
+          console.error("InviteDialog: failed to fetch roles", {
+            status: rolesRes.status,
+            body: bodyText,
+          });
+          setRoles([]);
         }
       } catch (err) {
         console.warn('InviteDialog: failed to load departments/roles', err)

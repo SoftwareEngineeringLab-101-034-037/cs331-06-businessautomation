@@ -3120,6 +3120,8 @@
   font-size: 0.72rem;
   font-weight: 800;
   white-space: nowrap;
+  background: var(--hover);
+  color: var(--text-secondary);
 }
 
 .employee-task-status.status-pending {
@@ -3141,6 +3143,18 @@
 .employee-task-status.status-clarification_requested {
   background: rgba(59, 130, 246, 0.12);
   color: #2563eb;
+}
+
+.employee-task-status.status-in_progress,
+.employee-task-status.status-sent_back,
+.employee-task-status.status-escalated {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+
+.employee-task-status.status-cancelled {
+  background: rgba(107, 114, 128, 0.16);
+  color: #4b5563;
 }
 
 .employee-task-description {
@@ -3205,6 +3219,11 @@
   flex: 1;
   min-width: 200px;
   max-width: 380px;
+}
+
+.filter-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .filter-search svg {
@@ -4379,6 +4398,12 @@
   transform: translateX(20px);
 }
 
+.settings-switch input:focus-visible+.settings-switch-slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
 .settings-card-footer {
   display: flex;
   align-items: center;
@@ -4507,6 +4532,7 @@
 .settings-list-shell {
   display: grid;
   gap: 10px;
+  overflow-x: auto;
 }
 
 .settings-list-header,
@@ -4514,6 +4540,7 @@
   display: grid;
   align-items: center;
   gap: 16px;
+  min-width: 900px;
 }
 
 .settings-list-header {
@@ -7750,7 +7777,7 @@
   line-height: 1;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1200px) {
   .settings-workspace {
     grid-template-columns: 1fr;
   }
@@ -7770,6 +7797,11 @@
   .settings-list-grid-department,
   .settings-list-grid-role {
     grid-template-columns: 1fr;
+  }
+
+  .settings-list-header,
+  .settings-list-row {
+    min-width: 0;
   }
 
   .settings-list-row {
