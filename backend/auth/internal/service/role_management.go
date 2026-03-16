@@ -239,7 +239,7 @@ func (s *EmployeeService) ListDepartmentSummaries(orgID string) ([]DepartmentSum
 	creators := make(map[string]models.User, len(creatorIDs))
 	if len(creatorIDs) > 0 {
 		var users []models.User
-		if err := s.db.Where("id IN ?", creatorIDs).Find(&users).Error; err != nil {
+		if err := s.db.Where("organization_id = ? AND id IN ?", orgID, creatorIDs).Find(&users).Error; err != nil {
 			return nil, fmt.Errorf("failed to load department creators: %w", err)
 		}
 		for _, user := range users {
@@ -331,7 +331,7 @@ func (s *EmployeeService) ListRoleSummaries(orgID string) ([]RoleSummary, error)
 	creators := make(map[string]models.User, len(creatorIDs))
 	if len(creatorIDs) > 0 {
 		var users []models.User
-		if err := s.db.Where("id IN ?", creatorIDs).Find(&users).Error; err != nil {
+		if err := s.db.Where("organization_id = ? AND id IN ?", orgID, creatorIDs).Find(&users).Error; err != nil {
 			return nil, fmt.Errorf("failed to load role creators: %w", err)
 		}
 		for _, user := range users {
