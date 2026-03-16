@@ -22,14 +22,14 @@ type ActorSummary struct {
 }
 
 type DepartmentSummary struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Description string        `json:"description"`
-	CreatedByUserID string    `json:"created_by_user_id,omitempty"`
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at"`
-	MemberCount int64         `json:"member_count"`
-	CreatedBy   *ActorSummary `json:"created_by,omitempty"`
+	ID              string        `json:"id"`
+	Name            string        `json:"name"`
+	Description     string        `json:"description"`
+	CreatedByUserID string        `json:"created_by_user_id,omitempty"`
+	CreatedAt       time.Time     `json:"created_at"`
+	UpdatedAt       time.Time     `json:"updated_at"`
+	MemberCount     int64         `json:"member_count"`
+	CreatedBy       *ActorSummary `json:"created_by,omitempty"`
 }
 
 type RoleMemberSummary struct {
@@ -42,15 +42,15 @@ type RoleMemberSummary struct {
 }
 
 type RoleSummary struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Description string              `json:"description"`
-	CreatedByUserID string          `json:"created_by_user_id,omitempty"`
-	CreatedAt   time.Time           `json:"created_at"`
-	UpdatedAt   time.Time           `json:"updated_at"`
-	MemberCount int64               `json:"member_count"`
-	CreatedBy   *ActorSummary       `json:"created_by,omitempty"`
-	Members     []RoleMemberSummary `json:"members,omitempty"`
+	ID              string              `json:"id"`
+	Name            string              `json:"name"`
+	Description     string              `json:"description"`
+	CreatedByUserID string              `json:"created_by_user_id,omitempty"`
+	CreatedAt       time.Time           `json:"created_at"`
+	UpdatedAt       time.Time           `json:"updated_at"`
+	MemberCount     int64               `json:"member_count"`
+	CreatedBy       *ActorSummary       `json:"created_by,omitempty"`
+	Members         []RoleMemberSummary `json:"members,omitempty"`
 }
 
 func actorSummaryFromUser(user models.User) *ActorSummary {
@@ -165,7 +165,7 @@ func (s *EmployeeService) addUsersToRole(tx *gorm.DB, orgID, roleID, assignedBy 
 	}
 
 	if err := tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "organization_id"}, {Name: "user_id"}, {Name: "role_id"}},
+		Columns:   []clause.Column{{Name: "organization_id"}, {Name: "user_id"}, {Name: "role_id"}},
 		DoNothing: true,
 	}).Create(&memberships).Error; err != nil {
 		return fmt.Errorf("failed to assign users to role: %w", err)
@@ -214,7 +214,7 @@ func (s *EmployeeService) AssignRoleNamesToUser(tx *gorm.DB, orgID, userID, assi
 	}
 
 	if err := tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "organization_id"}, {Name: "user_id"}, {Name: "role_id"}},
+		Columns:   []clause.Column{{Name: "organization_id"}, {Name: "user_id"}, {Name: "role_id"}},
 		DoNothing: true,
 	}).Create(&memberships).Error; err != nil {
 		return fmt.Errorf("failed to assign invited roles: %w", err)
@@ -306,11 +306,11 @@ func (s *EmployeeService) ListRoleSummaries(orgID string) ([]RoleSummary, error)
 
 		for _, membership := range memberships {
 			membersByRole[membership.RoleID] = append(membersByRole[membership.RoleID], RoleMemberSummary{
-				ID:         membership.User.ID,
-				FirstName:  membership.User.FirstName,
-				LastName:   membership.User.LastName,
-				Email:      membership.User.Email,
-				JobTitle:   membership.User.JobTitle,
+				ID:        membership.User.ID,
+				FirstName: membership.User.FirstName,
+				LastName:  membership.User.LastName,
+				Email:     membership.User.Email,
+				JobTitle:  membership.User.JobTitle,
 				Department: func() string {
 					if membership.User.Department != nil {
 						return membership.User.Department.Name

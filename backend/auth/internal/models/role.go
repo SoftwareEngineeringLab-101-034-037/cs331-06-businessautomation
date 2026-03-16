@@ -10,15 +10,15 @@ import (
 
 // Role represents a role with permissions for local RBAC
 type Role struct {
-	ID             string         `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	Name           string         `gorm:"not null;uniqueIndex:idx_role_org" json:"name"`
-	Description    string         `json:"description"`
-	OrganizationID string         `gorm:"not null;index;uniqueIndex:idx_role_org" json:"organization_id"` // Scoped to org
+	ID              string         `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name            string         `gorm:"not null;uniqueIndex:idx_role_org" json:"name"`
+	Description     string         `json:"description"`
+	OrganizationID  string         `gorm:"not null;index;uniqueIndex:idx_role_org" json:"organization_id"` // Scoped to org
 	CreatedByUserID *string        `gorm:"index" json:"created_by_user_id,omitempty"`
-	Permissions    datatypes.JSON `gorm:"type:jsonb" json:"permissions"`
-	IsSystemRole   bool           `gorm:"default:false" json:"is_system_role"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	Permissions     datatypes.JSON `gorm:"type:jsonb" json:"permissions"`
+	IsSystemRole    bool           `gorm:"default:false" json:"is_system_role"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
 
 	CreatedBy *User `gorm:"foreignKey:CreatedByUserID" json:"created_by,omitempty"`
 }

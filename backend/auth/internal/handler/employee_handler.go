@@ -103,8 +103,8 @@ func (h *EmployeeHandler) CreateRole(c *gin.Context) {
 	orgID := c.Param("orgId")
 	userID := c.GetString("user_id")
 	var body struct {
-		Name        string `json:"name" binding:"required"`
-		Description string `json:"description"`
+		Name        string   `json:"name" binding:"required"`
+		Description string   `json:"description"`
 		MemberIDs   []string `json:"member_ids"`
 	}
 
@@ -192,13 +192,13 @@ func (h *EmployeeHandler) InviteSingle(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	var body struct {
-		Email          string `json:"email" binding:"required,email"`
-		FirstName      string `json:"first_name" binding:"required"`
-		LastName       string `json:"last_name" binding:"required"`
-		DepartmentName string `json:"department" binding:"required"`
-		RoleName       string `json:"role"`
+		Email          string   `json:"email" binding:"required,email"`
+		FirstName      string   `json:"first_name" binding:"required"`
+		LastName       string   `json:"last_name" binding:"required"`
+		DepartmentName string   `json:"department" binding:"required"`
+		RoleName       string   `json:"role"`
 		Roles          []string `json:"roles"`
-		JobTitle       string `json:"job_title"`
+		JobTitle       string   `json:"job_title"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
