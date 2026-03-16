@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestUpdateRoleLegacySchemaWithoutMembershipTable(t *testing.T) {
+func TestUpdateRole_UserRoleMembershipsWithoutLegacyTable(t *testing.T) {
 	db := setupServiceTestDB(t)
 	svc := NewEmployeeService(db, "")
 	now := time.Now()
@@ -70,7 +70,7 @@ func TestUpdateRoleLegacySchemaWithoutMembershipTable(t *testing.T) {
 	}
 }
 
-func TestListRoleSummariesLegacySchemaUsesUsersRoleID(t *testing.T) {
+func TestListRoleSummaries_UserRoleMemberships(t *testing.T) {
 	db := setupServiceTestDB(t)
 	svc := NewEmployeeService(db, "")
 	now := time.Now()
@@ -136,7 +136,7 @@ func TestListRoleSummariesLegacySchemaUsesUsersRoleID(t *testing.T) {
 	}
 }
 
-func TestUpdateRoleWithMembershipTable(t *testing.T) {
+func TestUpdateRole_UserRoleMembershipsWithLegacyTable(t *testing.T) {
 	db := setupServiceTestDB(t)
 	svc := NewEmployeeService(db, "")
 	now := time.Now()
