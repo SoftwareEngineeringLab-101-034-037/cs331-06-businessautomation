@@ -125,15 +125,16 @@ interface StepEditorProps {
   stepIndex: number;
   onChange: (updated: WorkflowStep) => void;
   onClose: () => void;
+  availableRoles?: string[];
 }
 
-export function StepEditor({ step, stepIndex, onChange, onClose }: StepEditorProps) {
+export function StepEditor({ step, stepIndex, onChange, onClose, availableRoles = PRESET_ORG_ROLES }: StepEditorProps) {
   const [roleSearch, setRoleSearch] = useState("");
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
   const [posSearch, setPosSearch] = useState("");
   const [showPosDropdown, setShowPosDropdown] = useState(false);
 
-  const filteredRoles = PRESET_ORG_ROLES.filter((r) =>
+  const filteredRoles = availableRoles.filter((r) =>
     r.toLowerCase().includes(roleSearch.toLowerCase()),
   );
   const filteredPositions = PRESET_POSITIONS.filter((p) =>

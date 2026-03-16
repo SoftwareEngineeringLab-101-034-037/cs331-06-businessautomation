@@ -15,7 +15,7 @@ interface SingleFormData {
   first_name: string;
   last_name: string;
   department: string;
-  role: string;
+  roles: string[];
   job_title: string;
 }
 
@@ -32,6 +32,12 @@ interface Department {
   description?: string;
 }
 
+interface Role {
+  id: string;
+  name: string;
+  description?: string;
+}
+
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
 
 const INITIAL_FORM: SingleFormData = {
@@ -39,7 +45,7 @@ const INITIAL_FORM: SingleFormData = {
   first_name: "",
   last_name: "",
   department: "",
-  role: "",
+  roles: [],
   job_title: "",
 };
 
@@ -54,6 +60,9 @@ export default function InviteDialog({ isOpen, onClose }: InviteDialogProps) {
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [deptsLoading, setDeptsLoading] = useState(false);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [rolesLoading, setRolesLoading] = useState(false);
+  const [roleToAdd, setRoleToAdd] = useState("");
 
   const { getToken } = useAuth();
   const { organization } = useOrganization();
@@ -61,7 +70,7 @@ export default function InviteDialog({ isOpen, onClose }: InviteDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch departments when dialog opens
+  // Fetch departments and roles when dialog opens
   useEffect(() => {
     if (!isOpen || !organization?.id) return;
 
@@ -72,25 +81,39 @@ export default function InviteDialog({ isOpen, onClose }: InviteDialogProps) {
     setBulkResult(null);
     setLoading(false);
     setDragOver(false);
+    setRoleToAdd("");
 
-    const fetchDepts = async () => {
+    const fetchDeptsAndRoles = async () => {
       setDeptsLoading(true);
+      setRolesLoading(true);
       try {
         const token = await getToken();
-        const res = await fetch(`${AUTH_API}/api/orgs/${organization.id}/departments`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          const data = await res.json();
+        const [deptsRes, rolesRes] = await Promise.all([
+          fetch(`${AUTH_API}/api/orgs/${organization.id}/departments`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`${AUTH_API}/api/orgs/${organization.id}/roles`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
+
+        if (deptsRes.ok) {
+          const data = await deptsRes.json();
           setDepartments(Array.isArray(data) ? data : []);
+        }
+
+        if (rolesRes.ok) {
+          const data = await rolesRes.json();
+          setRoles(Array.isArray(data) ? data : []);
         }
       } catch {
         // Silently fail — user can still type
       } finally {
         setDeptsLoading(false);
+        setRolesLoading(false);
       }
     };
-    fetchDepts();
+    fetchDeptsAndRoles();
   }, [isOpen, organization?.id, getToken]);
 
   // Escape key handler
@@ -371,14 +394,59 @@ export default function InviteDialog({ isOpen, onClose }: InviteDialogProps) {
 
             <div className="invite-form-row">
               <div className="invite-field">
-                <label className="invite-label">Role</label>
-                <input
-                  type="text"
-                  className="invite-input"
-                  placeholder="e.g. employee, admin"
-                  value={form.role}
-                  onChange={(e) => handleField("role", e.target.value)}
-                />
+                <label className="invite-label">Workflow Roles</label>
+                {rolesLoading ? (
+                  <div className="invite-input" style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-muted)" }}>
+                    <span className="invite-spinner" style={{ borderColor: "var(--border)", borderTopColor: "var(--accent)", width: 12, height: 12 }} />
+                    Loading roles...
+                  </div>
+                ) : roles.length > 0 ? (
+                  <>
+                    <div className="invite-tag-picker-row">
+                      <select
+                        className="invite-input"
+                        value={roleToAdd}
+                        onChange={(e) => setRoleToAdd(e.target.value)}
+                      >
+                        <option value="">Select a workflow role</option>
+                        {roles.map((role) => (
+                          <option key={role.id} value={role.name}>
+                            {role.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="action-btn action-btn-outline"
+                        onClick={() => {
+                          if (!roleToAdd || form.roles.includes(roleToAdd)) return;
+                          setForm((prev) => ({ ...prev, roles: [...prev.roles, roleToAdd] }));
+                          setRoleToAdd("");
+                        }}
+                        disabled={!roleToAdd || form.roles.includes(roleToAdd)}
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {form.roles.length > 0 && (
+                      <div className="invite-tag-list">
+                        {form.roles.map((roleName) => (
+                          <span key={roleName} className="invite-tag-chip">
+                            {roleName}
+                            <button
+                              type="button"
+                              onClick={() => setForm((prev) => ({ ...prev, roles: prev.roles.filter((item) => item !== roleName) }))}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="settings-empty-inline">Create workflow roles from Settings before tagging invitees.</div>
+                )}
               </div>
               <div className="invite-field">
                 <label className="invite-label">Job Title</label>

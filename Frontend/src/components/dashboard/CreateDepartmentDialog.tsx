@@ -6,11 +6,17 @@ import { useAuth, useOrganization } from "@clerk/nextjs";
 interface CreateDepartmentDialogProps {
     isOpen: boolean;
     onClose: () => void;
+    onCreated?: () => void;
+    initialDepartment?: {
+        id: string;
+        name: string;
+        description?: string;
+    } | null;
 }
 
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
 
-export default function CreateDepartmentDialog({ isOpen, onClose }: CreateDepartmentDialogProps) {
+export default function CreateDepartmentDialog({ isOpen, onClose, onCreated, initialDepartment = null }: CreateDepartmentDialogProps) {
     const [name, setName] = useState("");
     const [description, setDescription] = useState("");
     const [loading, setLoading] = useState(false);
@@ -24,13 +30,13 @@ export default function CreateDepartmentDialog({ isOpen, onClose }: CreateDepart
 
     useEffect(() => {
         if (isOpen) {
-            setName("");
-            setDescription("");
+            setName(initialDepartment?.name || "");
+            setDescription(initialDepartment?.description || "");
             setError(null);
             setSuccess(null);
             setLoading(false);
         }
-    }, [isOpen]);
+    }, [isOpen, initialDepartment]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -68,8 +74,11 @@ export default function CreateDepartmentDialog({ isOpen, onClose }: CreateDepart
         setLoading(true);
         try {
             const token = await getToken();
-            const res = await fetch(`${AUTH_API}/api/orgs/${organization.id}/departments`, {
-                method: "POST",
+            const endpoint = initialDepartment
+                ? `${AUTH_API}/api/orgs/${organization.id}/departments/${initialDepartment.id}`
+                : `${AUTH_API}/api/orgs/${organization.id}/departments`;
+            const res = await fetch(endpoint, {
+                method: initialDepartment ? "PUT" : "POST",
                 headers: {
                     "Content-Type": "application/json",
                     Authorization: `Bearer ${token}`,
@@ -83,12 +92,13 @@ export default function CreateDepartmentDialog({ isOpen, onClose }: CreateDepart
                 if (res.status === 409) {
                     setError(data.error || "A department with this name already exists.");
                 } else {
-                    setError(data.error || "Failed to create department.");
+                    setError(data.error || `Failed to ${initialDepartment ? "update" : "create"} department.`);
                 }
             } else {
-                setSuccess(`Department "${data.name || name}" created successfully!`);
+                setSuccess(`Department "${data.name || name}" ${initialDepartment ? "updated" : "created"} successfully!`);
                 setName("");
                 setDescription("");
+                onCreated?.();
             }
         } catch {
             setError("Network error. Is the auth server running?");
@@ -178,14 +188,14 @@ export default function CreateDepartmentDialog({ isOpen, onClose }: CreateDepart
                             {loading ? (
                                 <>
                                     <span className="invite-spinner" />
-                                    Creating…
+                                    {initialDepartment ? "Saving…" : "Creating…"}
                                 </>
                             ) : (
                                 <>
                                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
                                     </svg>
-                                    Create Department
+                                    {initialDepartment ? "Save Department" : "Create Department"}
                                 </>
                             )}
                         </button>

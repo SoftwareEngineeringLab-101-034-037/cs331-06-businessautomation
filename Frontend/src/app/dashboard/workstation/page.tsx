@@ -286,7 +286,7 @@ export default function WorkstationPage() {
   return (
     <>
     <RoleGate
-      allowed={["org_admin", "admin"]}
+      allowed={["admin"]}
       fallback={
         <div className="dashboard-page">
           <div className="empty-state">
@@ -294,7 +294,7 @@ export default function WorkstationPage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
             </svg>
             <h3>Access Restricted</h3>
-            <p>The Workstation view is only available to Admins and Organisation Admins.</p>
+            <p>The Workstation view is only available to Admins.</p>
           </div>
         </div>
       }
