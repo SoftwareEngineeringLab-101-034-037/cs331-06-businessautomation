@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	svix "github.com/svix/svix-webhooks/go"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/database"
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
@@ -358,6 +359,9 @@ func (h *WebhookHandler) handleMembershipCreated(data json.RawMessage) error {
 		"is_admin":        isAdmin,
 		"updated_at":      time.Now(),
 	}
+	if !isAdmin {
+		updates["department_id"] = nil
+	}
 
 	if isAdmin {
 		err := database.DB.Transaction(func(tx *gorm.DB) error {
@@ -460,6 +464,7 @@ func (h *WebhookHandler) handleInvitationAccepted(data json.RawMessage) error {
 	} else {
 		updates := map[string]interface{}{
 			"organization_id": orgID,
+			"department_id":   nil,
 			"is_admin":        false,
 			"updated_at":      time.Now(),
 		}
@@ -507,7 +512,10 @@ func ensureAdminDepartment(tx *gorm.DB, orgID, createdBy string) (string, error)
 	if createdBy != "" {
 		department.CreatedByUserID = &createdBy
 	}
-	if err := tx.Create(&department).Error; err != nil {
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&department).Error; err != nil {
+		return "", err
+	}
+	if err := tx.Where("organization_id = ? AND name = ?", orgID, defaultAdminDepartmentName).First(&department).Error; err != nil {
 		return "", err
 	}
 	return department.ID, nil
