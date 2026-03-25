@@ -22,6 +22,7 @@ export interface Task {
   id: string;
   title: string;
   description: string;
+  comment?: string;
   status: TaskStatus;
   priority: TaskPriority;
   assignedTo: string;
@@ -40,6 +41,10 @@ export interface Task {
   tags: string[];
   stepNumber: number;
   totalSteps: number;
+  allowedActions?: string[];
+  nodeId?: string;
+  orgId?: string;
+  instanceId?: string;
 }
 
 export const TASK_STATUS_CONFIG: Record<

@@ -9,9 +9,10 @@ interface TaskDetailDrawerProps {
   task: Task | null;
   isOpen: boolean;
   onClose: () => void;
+  onAction?: (task: Task, action: string, data?: Record<string, string>) => void;
 }
 
-export default function TaskDetailDrawer({ task, isOpen, onClose }: TaskDetailDrawerProps) {
+export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: TaskDetailDrawerProps) {
   // Close on Escape key
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -34,6 +35,10 @@ export default function TaskDetailDrawer({ task, isOpen, onClose }: TaskDetailDr
   const progress = (task.stepNumber / task.totalSteps) * 100;
 
   function handleAction(action: string, data?: Record<string, string>) {
+    if (onAction) {
+      onAction(task, action, data);
+      return;
+    }
     alert(`Action: ${action}${data ? `\nData: ${JSON.stringify(data)}` : ""}`);
   }
 
@@ -169,6 +174,12 @@ export default function TaskDetailDrawer({ task, isOpen, onClose }: TaskDetailDr
                   {formatDate(task.dueDate)}
                 </dd>
               </div>
+              {task.comment && (
+                <div className="detail-info-item">
+                  <dt>Latest Comment</dt>
+                  <dd>{task.comment}</dd>
+                </div>
+              )}
               {task.completedAt && (
                 <div className="detail-info-item">
                   <dt>Completed</dt>
