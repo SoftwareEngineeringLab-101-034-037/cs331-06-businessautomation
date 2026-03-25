@@ -25,6 +25,29 @@ interface BackendWorkflow {
   updated_at: string;
 }
 
+interface BackendInstance {
+  id: string;
+  workflow_id: string;
+  workflow_name?: string;
+  status: "pending" | "running" | "waiting" | "completed" | "failed" | "cancelled";
+  current_node?: string;
+  node_states?: Record<string, { status: string; started_at?: string; completed_at?: string }>;
+  audit_log?: Array<{ timestamp: string; node_id?: string; action: string; details?: Record<string, unknown> }>;
+  started_at: string;
+  completed_at?: string;
+}
+
+interface BackendTaskForInstance {
+  id: string;
+  node_id: string;
+  title: string;
+  assigned_user?: string;
+  assigned_role?: string;
+  status: string;
+  comment?: string;
+  completed_at?: string;
+}
+
 /* helper - pretty relative time */
 function timeAgo(iso: string): string {
   if (!iso) return "unknown";
@@ -39,6 +62,33 @@ function timeAgo(iso: string): string {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
+}
+
+function formatTaskStatus(status: string): string {
+  switch (status) {
+    case "pending": return "Pending";
+    case "in_progress": return "In Progress";
+    case "approved": return "Approved";
+    case "rejected": return "Rejected";
+    case "clarification_requested": return "Needs Clarification";
+    case "completed": return "Completed";
+    default: return status;
+  }
+}
+
+function prettyActionName(action: string): string {
+  switch (action) {
+    case "instance_started": return "Workflow started";
+    case "task_assigned": return "Task assigned";
+    case "task_started": return "Task started";
+    case "task_action": return "Task decision recorded";
+    case "merge_completed": return "Merge completed";
+    case "instance_completed": return "Workflow completed";
+    case "instance_failed": return "Workflow failed";
+    case "condition_evaluated": return "Condition evaluated";
+    case "email_sent": return "Email sent";
+    default: return action.replaceAll("_", " ");
+  }
 }
 
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
@@ -85,18 +135,57 @@ export default function WorkstationPage() {
 
   /* Workflow list from backend */
   const [workflows, setWorkflows] = useState<BackendWorkflow[]>([]);
+  const [instances, setInstances] = useState<BackendInstance[]>([]);
+  const [instanceRowLimit, setInstanceRowLimit] = useState(10);
+  const [workflowRowLimit, setWorkflowRowLimit] = useState(10);
+  const [selectedInstance, setSelectedInstance] = useState<BackendInstance | null>(null);
+  const [selectedInstanceTasks, setSelectedInstanceTasks] = useState<BackendTaskForInstance[]>([]);
+  const [instanceDrawerLoading, setInstanceDrawerLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const openInstanceDrawer = useCallback(async (instance: BackendInstance) => {
+    if (!organization?.id) return;
+    setSelectedInstance(instance);
+    setInstanceDrawerLoading(true);
+    try {
+      const [instRes, taskRes] = await Promise.all([
+        authFetch(`${orgApiBase}/instances/${instance.id}`),
+        authFetch(`${orgApiBase}/tasks?instance_id=${encodeURIComponent(instance.id)}`),
+      ]);
+      if (!instRes.ok || !taskRes.ok) throw new Error(`HTTP ${instRes.status}/${taskRes.status}`);
+      const [instDetail, taskData] = await Promise.all([
+        instRes.json() as Promise<BackendInstance>,
+        taskRes.json() as Promise<BackendTaskForInstance[]>,
+      ]);
+      setSelectedInstance(instDetail);
+      setSelectedInstanceTasks(taskData ?? []);
+    } catch (err) {
+      console.error("Failed to load instance details", err);
+      setSelectedInstanceTasks([]);
+    } finally {
+      setInstanceDrawerLoading(false);
+    }
+  }, [organization?.id, orgApiBase, authFetch]);
 
   const fetchWorkflows = useCallback(async () => {
     if (!organization?.id) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await authFetch(`${orgApiBase}/workflows`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: BackendWorkflow[] = await res.json();
-      setWorkflows(data ?? []);
+      const [wfRes, instRes] = await Promise.all([
+        authFetch(`${orgApiBase}/workflows`),
+        authFetch(`${orgApiBase}/instances`),
+      ]);
+      if (!wfRes.ok || !instRes.ok) throw new Error(`HTTP ${wfRes.status}/${instRes.status}`);
+
+      const [wfData, instData] = await Promise.all([
+        wfRes.json() as Promise<BackendWorkflow[]>,
+        instRes.json() as Promise<BackendInstance[]>,
+      ]);
+
+      setWorkflows(wfData ?? []);
+      setInstances(instData ?? []);
     } catch (err: any) {
       console.error("Failed to load workflows:", err);
       setError(err.message || "Could not reach workflow service");
@@ -236,6 +325,36 @@ export default function WorkstationPage() {
   const [activeInput, setActiveInput] = useState("");
   const activeInputRef = useRef<HTMLInputElement>(null);
 
+  /* Trigger confirmation dialog */
+  const [triggerTarget, setTriggerTarget] = useState<BackendWorkflow | null>(null);
+  const [triggeringWorkflow, setTriggeringWorkflow] = useState(false);
+
+  const openTriggerDialog = useCallback((wf: BackendWorkflow) => {
+    setOpenMenuId(null);
+    setTriggerTarget(wf);
+  }, []);
+
+  const confirmTrigger = useCallback(async () => {
+    if (!triggerTarget) return;
+    setTriggeringWorkflow(true);
+    try {
+      const res = await authFetch(`${orgApiBase}/instances`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workflow_id: triggerTarget.id, data: {} }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      showToast(`"${triggerTarget.name}" triggered successfully. Instance: ${data.instance_id}`, "success");
+      setTimeout(() => fetchWorkflows(), 500);
+    } catch (err: any) {
+      showToast("Failed to trigger workflow: " + (err.message || err), "error");
+    } finally {
+      setTriggerTarget(null);
+      setTriggeringWorkflow(false);
+    }
+  }, [triggerTarget, orgApiBase, authFetch, showToast, fetchWorkflows]);
+
   const openActiveDialog = useCallback((wf: BackendWorkflow) => {
     setOpenMenuId(null);
     setActiveInput("");
@@ -339,11 +458,57 @@ export default function WorkstationPage() {
           </div>
         </div>
 
+        <section className="dashboard-section" style={{ marginTop: 20 }}>
+          <div className="section-header" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <h3 className="section-title">Workflow Instances</h3>
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+              <label className="filter-label">Rows:</label>
+              <select className="filter-select" value={instanceRowLimit} onChange={(e) => setInstanceRowLimit(Number(e.target.value))}>
+                {[10, 15, 20, 30].map((n) => (<option key={n} value={n}>{n}</option>))}
+              </select>
+            </div>
+          </div>
+
+          {!loading && !error && instances.length === 0 && (
+            <div className="empty-state" style={{ padding: "28px 0" }}>
+              <p className="table-muted">No workflow instances yet.</p>
+            </div>
+          )}
+
+          {!loading && !error && instances.length > 0 && (
+            <div className="table-container" style={{ maxHeight: `${instanceRowLimit * 48 + 72}px`, overflowY: "auto" }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Instance</th><th>Workflow</th><th>Status</th><th>Current Node</th><th>Started</th><th>Completed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {instances.map((inst) => (
+                    <tr key={inst.id} style={{ cursor: "pointer" }} onClick={() => openInstanceDrawer(inst)}>
+                      <td className="font-medium">{inst.id}</td>
+                      <td>{inst.workflow_name || inst.workflow_id}</td>
+                      <td><span className={`status-dot ${inst.status === "completed" ? "active" : inst.status === "failed" ? "inactive" : "draft"}`}>{inst.status}</span></td>
+                      <td>{inst.current_node || <span className="table-muted">&mdash;</span>}</td>
+                      <td className="table-muted">{timeAgo(inst.started_at)}</td>
+                      <td className="table-muted">{inst.completed_at ? timeAgo(inst.completed_at) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
         {/* Workflows section */}
         <section className="dashboard-section">
           <div className="section-header" style={{ flexWrap: "wrap", gap: 10 }}>
             <h3 className="section-title">Workflows</h3>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginLeft: "auto" }}>
+              <label className="filter-label">Rows:</label>
+              <select className="filter-select" value={workflowRowLimit} onChange={(e) => setWorkflowRowLimit(Number(e.target.value))}>
+                {[10, 15, 20, 30].map((n) => (<option key={n} value={n}>{n}</option>))}
+              </select>
               <select className="filter-select" value={filterDept} onChange={(e) => setFilterDept(e.target.value)}>
                 <option value="all">All Departments</option>
                 {deptOptions.map((d) => (<option key={d} value={d}>{d}</option>))}
@@ -391,7 +556,7 @@ export default function WorkstationPage() {
             </div>
           )}
           {!loading && !error && filtered.length > 0 && (
-            <div className="table-container">
+            <div className="table-container" style={{ maxHeight: `${workflowRowLimit * 48 + 72}px`, overflowY: "auto" }}>
               <table className="data-table">
                 <thead>
                   <tr>
@@ -434,6 +599,116 @@ export default function WorkstationPage() {
         </section>
       </div>
 
+      {selectedInstance && (
+        <div className="modal-overlay" onClick={() => setSelectedInstance(null)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 980, width: "95vw", maxHeight: "86vh", overflow: "hidden" }}>
+            <div className="modal-header">
+              <h3 className="modal-title">Instance Timeline - {selectedInstance.id}</h3>
+              <button className="modal-close" onClick={() => setSelectedInstance(null)} aria-label="Close timeline">&times;</button>
+            </div>
+            <div className="modal-body" style={{ maxHeight: "68vh", overflowY: "auto" }}>
+              {instanceDrawerLoading ? (
+                <p className="table-muted">Loading instance timeline...</p>
+              ) : (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 18 }}>
+                    <div className="overview-stat-card"><span className="overview-stat-label">Status</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.status}</span></div>
+                    <div className="overview-stat-card"><span className="overview-stat-label">Current Step</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.current_node || "-"}</span></div>
+                    <div className="overview-stat-card"><span className="overview-stat-label">Started</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{timeAgo(selectedInstance.started_at)}</span></div>
+                    <div className="overview-stat-card"><span className="overview-stat-label">Completed</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.completed_at ? timeAgo(selectedInstance.completed_at) : "-"}</span></div>
+                  </div>
+
+                  <h4 className="section-title" style={{ marginBottom: 8 }}>Task Decisions</h4>
+                  <div className="table-container" style={{ marginBottom: 16 }}>
+                    <table className="data-table">
+                      <thead><tr><th>Step</th><th>Assigned To</th><th>Handled By</th><th>Status</th><th>Comment</th><th>Updated</th></tr></thead>
+                      <tbody>
+                        {selectedInstanceTasks.length === 0 ? (
+                          <tr><td colSpan={6} className="table-muted">No task records yet</td></tr>
+                        ) : selectedInstanceTasks.map((t) => (
+                          (() => {
+                            const related = (selectedInstance.audit_log || []).filter((a) => {
+                              const details = a.details as Record<string, unknown> | undefined;
+                              return details && String(details.task_id || "") === t.id;
+                            });
+                            const latestAction = related
+                              .slice()
+                              .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+                            const latestDetails = (latestAction?.details || {}) as Record<string, unknown>;
+                            return (
+                              <tr key={t.id}>
+                                <td>{t.title} <span className="table-muted">({t.node_id})</span></td>
+                                <td>{t.assigned_user || t.assigned_role || "Role Queue"}</td>
+                                <td>{String(latestDetails.actor || "-")}</td>
+                                <td>{formatTaskStatus(t.status)}</td>
+                                <td>{t.comment || String(latestDetails.comment || "-")}</td>
+                                <td>{t.completed_at ? timeAgo(t.completed_at) : (latestAction?.timestamp ? timeAgo(latestAction.timestamp) : "-")}</td>
+                              </tr>
+                            );
+                          })()
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <h4 className="section-title" style={{ marginBottom: 8 }}>Execution Timeline</h4>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {selectedInstance.audit_log && selectedInstance.audit_log.length > 0 ? selectedInstance.audit_log
+                      .slice()
+                      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                      .map((entry, idx) => {
+                        const details = (entry.details || {}) as Record<string, unknown>;
+                        const pieces: string[] = [];
+                        if (details.assigned_role) pieces.push(`Role: ${String(details.assigned_role)}`);
+                        if (details.assigned_user) pieces.push(`Assigned user: ${String(details.assigned_user)}`);
+                        if (details.actor) pieces.push(`Handled by: ${String(details.actor)}`);
+                        if (details.action) pieces.push(`Decision: ${String(details.action)}`);
+                        if (details.comment) pieces.push(`Comment: ${String(details.comment)}`);
+                        if (details.reason) pieces.push(`Reason: ${String(details.reason)}`);
+                        return (
+                          <div key={`${entry.timestamp}-${idx}`} style={{ border: "1px solid var(--border-color)", borderRadius: 10, padding: 10, background: "var(--surface-alt)" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                              <strong>{prettyActionName(entry.action)}</strong>
+                              <span className="table-muted">{timeAgo(entry.timestamp)}</span>
+                            </div>
+                            <div className="table-muted" style={{ marginTop: 4 }}>Step: {entry.node_id || "-"}</div>
+                            {pieces.length > 0 && (
+                              <div style={{ marginTop: 8, display: "grid", gap: 4 }}>
+                                {pieces.map((line, i) => (
+                                  <div key={`${entry.timestamp}-${i}`} style={{ fontSize: "0.88rem" }}>{line}</div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }) : (
+                      <p className="table-muted">No audit timeline yet.</p>
+                    )}
+                  </div>
+
+                  {(() => {
+                    const wf = workflows.find((w) => w.id === selectedInstance.workflow_id);
+                    const nodes = Array.isArray(wf?.nodes) ? (wf?.nodes as Array<{ id?: string; title?: string }>) : [];
+                    const done = new Set(Object.entries(selectedInstance.node_states || {}).filter(([, s]) => s?.status === "completed").map(([id]) => id));
+                    const remaining = nodes.filter((n) => n.id && !done.has(n.id)).map((n) => n.title || n.id);
+                    return (
+                      <>
+                        <h4 className="section-title" style={{ margin: "16px 0 8px" }}>Steps Left</h4>
+                        {remaining.length === 0 ? <p className="table-muted">No remaining steps.</p> : (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                            {remaining.map((name, i) => <span key={`${name}-${i}`} className="role-badge">{name}</span>)}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Fixed-position dropdown */}
       {openMenuId && menuPos && (() => {
         const openMenuWf = workflows.find((w) => w.id === openMenuId);
@@ -447,6 +722,14 @@ export default function WorkstationPage() {
               </svg>
               Modify
             </button>
+            {openMenuWf?.status === "active" && (
+              <button className="wf-row-dropdown-item" style={{ color: "#06b6d4" }} onClick={() => { if (openMenuWf) openTriggerDialog(openMenuWf); }}>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+                </svg>
+                Trigger
+              </button>
+            )}
             {!isDraft && (isInactive ? (
               <button className="wf-row-dropdown-item" style={{ color: "#22c55e" }} onClick={() => { if (openMenuWf) openActiveDialog(openMenuWf); }}>
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
@@ -541,6 +824,37 @@ export default function WorkstationPage() {
                 onClick={confirmActive}
               >
                 Set Active
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Trigger confirmation dialog */}
+      {triggerTarget && (
+        <div className="modal-overlay" onClick={() => setTriggerTarget(null)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div className="modal-header">
+              <h3 className="modal-title" style={{ color: "#06b6d4" }}>Trigger Workflow</h3>
+              <button className="modal-close" aria-label="Close trigger modal" onClick={() => setTriggerTarget(null)}>&times;</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: "0.9rem", marginBottom: 16, color: "var(--text-secondary)" }}>
+                This will start a new instance of <strong>&ldquo;{triggerTarget.name}&rdquo;</strong> with empty input data.
+              </p>
+              <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
+                Note: This is a mock trigger for testing. In production, you would provide input data for the workflow.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="action-btn action-btn-outline" onClick={() => setTriggerTarget(null)} disabled={triggeringWorkflow}>Cancel</button>
+              <button
+                className="action-btn"
+                style={{ background: "#06b6d4", color: "#fff", border: "none" }}
+                disabled={triggeringWorkflow}
+                onClick={confirmTrigger}
+              >
+                {triggeringWorkflow ? "Triggering..." : "Trigger Workflow"}
               </button>
             </div>
           </div>
