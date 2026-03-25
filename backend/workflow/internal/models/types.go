@@ -222,6 +222,7 @@ type TaskStatus string
 
 const (
 	TaskPending   TaskStatus = "pending"
+	TaskInProgress TaskStatus = "in_progress"
 	TaskApproved  TaskStatus = "approved"
 	TaskRejected  TaskStatus = "rejected"
 	TaskClarify   TaskStatus = "clarification_requested"

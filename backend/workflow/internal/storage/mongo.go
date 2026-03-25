@@ -167,6 +167,22 @@ func (m *MongoStore) ListInstancesByWorkflow(workflowID string) ([]models.Instan
 	return out, nil
 }
 
+func (m *MongoStore) ListInstancesByOrg(orgID string) ([]models.Instance, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := m.instCol.Find(ctx, bson.M{"org_id": orgID},
+		options.Find().SetSort(bson.D{{Key: "started_at", Value: -1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var out []models.Instance
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // -- Tasks --
 
 func (m *MongoStore) SaveTask(t models.TaskAssignment) (string, error) {
@@ -188,6 +204,28 @@ func (m *MongoStore) GetTask(id string) (models.TaskAssignment, bool) {
 		return models.TaskAssignment{}, false
 	}
 	return t, true
+}
+
+func (m *MongoStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := m.taskCol.Find(ctx, bson.M{
+		"org_id": orgID,
+		"$or": []bson.M{
+			{"assigned_user": userID},
+			{"assigned_user": ""},
+			{"assigned_user": bson.M{"$exists": false}},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var out []models.TaskAssignment
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (m *MongoStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error) {

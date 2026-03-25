@@ -35,11 +35,13 @@ func main() {
 	log.Printf("Connected to MongoDB succesfully")
 
 	email := connectors.NewMockEmail()
-	exec := executor.NewExecutor(store, email)
+	roleDirectory := executor.NewHTTPRoleDirectory(cfg.AuthServiceURL)
+	assigneeSelector := executor.NewRandomRoleAssigneeSelector(roleDirectory)
+	exec := executor.NewExecutor(store, email, assigneeSelector)
 
 	workflowHandler := handler.NewWorkflowHandler(store)
 	instanceHandler := handler.NewInstanceHandler(store, exec)
-	taskHandler := handler.NewTaskHandler(store)
+	taskHandler := handler.NewTaskHandler(store, exec)
 
 	// ── Clerk JWT auth ────────────────────────────────────────────────────────
 	jwksURL := strings.TrimRight(cfg.ClerkIssuerURL, "/") + "/.well-known/jwks.json"
@@ -85,6 +87,7 @@ func main() {
 
 			// Instance management
 			orgApi.POST("/instances", instanceHandler.Start)
+			orgApi.GET("/instances", instanceHandler.List)
 			orgApi.GET("/instances/:id", instanceHandler.Get)
 
 			// Task management

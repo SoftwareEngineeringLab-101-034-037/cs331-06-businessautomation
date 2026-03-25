@@ -12,6 +12,7 @@ import (
 type Config struct {
 	MongoURI       string
 	ClerkIssuerURL string
+	AuthServiceURL string
 	Port           string
 }
 
@@ -33,6 +34,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		MongoURI:       strings.TrimSpace(getEnv("MONGO_URI", "")),
 		ClerkIssuerURL: strings.TrimSpace(getEnv("CLERK_ISSUER_URL", "")),
+		AuthServiceURL: strings.TrimSpace(getEnv("AUTH_SERVICE_URL", "http://localhost:8080")),
 		Port:           strings.TrimSpace(getEnv("PORT", "8085")),
 	}
 

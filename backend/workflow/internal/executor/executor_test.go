@@ -151,6 +151,18 @@ func (m *mockStore) ListInstancesByWorkflow(workflowID string) ([]models.Instanc
 	return out, nil
 }
 
+func (m *mockStore) ListInstancesByOrg(orgID string) ([]models.Instance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []models.Instance
+	for _, inst := range m.instances {
+		if inst.OrgID == orgID {
+			out = append(out, inst)
+		}
+	}
+	return out, nil
+}
+
 func (m *mockStore) SaveTask(t models.TaskAssignment) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -170,6 +182,21 @@ func (m *mockStore) GetTask(id string) (models.TaskAssignment, bool) {
 	defer m.mu.RUnlock()
 	task, ok := m.tasks[id]
 	return task, ok
+}
+
+func (m *mockStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.listTaskErr != nil {
+		return nil, m.listTaskErr
+	}
+	var out []models.TaskAssignment
+	for _, task := range m.tasks {
+		if task.OrgID == orgID && task.AssignedUser == userID {
+			out = append(out, task)
+		}
+	}
+	return out, nil
 }
 
 func (m *mockStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error) {
@@ -270,7 +297,7 @@ func TestResolveParam(t *testing.T) {
 }
 
 func TestEvalCondition(t *testing.T) {
-	e := NewExecutor(newMockStore(), &mockEmail{})
+	e := NewExecutor(newMockStore(), &mockEmail{}, nil)
 	tests := []struct {
 		name string
 		cond string
@@ -307,7 +334,7 @@ func TestToFloat(t *testing.T) {
 func TestStartInstanceNoStartNodeMarksFailed(t *testing.T) {
 	store := newMockStore()
 	email := &mockEmail{}
-	exec := NewExecutor(store, email)
+	exec := NewExecutor(store, email, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-no-start",
@@ -331,7 +358,7 @@ func TestStartInstanceNoStartNodeMarksFailed(t *testing.T) {
 func TestRunLinearActionFlowCompletesAndSendsEmail(t *testing.T) {
 	store := newMockStore()
 	email := &mockEmail{}
-	exec := NewExecutor(store, email)
+	exec := NewExecutor(store, email, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-linear",
@@ -390,7 +417,7 @@ func TestRunLinearActionFlowCompletesAndSendsEmail(t *testing.T) {
 
 func TestRunConditionRoutesToNoBranch(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{})
+	exec := NewExecutor(store, &mockEmail{}, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-condition",
@@ -429,7 +456,7 @@ func TestRunConditionRoutesToNoBranch(t *testing.T) {
 
 func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{})
+	exec := NewExecutor(store, &mockEmail{}, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-task",
@@ -453,14 +480,18 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 			{ID: "fallback-end", Type: models.NodeEnd, Title: "Fallback"},
 		},
 	}
+	store.workflows[wf.ID] = wf
 	data := map[string]interface{}{"request_id": "r-1"}
 	instanceID := seedInstance(t, store, wf, data)
 
 	exec.run(instanceID, wf, data)
 
 	inst, _ := store.GetInstance(instanceID)
-	if _, ok := inst.NodeStates["approved-end"]; !ok {
-		t.Fatalf("expected approved-end to be visited")
+	if inst.Status != models.InstanceWaiting {
+		t.Fatalf("expected waiting status after task creation, got %s", inst.Status)
+	}
+	if _, ok := inst.NodeStates["approved-end"]; ok {
+		t.Fatalf("did not expect approved-end before human action")
 	}
 	if _, ok := inst.NodeStates["rejected-end"]; ok {
 		t.Fatalf("did not expect rejected-end to be visited")
@@ -482,11 +513,23 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	if countAuditAction(inst, "task_assigned") != 1 {
 		t.Fatalf("expected task_assigned audit entry")
 	}
+
+	if _, err := exec.ContinueTask(savedTask.ID, "user-1", "approve", "looks good"); err != nil {
+		t.Fatalf("ContinueTask failed: %v", err)
+	}
+
+	inst, _ = store.GetInstance(instanceID)
+	if inst.Status != models.InstanceCompleted {
+		t.Fatalf("expected completed status after continue, got %s", inst.Status)
+	}
+	if _, ok := inst.NodeStates["approved-end"]; !ok {
+		t.Fatalf("expected approved-end to be visited")
+	}
 }
 
 func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{})
+	exec := NewExecutor(store, &mockEmail{}, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-parallel",
@@ -518,7 +561,7 @@ func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 
 func TestRunActionSkippedForUnknownAndMissingConnector(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{})
+	exec := NewExecutor(store, &mockEmail{}, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-action-skips",

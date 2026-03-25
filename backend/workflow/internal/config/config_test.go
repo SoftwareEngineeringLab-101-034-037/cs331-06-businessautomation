@@ -72,6 +72,9 @@ func TestLoadSuccessAndDefaultPort(t *testing.T) {
 	if cfg.Port != "8085" {
 		t.Fatalf("expected default port 8085, got %q", cfg.Port)
 	}
+	if cfg.AuthServiceURL != "http://localhost:8080" {
+		t.Fatalf("expected default auth service URL, got %q", cfg.AuthServiceURL)
+	}
 }
 
 func TestLoadReadsDotEnv(t *testing.T) {
@@ -88,7 +91,7 @@ func TestLoadReadsDotEnv(t *testing.T) {
 	})
 
 	envPath := filepath.Join(tmp, ".env")
-	content := "MONGO_URI=mongodb://env\nCLERK_ISSUER_URL=https://issuer.env\nPORT=9999\n"
+	content := "MONGO_URI=mongodb://env\nCLERK_ISSUER_URL=https://issuer.env\nAUTH_SERVICE_URL=http://localhost:8082\nPORT=9999\n"
 	if err := os.WriteFile(envPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write .env failed: %v", err)
 	}
@@ -107,7 +110,7 @@ func TestLoadReadsDotEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if cfg.MongoURI != "mongodb://env" || cfg.ClerkIssuerURL != "https://issuer.env" || cfg.Port != "9999" {
+	if cfg.MongoURI != "mongodb://env" || cfg.ClerkIssuerURL != "https://issuer.env" || cfg.AuthServiceURL != "http://localhost:8082" || cfg.Port != "9999" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }

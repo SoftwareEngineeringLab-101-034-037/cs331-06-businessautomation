@@ -57,5 +57,47 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
+	if inst.OrgID != c.Param("orgId") {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
 	c.JSON(http.StatusOK, inst)
+}
+
+// GET /api/orgs/:orgId/instances?workflow_id=...
+func (h *InstanceHandler) List(c *gin.Context) {
+	orgID := c.Param("orgId")
+	workflowID := c.Query("workflow_id")
+
+	var (
+		instances []models.Instance
+		err       error
+	)
+	if workflowID != "" {
+		instances, err = h.Store.ListInstancesByWorkflow(workflowID)
+	} else {
+		instances, err = h.Store.ListInstancesByOrg(orgID)
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	type enrichedInstance struct {
+		models.Instance
+		WorkflowName string `json:"workflow_name,omitempty"`
+	}
+	out := make([]enrichedInstance, 0, len(instances))
+	for _, inst := range instances {
+		if inst.OrgID != orgID {
+			continue
+		}
+		wfName := ""
+		if wf, ok := h.Store.GetWorkflow(inst.WorkflowID); ok {
+			wfName = wf.Name
+		}
+		out = append(out, enrichedInstance{Instance: inst, WorkflowName: wfName})
+	}
+
+	c.JSON(http.StatusOK, out)
 }

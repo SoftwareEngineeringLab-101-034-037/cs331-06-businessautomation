@@ -13,11 +13,13 @@ type Store interface {
 	// Instances
 	SaveInstance(models.Instance) (string, error)
 	GetInstance(id string) (models.Instance, bool)
+	ListInstancesByOrg(orgID string) ([]models.Instance, error)
 	ListInstancesByWorkflow(workflowID string) ([]models.Instance, error)
 
 	// Task Assignments
 	SaveTask(models.TaskAssignment) (string, error)
 	GetTask(id string) (models.TaskAssignment, bool)
+	ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error)
 	ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error)
 	ListTasksByInstance(instanceID string) ([]models.TaskAssignment, error)
 }

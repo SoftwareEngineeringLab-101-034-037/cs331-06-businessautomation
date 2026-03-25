@@ -13,30 +13,24 @@ import (
 	"github.com/example/business-automation/backend/workflow/internal/storage"
 )
 
-// Executor handles running workflow instances by walking the node graph.
-// Routing is embedded in each node (next, next_yes, next_no, next_branches,
-// required_inputs) â€” there is no separate edges array.
+// Executor handles workflow execution with one goroutine per instance.
 type Executor struct {
-	store storage.Store
-	email connectors.EmailConnector
+	store            storage.Store
+	email            connectors.EmailConnector
+	assigneeSelector TaskAssigneeSelector
 
-	// mergeWaiters counts how many required-input branches have arrived at
-	// each merge node per instance.  Key = "instanceID:nodeID".
 	mu           sync.Mutex
 	mergeWaiters map[string]int
 }
 
-func NewExecutor(s storage.Store, e connectors.EmailConnector) *Executor {
+func NewExecutor(s storage.Store, e connectors.EmailConnector, selector TaskAssigneeSelector) *Executor {
 	return &Executor{
-		store:        s,
-		email:        e,
-		mergeWaiters: make(map[string]int),
+		store:            s,
+		email:            e,
+		assigneeSelector: selector,
+		mergeWaiters:     make(map[string]int),
 	}
 }
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// StartInstance
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (e *Executor) StartInstance(wf models.Workflow, data map[string]interface{}) (string, error) {
 	now := time.Now()
@@ -66,29 +60,28 @@ func (e *Executor) run(instanceID string, wf models.Workflow, data map[string]in
 
 	start := wf.StartNode()
 	if start == nil {
-		log.Printf("executor: no start node in workflow=%s", wf.ID)
 		e.markFailed(instanceID, "no start node")
 		return
 	}
 
 	e.walkNode(instanceID, start.ID, &wf, data)
 
-	if inst, ok := e.store.GetInstance(instanceID); ok {
-		now := time.Now()
-		inst.Status = models.InstanceCompleted
-		inst.CompletedAt = &now
-		inst.AuditLog = append(inst.AuditLog, models.AuditEntry{
-			Timestamp: now,
-			Action:    "instance_completed",
-		})
-		e.store.SaveInstance(inst)
+	inst, ok := e.store.GetInstance(instanceID)
+	if !ok {
+		return
 	}
-	log.Printf("executor: instance=%s completed", instanceID)
-}
+	if inst.Status == models.InstanceWaiting || inst.Status == models.InstanceFailed || inst.Status == models.InstanceCancelled || inst.Status == models.InstanceCompleted {
+		return
+	}
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// walkNode â€” execute one node then follow its successors
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+	now := time.Now()
+	inst.Status = models.InstanceCompleted
+	inst.CompletedAt = &now
+	inst.AuditLog = append(inst.AuditLog, models.AuditEntry{Timestamp: now, Action: "instance_completed"})
+	if _, err := e.store.SaveInstance(inst); err != nil {
+		log.Printf("executor: save completed instance failed: %v", err)
+	}
+}
 
 func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data map[string]interface{}) {
 	node := wf.FindNode(nodeID)
@@ -98,65 +91,69 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 	}
 
 	e.setNodeState(instanceID, nodeID, "running")
-	log.Printf("executor: instance=%s node=%s type=%s", instanceID, nodeID, node.Type)
 
 	switch node.Type {
-
 	case models.NodeStart:
-		// pass-through; just follow next
 		e.setNodeState(instanceID, nodeID, "completed")
 		e.walkNext(instanceID, node, "", wf, data)
+		return
 
 	case models.NodeEnd:
 		e.setNodeState(instanceID, nodeID, "completed")
-		return // terminal
+		return
 
 	case models.NodeTask:
 		action, err := e.executeTask(instanceID, wf, node, data)
 		if err != nil {
-			log.Printf("executor: task node %s failed: %v", nodeID, err)
 			e.setNodeState(instanceID, nodeID, "failed")
 			e.markFailed(instanceID, fmt.Sprintf("task node %s: %v", nodeID, err))
 			return
 		}
+		if action == "" {
+			// waiting for human action
+			return
+		}
 		e.setNodeState(instanceID, nodeID, "completed")
 		e.walkNext(instanceID, node, action, wf, data)
+		return
 
 	case models.NodeAction:
 		e.executeAction(instanceID, node, data)
 		e.setNodeState(instanceID, nodeID, "completed")
 		e.walkNext(instanceID, node, "", wf, data)
+		return
 
 	case models.NodeCondition:
-		branch := e.evalCondition(node.Condition, data) // "yes" or "no"
+		branch := e.evalCondition(node.Condition, data)
 		e.audit(instanceID, nodeID, "condition_evaluated", map[string]interface{}{
 			"expression": node.Condition,
 			"branch":     branch,
 		})
 		e.setNodeState(instanceID, nodeID, "completed")
 		e.walkNext(instanceID, node, branch, wf, data)
+		return
 
 	case models.NodeParallel:
-		e.executeParallel(instanceID, node, wf, data)
-		// parallel fans out; walkNext is called inside executeParallel
+		e.setNodeState(instanceID, nodeID, "completed")
+		for _, nextID := range node.NextBranches {
+			e.walkNode(instanceID, nextID, wf, data)
+		}
+		return
 
 	case models.NodeMerge:
-		// Merge sync: only the last required branch proceeds.
 		needed := len(node.RequiredInputs)
 		if needed == 0 {
-			needed = 1 // safety: treat as single-input if not configured
+			needed = 1
 		}
-
 		key := instanceID + ":" + node.ID
+
 		e.mu.Lock()
 		e.mergeWaiters[key]++
 		arrived := e.mergeWaiters[key]
 		e.mu.Unlock()
 
-		log.Printf("executor: merge %s arrived=%d needed=%d", node.ID, arrived, needed)
-
 		if arrived < needed {
-			return // not all required branches here yet
+			return
 		}
 
 		e.mu.Lock()
@@ -168,26 +165,33 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 		})
 		e.setNodeState(instanceID, nodeID, "completed")
 		e.walkNext(instanceID, node, "", wf, data)
+		return
 	}
 }
 
-// walkNext follows all successors of a node based on embedded routing.
-// result is only used for condition nodes ("yes"/"no"); pass "" otherwise.
 func (e *Executor) walkNext(instanceID string, node *models.WorkflowNode, result string, wf *models.Workflow, data map[string]interface{}) {
 	for _, nextID := range node.NextIDs(result) {
 		e.walkNode(instanceID, nextID, wf, data)
 	}
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Node executors
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-// executeTask creates a TaskAssignment for a human to act on.
-// Returns the chosen action string (used for action-based branching).
-// In production this would pause and wait for the assignee to complete
-// the task via the API; for now it simulates by picking the first allowed action.
 func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *models.WorkflowNode, data map[string]interface{}) (string, error) {
+	assignedUser := node.AssignedUser
+	if e.assigneeSelector != nil {
+		resolvedUser, err := e.assigneeSelector.Select(wf.OrgID, node.AssignedRole, node.AssignedUser)
+		if err != nil {
+			// Do not fail workflow execution on assignee lookup issues.
+			// Create the task anyway so it remains visible for manual pickup.
+			log.Printf("executor: assignee lookup failed for role=%q org=%q: %v; creating unassigned task", node.AssignedRole, wf.OrgID, err)
+			e.audit(instanceID, node.ID, "assignee_lookup_failed", map[string]interface{}{
+				"role":  node.AssignedRole,
+				"error": err.Error(),
+			})
+			resolvedUser = ""
+		}
+		assignedUser = resolvedUser
+	}
+
 	task := models.TaskAssignment{
 		InstanceID:       instanceID,
 		OrgID:            wf.OrgID,
@@ -197,7 +201,7 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 		Description:      node.Description,
 		AssignedRole:     node.AssignedRole,
 		AssignedPosition: node.AssignedPosition,
-		AssignedUser:     node.AssignedUser,
+		AssignedUser:     assignedUser,
 		AllowedActions:   node.TaskActions,
 		FormTemplateID:   node.FormTemplateID,
 		SLADays:          node.SLADays,
@@ -207,126 +211,148 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 	}
 	taskID, err := e.store.SaveTask(task)
 	if err != nil {
-		log.Printf("executor: failed to save task for node %s: %v", node.ID, err)
 		return "", fmt.Errorf("save task: %w", err)
 	}
+
 	e.audit(instanceID, node.ID, "task_assigned", map[string]interface{}{
-		"task_id":           taskID,
-		"assigned_role":     node.AssignedRole,
-		"assigned_position": node.AssignedPosition,
-		"assigned_user":     node.AssignedUser,
-		"sla_days":          node.SLADays,
-		"allowed_actions":   node.TaskActions,
-		"form_template_id":  node.FormTemplateID,
+		"task_id":         taskID,
+		"assigned_role":   node.AssignedRole,
+		"assigned_user":   assignedUser,
+		"allowed_actions": node.TaskActions,
 	})
-	log.Printf("executor: task created id=%s role=%s position=%s",
-		taskID, node.AssignedRole, node.AssignedPosition)
 
-	// Real system would pause here and wait for a human action via the API.
-	// For now, simulate with a short delay so the flow doesn't block tests.
-	time.Sleep(200 * time.Millisecond)
-
-	// Pick the first allowed action for simulation purposes; in a real
-	// system the action would come from the API when the assignee acts.
-	chosenAction := ""
-	if len(node.TaskActions) > 0 {
-		chosenAction = node.TaskActions[0]
+	inst, ok := e.store.GetInstance(instanceID)
+	if ok {
+		inst.Status = models.InstanceWaiting
+		inst.CurrentNode = node.ID
+		if _, err := e.store.SaveInstance(inst); err != nil {
+			log.Printf("executor: failed to save waiting instance: %v", err)
+		}
 	}
-	log.Printf("executor: task %s simulated action=%q", taskID, chosenAction)
-	return chosenAction, nil
+
+	return "", nil
 }
 
-// executeAction calls the configured connector.
 func (e *Executor) executeAction(instanceID string, node *models.WorkflowNode, data map[string]interface{}) {
 	if node.Connector == nil {
-		log.Printf("executor: action node %s has no connector configured", node.ID)
-		e.audit(instanceID, node.ID, "action_skipped", map[string]interface{}{"reason": "no connector"})
+		e.audit(instanceID, node.ID, "action_skipped", map[string]interface{}{"reason": "missing_connector"})
 		return
 	}
-
-	params := node.Connector.Params
-	connType := node.Connector.Type
-
-	switch connType {
-	case models.ConnectorEmail:
-		to := resolveParam(params, "to", data)
-		subject := resolveParam(params, "subject", data)
-		body := resolveParam(params, "body_template", data)
-		if to != "" {
-			_ = e.email.Send(to, subject, body)
-			e.audit(instanceID, node.ID, "email_sent", map[string]interface{}{
-				"to": to, "subject": subject,
-			})
-			log.Printf("executor: [email] â†’ %s | %s", to, subject)
-		}
-
-	case models.ConnectorWebhook:
-		url := resolveParam(params, "url", data)
-		method := resolveParam(params, "method", data)
-		if method == "" {
-			method = "POST"
-		}
-		log.Printf("executor: [webhook] %s %s", method, url)
-		e.audit(instanceID, node.ID, "webhook_called", map[string]interface{}{
-			"url": url, "method": method,
-		})
-
-	case models.ConnectorPayment:
-		provider := resolveParam(params, "provider", data)
-		amountField := resolveParam(params, "amount_field", data)
-		currency := resolveParam(params, "currency", data)
-		log.Printf("executor: [payment] provider=%s amount_field=%s currency=%s", provider, amountField, currency)
-		e.audit(instanceID, node.ID, "payment_triggered", map[string]interface{}{
-			"provider": provider, "currency": currency,
-		})
-
-	case models.ConnectorFormSubmit:
-		formID := resolveParam(params, "form_id", data)
-		formURL := resolveParam(params, "form_url", data)
-		log.Printf("executor: [form] form_id=%s url=%s", formID, formURL)
-		e.audit(instanceID, node.ID, "form_triggered", map[string]interface{}{
-			"form_id": formID, "form_url": formURL,
-		})
-
-	case models.ConnectorNotification:
-		channel := resolveParam(params, "channel", data)
-		recipient := resolveParam(params, "recipient", data)
-		message := resolveParam(params, "message_template", data)
-		log.Printf("executor: [notification] channel=%s recipient=%s msg=%s", channel, recipient, message)
-		e.audit(instanceID, node.ID, "notification_sent", map[string]interface{}{
-			"channel": channel, "recipient": recipient,
-		})
-
-	default:
-		log.Printf("executor: unknown connector type=%s on node=%s", connType, node.ID)
-		e.audit(instanceID, node.ID, "action_skipped", map[string]interface{}{
-			"reason": "unknown connector type", "type": connType,
-		})
+	if node.Connector.Type != models.ConnectorEmail || e.email == nil {
+		e.audit(instanceID, node.ID, "action_skipped", map[string]interface{}{"reason": "unsupported_connector", "type": node.Connector.Type})
+		return
 	}
-}
-
-// executeParallel fans out to all NextBranches concurrently.
-func (e *Executor) executeParallel(instanceID string, node *models.WorkflowNode, wf *models.Workflow, data map[string]interface{}) {
-	branches := node.NextBranches
-	e.audit(instanceID, node.ID, "parallel_started", map[string]interface{}{
-		"branches": len(branches),
+	to := resolveParam(node.Connector.Params, "to", data)
+	subject := resolveParam(node.Connector.Params, "subject", data)
+	body := resolveParam(node.Connector.Params, "body_template", data)
+	if to == "" {
+		return
+	}
+	if err := e.email.Send(to, subject, body); err != nil {
+		log.Printf("executor: email send failed: %v", err)
+		return
+	}
+	e.audit(instanceID, node.ID, "email_sent", map[string]interface{}{
+		"to":      to,
+		"subject": subject,
 	})
-	e.setNodeState(instanceID, node.ID, "completed")
-
-	var wg sync.WaitGroup
-	for _, nextID := range branches {
-		wg.Add(1)
-		go func(id string) {
-			defer wg.Done()
-			e.walkNode(instanceID, id, wf, data)
-		}(nextID)
-	}
-	wg.Wait()
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Helpers
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+func (e *Executor) ContinueTask(taskID, actorUserID, action, comment string) (models.TaskAssignment, error) {
+	task, ok := e.store.GetTask(taskID)
+	if !ok {
+		return models.TaskAssignment{}, fmt.Errorf("task not found")
+	}
+	if strings.TrimSpace(comment) == "" {
+		return models.TaskAssignment{}, fmt.Errorf("comment is required for task actions")
+	}
+
+	if action != "start" && len(task.AllowedActions) > 0 {
+		allowed := false
+		for _, a := range task.AllowedActions {
+			if a == action {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return models.TaskAssignment{}, fmt.Errorf("unknown action: %s", action)
+		}
+	}
+
+	now := time.Now()
+	task.Comment = comment
+	task.CompletedAt = &now
+	switch action {
+	case "start":
+		task.Status = models.TaskInProgress
+		task.CompletedAt = nil
+		if _, err := e.store.SaveTask(task); err != nil {
+			return models.TaskAssignment{}, fmt.Errorf("save task: %w", err)
+		}
+		e.audit(task.InstanceID, task.NodeID, "task_started", map[string]interface{}{
+			"task_id": task.ID,
+			"actor":   actorUserID,
+		})
+		return task, nil
+	case "approve":
+		task.Status = models.TaskApproved
+	case "reject":
+		task.Status = models.TaskRejected
+	case "clarify":
+		task.Status = models.TaskClarify
+	case "complete":
+		task.Status = models.TaskCompleted
+	default:
+		return models.TaskAssignment{}, fmt.Errorf("unknown action: %s", action)
+	}
+	if _, err := e.store.SaveTask(task); err != nil {
+		return models.TaskAssignment{}, fmt.Errorf("save task: %w", err)
+	}
+
+	inst, ok := e.store.GetInstance(task.InstanceID)
+	if !ok {
+		return models.TaskAssignment{}, fmt.Errorf("instance not found")
+	}
+	wf, ok := e.store.GetWorkflow(task.WorkflowID)
+	if !ok {
+		return models.TaskAssignment{}, fmt.Errorf("workflow not found")
+	}
+
+	e.audit(task.InstanceID, task.NodeID, "task_action", map[string]interface{}{
+		"task_id": task.ID,
+		"action":  action,
+		"actor":   actorUserID,
+		"assigned_user": task.AssignedUser,
+		"assigned_role": task.AssignedRole,
+		"comment": comment,
+		"decision_at": now.Format(time.RFC3339),
+	})
+
+	inst.Status = models.InstanceRunning
+	inst.CurrentNode = task.NodeID
+	if _, err := e.store.SaveInstance(inst); err != nil {
+		return models.TaskAssignment{}, fmt.Errorf("save instance: %w", err)
+	}
+
+	node := wf.FindNode(task.NodeID)
+	if node == nil {
+		return models.TaskAssignment{}, fmt.Errorf("task node not found in workflow")
+	}
+	e.setNodeState(task.InstanceID, task.NodeID, "completed")
+	e.walkNext(task.InstanceID, node, action, &wf, inst.Data)
+
+	finalInst, ok := e.store.GetInstance(task.InstanceID)
+	if ok && finalInst.Status == models.InstanceRunning {
+		nowDone := time.Now()
+		finalInst.Status = models.InstanceCompleted
+		finalInst.CompletedAt = &nowDone
+		finalInst.AuditLog = append(finalInst.AuditLog, models.AuditEntry{Timestamp: nowDone, Action: "instance_completed"})
+		_, _ = e.store.SaveInstance(finalInst)
+	}
+
+	return task, nil
+}
 
 func (e *Executor) setNodeState(instanceID, nodeID, status string) {
 	inst, ok := e.store.GetInstance(instanceID)
@@ -336,18 +362,18 @@ func (e *Executor) setNodeState(instanceID, nodeID, status string) {
 	if inst.NodeStates == nil {
 		inst.NodeStates = make(map[string]models.NodeState)
 	}
-	now := time.Now()
 	ns := inst.NodeStates[nodeID]
+	now := time.Now()
 	ns.Status = status
 	if status == "running" {
 		ns.StartedAt = &now
 	}
-	if status == "completed" || status == "failed" || status == "skipped" {
+	if status == "completed" || status == "failed" {
 		ns.CompletedAt = &now
 	}
 	inst.NodeStates[nodeID] = ns
 	inst.CurrentNode = nodeID
-	e.store.SaveInstance(inst)
+	_, _ = e.store.SaveInstance(inst)
 }
 
 func (e *Executor) audit(instanceID, nodeID, action string, details map[string]interface{}) {
@@ -361,7 +387,7 @@ func (e *Executor) audit(instanceID, nodeID, action string, details map[string]i
 		Action:    action,
 		Details:   details,
 	})
-	e.store.SaveInstance(inst)
+	_, _ = e.store.SaveInstance(inst)
 }
 
 func (e *Executor) markFailed(instanceID, reason string) {
@@ -369,16 +395,104 @@ func (e *Executor) markFailed(instanceID, reason string) {
 	if !ok {
 		return
 	}
+	now := time.Now()
 	inst.Status = models.InstanceFailed
+	inst.CompletedAt = &now
 	inst.AuditLog = append(inst.AuditLog, models.AuditEntry{
-		Timestamp: time.Now(),
+		Timestamp: now,
 		Action:    "instance_failed",
 		Details:   map[string]interface{}{"reason": reason},
 	})
-	e.store.SaveInstance(inst)
+	_, _ = e.store.SaveInstance(inst)
 }
 
-// resolveParam gets a connector param value and interpolates {{data.field}} references.
+func (e *Executor) evalCondition(condition string, data map[string]interface{}) string {
+	condition = strings.TrimSpace(condition)
+	if condition == "" {
+		return "yes"
+	}
+
+	ops := []string{"==", "!=", ">=", "<=", ">", "<"}
+	for _, op := range ops {
+		parts := strings.Split(condition, op)
+		if len(parts) != 2 {
+			continue
+		}
+		left := strings.TrimSpace(parts[0])
+		right := strings.TrimSpace(parts[1])
+		v, ok := data[left]
+		if !ok {
+			return "no"
+		}
+		leftStr := fmt.Sprintf("%v", v)
+
+		switch op {
+		case "==":
+			if leftStr == right {
+				return "yes"
+			}
+			return "no"
+		case "!=":
+			if leftStr != right {
+				return "yes"
+			}
+			return "no"
+		case ">", "<", ">=", "<=":
+			lf := toFloat(v)
+			rf := toFloat(right)
+			switch op {
+			case ">":
+				if lf > rf {
+					return "yes"
+				}
+			case "<":
+				if lf < rf {
+					return "yes"
+				}
+			case ">=":
+				if lf >= rf {
+					return "yes"
+				}
+			case "<=":
+				if lf <= rf {
+					return "yes"
+				}
+			}
+			return "no"
+		}
+	}
+
+	// invalid expression: default yes for backward compatibility
+	return "yes"
+}
+
+func toFloat(v interface{}) float64 {
+	switch x := v.(type) {
+	case int:
+		return float64(x)
+	case int32:
+		return float64(x)
+	case int64:
+		return float64(x)
+	case float32:
+		return float64(x)
+	case float64:
+		return x
+	case string:
+		f, err := strconv.ParseFloat(x, 64)
+		if err != nil {
+			return 0
+		}
+		return f
+	default:
+		s, err := strconv.ParseFloat(fmt.Sprintf("%v", v), 64)
+		if err != nil {
+			return 0
+		}
+		return s
+	}
+}
+
 func resolveParam(params map[string]interface{}, key string, data map[string]interface{}) string {
 	if params == nil {
 		return ""
@@ -388,64 +502,13 @@ func resolveParam(params map[string]interface{}, key string, data map[string]int
 		return ""
 	}
 	s := fmt.Sprintf("%v", raw)
-	// Interpolate {{data.fieldname}}
 	for k, v := range data {
-		placeholder := "{{data." + k + "}}"
-		s = strings.ReplaceAll(s, placeholder, fmt.Sprintf("%v", v))
+		token := "{{data." + k + "}}"
+		s = strings.ReplaceAll(s, token, fmt.Sprintf("%v", v))
 	}
 	return s
 }
 
-// evalCondition evaluates a simple expression against instance data.
-// Returns "yes" if true, "no" if false.
-func (e *Executor) evalCondition(cond string, data map[string]interface{}) string {
-	cond = strings.TrimSpace(cond)
-	if cond == "" {
-		return "yes"
-	}
-	for _, op := range []string{">=", "<=", "!=", "==", ">", "<"} {
-		parts := strings.SplitN(cond, op, 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			expected := strings.TrimSpace(parts[1])
-			actual := ""
-			if v, ok := data[key]; ok {
-				actual = strings.TrimSpace(fmt.Sprintf("%v", v))
-			}
-			match := false
-			switch op {
-			case "==":
-				match = actual == expected
-			case "!=":
-				match = actual != expected
-			case ">", ">=", "<", "<=":
-				af := toFloat(actual)
-				ef := toFloat(expected)
-				switch op {
-				case ">":
-					match = af > ef
-				case ">=":
-					match = af >= ef
-				case "<":
-					match = af < ef
-				case "<=":
-					match = af <= ef
-				}
-			}
-			if match {
-				return "yes"
-			}
-			return "no"
-		}
-	}
-	log.Printf("executor: could not evaluate condition: %s", cond)
-	return "yes"
-}
-
-func toFloat(s string) float64 {
-	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil {
-		return 0
-	}
-	return f
+func (e *Executor) GetTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error) {
+	return e.store.ListTasksByAssignee(orgID, userID)
 }

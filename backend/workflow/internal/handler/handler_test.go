@@ -130,6 +130,18 @@ func (s *handlerStore) ListInstancesByWorkflow(workflowID string) ([]models.Inst
 	return out, nil
 }
 
+func (s *handlerStore) ListInstancesByOrg(orgID string) ([]models.Instance, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]models.Instance, 0)
+	for _, inst := range s.instances {
+		if inst.OrgID == orgID {
+			out = append(out, inst)
+		}
+	}
+	return out, nil
+}
+
 func (s *handlerStore) SaveTask(task models.TaskAssignment) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -146,6 +158,18 @@ func (s *handlerStore) GetTask(id string) (models.TaskAssignment, bool) {
 	defer s.mu.RUnlock()
 	task, ok := s.tasks[id]
 	return task, ok
+}
+
+func (s *handlerStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]models.TaskAssignment, 0)
+	for _, task := range s.tasks {
+		if task.OrgID == orgID && task.AssignedUser == userID {
+			out = append(out, task)
+		}
+	}
+	return out, nil
 }
 
 func (s *handlerStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error) {
@@ -477,7 +501,7 @@ func TestInstanceHandlerStartAndGet(t *testing.T) {
 	store.workflows[activeWF.ID] = activeWF
 	store.workflows[inactiveWF.ID] = inactiveWF
 
-	exec := executor.NewExecutor(store, &noopEmail{})
+	exec := executor.NewExecutor(store, &noopEmail{}, nil)
 	h := NewInstanceHandler(store, exec)
 
 	r := gin.New()
@@ -552,7 +576,7 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 		CreatedAt:    time.Now(),
 	}
 
-	h := NewTaskHandler(store)
+	h := NewTaskHandler(store, nil)
 	r := gin.New()
 	r.GET("/api/orgs/:orgId/tasks", h.List)
 	r.PUT("/api/orgs/:orgId/tasks/:id/:action", h.Action)
