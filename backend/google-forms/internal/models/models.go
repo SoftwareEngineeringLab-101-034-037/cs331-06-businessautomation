@@ -1,0 +1,30 @@
+package models
+
+import (
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
+type OAuthToken struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	OrgID        string             `bson:"org_id"        json:"org_id"`
+	AccessToken  string             `bson:"access_token"  json:"-"`
+	RefreshToken string             `bson:"refresh_token" json:"-"`
+	TokenType    string             `bson:"token_type"    json:"token_type"`
+	Expiry       time.Time          `bson:"expiry"        json:"expiry"`
+	Scopes       []string           `bson:"scopes"        json:"scopes"`
+	ConnectedAt  time.Time          `bson:"connected_at"  json:"connected_at"`
+}
+
+type FormWatch struct {
+	ID             primitive.ObjectID `bson:"_id,omitempty"    json:"id"`
+	OrgID          string             `bson:"org_id"           json:"org_id"`
+	FormID         string             `bson:"form_id"          json:"form_id"`
+	WorkflowID     string             `bson:"workflow_id"      json:"workflow_id"`
+	Active         bool               `bson:"active"           json:"active"`
+	FieldMapping   map[string]string  `bson:"field_mapping"    json:"field_mapping"`
+	LastPolledAt   time.Time          `bson:"last_polled_at"   json:"last_polled_at"`
+	LastResponseTS string             `bson:"last_response_ts" json:"last_response_ts"`
+	CreatedAt      time.Time          `bson:"created_at"       json:"created_at"`
+}
