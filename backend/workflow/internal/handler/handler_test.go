@@ -203,6 +203,7 @@ type mockTaskExecutor struct {
 	calls         []taskContinueCall
 	responseTask  models.TaskAssignment
 	responseError error
+	authError     error
 }
 
 type taskContinueCall struct {
@@ -210,9 +211,10 @@ type taskContinueCall struct {
 	actorUserID string
 	action      string
 	comment     string
+	authHeader  string
 }
 
-func (m *mockTaskExecutor) ContinueTask(taskID, actorUserID, action, comment string) (models.TaskAssignment, error) {
+func (m *mockTaskExecutor) ContinueTask(taskID, actorUserID, action, comment, authHeader string) (models.TaskAssignment, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, taskContinueCall{
@@ -220,11 +222,19 @@ func (m *mockTaskExecutor) ContinueTask(taskID, actorUserID, action, comment str
 		actorUserID: actorUserID,
 		action:      action,
 		comment:     comment,
+		authHeader:  authHeader,
 	})
 	if m.responseError != nil {
 		return models.TaskAssignment{}, m.responseError
 	}
 	return m.responseTask, nil
+}
+
+func (m *mockTaskExecutor) CanActOnTask(actorUserID string, task models.TaskAssignment, action, authHeader string) error {
+	if m.authError != nil {
+		return m.authError
+	}
+	return nil
 }
 
 func (s *handlerStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error) {
@@ -276,6 +286,7 @@ func (n *noopEmail) Send(to, subject, body string) error { return nil }
 func testRequest(t *testing.T, r *gin.Engine, method, path string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -779,10 +790,11 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 	for i, tt := range tests {
 		taskID := fmt.Sprintf("task-action-%d", i)
 		store.tasks[taskID] = models.TaskAssignment{
-			ID:        taskID,
-			OrgID:     "org-1",
-			Status:    models.TaskPending,
-			CreatedAt: time.Now(),
+			ID:           taskID,
+			OrgID:        "org-1",
+			AssignedUser: "user-1",
+			Status:       models.TaskInProgress,
+			CreatedAt:    time.Now(),
 		}
 
 		rec = testRequest(t, legacyRouter, http.MethodPut, "/api/orgs/org-1/tasks/"+taskID+"/"+tt.action, []byte(`{"comment":"done"}`))
@@ -812,7 +824,7 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 	if len(exec.calls) != 1 {
 		t.Fatalf("expected executor ContinueTask to be called once, got %d", len(exec.calls))
 	}
-	if exec.calls[0].taskID != "task-1" || exec.calls[0].actorUserID != "user-1" || exec.calls[0].action != "approve" || exec.calls[0].comment != "approved" {
+	if exec.calls[0].taskID != "task-1" || exec.calls[0].actorUserID != "user-1" || exec.calls[0].action != "approve" || exec.calls[0].comment != "approved" || exec.calls[0].authHeader == "" {
 		t.Fatalf("unexpected executor call: %+v", exec.calls[0])
 	}
 }

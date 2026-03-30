@@ -34,16 +34,18 @@ func NewRandomRoleAssigneeSelector(directory RoleMemberDirectory) *RandomRoleAss
 }
 
 func (s *RandomRoleAssigneeSelector) Select(orgID, roleName, preferredUserID string) (string, error) {
-	if strings.TrimSpace(preferredUserID) != "" {
-		return preferredUserID, nil
+	trimmedPreferredUserID := strings.TrimSpace(preferredUserID)
+	trimmedRoleName := strings.TrimSpace(roleName)
+	if trimmedPreferredUserID != "" {
+		return trimmedPreferredUserID, nil
 	}
 	if s.directory == nil {
 		return "", nil
 	}
-	if strings.TrimSpace(roleName) == "" {
+	if trimmedRoleName == "" {
 		return "", nil
 	}
-	members, err := s.directory.ListMemberIDs(orgID, roleName)
+	members, err := s.directory.ListMemberIDs(orgID, trimmedRoleName)
 	if err != nil {
 		return "", err
 	}
@@ -53,6 +55,13 @@ func (s *RandomRoleAssigneeSelector) Select(orgID, roleName, preferredUserID str
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return members[s.rng.Intn(len(members))], nil
+}
+
+func (s *RandomRoleAssigneeSelector) Directory() RoleMemberDirectory {
+	if s == nil {
+		return nil
+	}
+	return s.directory
 }
 
 // StaticRoleMemberDirectory keeps role members in-memory and is useful in dev/tests.

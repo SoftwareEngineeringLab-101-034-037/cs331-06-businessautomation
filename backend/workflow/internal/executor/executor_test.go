@@ -350,7 +350,8 @@ func TestEvalCondition(t *testing.T) {
 		{name: "not equals true", cond: "status != rejected", data: map[string]interface{}{"status": "approved"}, want: "yes"},
 		{name: "greater than true", cond: "amount > 100", data: map[string]interface{}{"amount": 150}, want: "yes"},
 		{name: "less than false", cond: "amount < 100", data: map[string]interface{}{"amount": 150}, want: "no"},
-		{name: "invalid expression falls back", cond: "this is invalid", data: map[string]interface{}{}, want: "yes"},
+		{name: "invalid expression falls back", cond: "this is invalid", data: map[string]interface{}{}, want: "no"},
+		{name: "invalid numeric comparison returns no", cond: "amount > nope", data: map[string]interface{}{"amount": 150}, want: "no"},
 	}
 
 	for _, tt := range tests {
@@ -364,11 +365,11 @@ func TestEvalCondition(t *testing.T) {
 }
 
 func TestToFloat(t *testing.T) {
-	if got := toFloat("12.5"); got != 12.5 {
+	if got, ok := toFloat("12.5"); !ok || got != 12.5 {
 		t.Fatalf("unexpected float: %v", got)
 	}
-	if got := toFloat("bad"); got != 0 {
-		t.Fatalf("expected 0 for invalid float, got %v", got)
+	if got, ok := toFloat("bad"); ok || got != 0 {
+		t.Fatalf("expected invalid float parse, got value=%v ok=%v", got, ok)
 	}
 }
 
@@ -458,7 +459,11 @@ func TestRunLinearActionFlowCompletesAndSendsEmail(t *testing.T) {
 
 func TestRunConditionRoutesToNoBranch(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{}, nil)
+	exec := NewExecutor(store, &mockEmail{}, NewRandomRoleAssigneeSelector(NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {
+			"manager": {"user-1"},
+		},
+	})))
 
 	wf := models.Workflow{
 		ID:    "wf-condition",
@@ -497,7 +502,11 @@ func TestRunConditionRoutesToNoBranch(t *testing.T) {
 
 func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{}, nil)
+	exec := NewExecutor(store, &mockEmail{}, NewRandomRoleAssigneeSelector(NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {
+			"manager": {"user-1"},
+		},
+	})))
 
 	wf := models.Workflow{
 		ID:    "wf-task",
@@ -555,7 +564,10 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 		t.Fatalf("expected task_assigned audit entry")
 	}
 
-	if _, err := exec.ContinueTask(savedTask.ID, "user-1", "approve", "looks good"); err != nil {
+	if _, err := exec.ContinueTask(savedTask.ID, "user-1", "start", "", ""); err != nil {
+		t.Fatalf("ContinueTask start failed: %v", err)
+	}
+	if _, err := exec.ContinueTask(savedTask.ID, "user-1", "approve", "looks good", ""); err != nil {
 		t.Fatalf("ContinueTask failed: %v", err)
 	}
 	persistedTask, ok := store.GetTask(savedTask.ID)
@@ -616,7 +628,7 @@ func TestContinueTaskStartClaimsTaskWithoutComment(t *testing.T) {
 		t.Fatalf("save task failed: %v", err)
 	}
 
-	updated, err := exec.ContinueTask(taskID, "user-1", "start", "")
+	updated, err := exec.ContinueTask(taskID, "user-1", "start", "", "")
 	if err != nil {
 		t.Fatalf("ContinueTask start failed: %v", err)
 	}

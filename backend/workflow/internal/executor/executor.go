@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -22,6 +23,19 @@ type Executor struct {
 	mu           sync.Mutex
 	mergeWaiters map[string]int
 }
+
+var (
+	ErrTaskNotFound         = errors.New("task not found")
+	ErrTaskAlreadyCompleted = errors.New("task already completed")
+	ErrCommentRequired      = errors.New("comment is required for task actions")
+	ErrUnknownAction        = errors.New("unknown action")
+	ErrTaskConflict         = errors.New("task was updated concurrently")
+	ErrInstanceNotFound     = errors.New("instance not found")
+	ErrWorkflowNotFound     = errors.New("workflow not found")
+	ErrTaskNodeNotFound     = errors.New("task node not found in workflow")
+	ErrForbiddenTaskAction  = errors.New("forbidden task action")
+	ErrTaskClaimNotAllowed  = errors.New("task claim not allowed")
+)
 
 func NewExecutor(s storage.Store, e connectors.EmailConnector, selector TaskAssigneeSelector) *Executor {
 	return &Executor{
@@ -258,16 +272,21 @@ func (e *Executor) executeAction(instanceID string, node *models.WorkflowNode, d
 	})
 }
 
-func (e *Executor) ContinueTask(taskID, actorUserID, action, comment string) (models.TaskAssignment, error) {
+func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader string) (models.TaskAssignment, error) {
 	task, ok := e.store.GetTask(taskID)
 	if !ok {
-		return models.TaskAssignment{}, fmt.Errorf("task not found")
+		return models.TaskAssignment{}, ErrTaskNotFound
 	}
 	if isTerminalTaskStatus(task.Status) {
-		return models.TaskAssignment{}, fmt.Errorf("task already completed")
+		return models.TaskAssignment{}, ErrTaskAlreadyCompleted
 	}
-	if action != "start" && strings.TrimSpace(comment) == "" {
-		return models.TaskAssignment{}, fmt.Errorf("comment is required for task actions")
+	comment = strings.TrimSpace(comment)
+	actorUserID = strings.TrimSpace(actorUserID)
+	if action != "start" && comment == "" {
+		return models.TaskAssignment{}, ErrCommentRequired
+	}
+	if err := e.CanActOnTask(actorUserID, task, action, authHeader); err != nil {
+		return models.TaskAssignment{}, err
 	}
 
 	if action != "start" && len(task.AllowedActions) > 0 {
@@ -279,18 +298,31 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment string) (mo
 			}
 		}
 		if !allowed {
-			return models.TaskAssignment{}, fmt.Errorf("unknown action: %s", action)
+			return models.TaskAssignment{}, fmt.Errorf("%w: %s", ErrUnknownAction, action)
 		}
+	}
+
+	inst, ok := e.store.GetInstance(task.InstanceID)
+	if !ok {
+		return models.TaskAssignment{}, ErrInstanceNotFound
+	}
+	wf, ok := e.store.GetWorkflow(task.WorkflowID)
+	if !ok {
+		return models.TaskAssignment{}, ErrWorkflowNotFound
+	}
+	node := wf.FindNode(task.NodeID)
+	if node == nil {
+		return models.TaskAssignment{}, ErrTaskNodeNotFound
 	}
 
 	prevStatus := task.Status
 	now := time.Now()
-	task.Comment = strings.TrimSpace(comment)
+	task.Comment = comment
 	task.CompletedAt = &now
 	switch action {
 	case "start":
 		if task.Status != models.TaskPending {
-			return models.TaskAssignment{}, fmt.Errorf("task cannot be started from status %s", task.Status)
+			return models.TaskAssignment{}, fmt.Errorf("%w: cannot start from status %s", ErrForbiddenTaskAction, task.Status)
 		}
 		if strings.TrimSpace(task.AssignedUser) == "" {
 			task.AssignedUser = actorUserID
@@ -303,7 +335,7 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment string) (mo
 			return models.TaskAssignment{}, fmt.Errorf("save task: %w", err)
 		}
 		if !swapped {
-			return models.TaskAssignment{}, fmt.Errorf("task was updated concurrently")
+			return models.TaskAssignment{}, ErrTaskConflict
 		}
 		e.audit(task.InstanceID, task.NodeID, "task_started", map[string]interface{}{
 			"task_id":       task.ID,
@@ -324,23 +356,14 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment string) (mo
 		task.Status = models.TaskCompleted
 		task.ActionCommitted = action
 	default:
-		return models.TaskAssignment{}, fmt.Errorf("unknown action: %s", action)
+		return models.TaskAssignment{}, fmt.Errorf("%w: %s", ErrUnknownAction, action)
 	}
 	swapped, err := e.store.CompareAndSwapTask(task, prevStatus)
 	if err != nil {
 		return models.TaskAssignment{}, fmt.Errorf("save task: %w", err)
 	}
 	if !swapped {
-		return models.TaskAssignment{}, fmt.Errorf("task was updated concurrently")
-	}
-
-	inst, ok := e.store.GetInstance(task.InstanceID)
-	if !ok {
-		return models.TaskAssignment{}, fmt.Errorf("instance not found")
-	}
-	wf, ok := e.store.GetWorkflow(task.WorkflowID)
-	if !ok {
-		return models.TaskAssignment{}, fmt.Errorf("workflow not found")
+		return models.TaskAssignment{}, ErrTaskConflict
 	}
 
 	e.audit(task.InstanceID, task.NodeID, "task_action", map[string]interface{}{
@@ -355,7 +378,7 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment string) (mo
 
 	inst, ok = e.store.GetInstance(task.InstanceID)
 	if !ok {
-		return models.TaskAssignment{}, fmt.Errorf("instance not found")
+		return models.TaskAssignment{}, ErrInstanceNotFound
 	}
 	inst.Status = models.InstanceRunning
 	inst.CurrentNode = task.NodeID
@@ -363,10 +386,6 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment string) (mo
 		return models.TaskAssignment{}, fmt.Errorf("save instance: %w", err)
 	}
 
-	node := wf.FindNode(task.NodeID)
-	if node == nil {
-		return models.TaskAssignment{}, fmt.Errorf("task node not found in workflow")
-	}
 	e.setNodeState(task.InstanceID, task.NodeID, "completed")
 	e.walkNext(task.InstanceID, node, action, &wf, inst.Data)
 
@@ -470,8 +489,12 @@ func (e *Executor) evalCondition(condition string, data map[string]interface{}) 
 			}
 			return "no"
 		case ">", "<", ">=", "<=":
-			lf := toFloat(v)
-			rf := toFloat(right)
+			lf, leftOK := toFloat(v)
+			rf, rightOK := toFloat(right)
+			if !leftOK || !rightOK {
+				log.Printf("executor: evalCondition numeric parse failed condition=%q left=%v right=%q", condition, v, right)
+				return "no"
+			}
 			switch op {
 			case ">":
 				if lf > rf {
@@ -494,34 +517,34 @@ func (e *Executor) evalCondition(condition string, data map[string]interface{}) 
 		}
 	}
 
-	// invalid expression: default yes for backward compatibility
-	return "yes"
+	log.Printf("executor: evalCondition malformed expression condition=%q", condition)
+	return "no"
 }
 
-func toFloat(v interface{}) float64 {
+func toFloat(v interface{}) (float64, bool) {
 	switch x := v.(type) {
 	case int:
-		return float64(x)
+		return float64(x), true
 	case int32:
-		return float64(x)
+		return float64(x), true
 	case int64:
-		return float64(x)
+		return float64(x), true
 	case float32:
-		return float64(x)
+		return float64(x), true
 	case float64:
-		return x
+		return x, true
 	case string:
 		f, err := strconv.ParseFloat(x, 64)
 		if err != nil {
-			return 0
+			return 0, false
 		}
-		return f
+		return f, true
 	default:
 		s, err := strconv.ParseFloat(fmt.Sprintf("%v", v), 64)
 		if err != nil {
-			return 0
+			return 0, false
 		}
-		return s
+		return s, true
 	}
 }
 
@@ -552,4 +575,81 @@ func isTerminalTaskStatus(status models.TaskStatus) bool {
 	default:
 		return false
 	}
+}
+
+func (e *Executor) CanActOnTask(actorUserID string, task models.TaskAssignment, action, authHeader string) error {
+	actorUserID = strings.TrimSpace(actorUserID)
+	if actorUserID == "" {
+		return ErrForbiddenTaskAction
+	}
+
+	assignedUser := strings.TrimSpace(task.AssignedUser)
+	if assignedUser != "" {
+		if actorUserID != assignedUser {
+			return ErrForbiddenTaskAction
+		}
+		return nil
+	}
+
+	if action != "start" {
+		return ErrForbiddenTaskAction
+	}
+
+	canClaim, err := e.canClaimTask(actorUserID, task, authHeader)
+	if err != nil {
+		return err
+	}
+	if !canClaim {
+		return ErrTaskClaimNotAllowed
+	}
+	return nil
+}
+
+func (e *Executor) canClaimTask(actorUserID string, task models.TaskAssignment, authHeader string) (bool, error) {
+	roleName := strings.TrimSpace(task.AssignedRole)
+	if roleName == "" {
+		return true, nil
+	}
+
+	directory := e.roleDirectory()
+	if directory == nil {
+		return false, nil
+	}
+
+	memberIDs, err := e.listRoleMemberIDs(directory, task.OrgID, roleName, authHeader)
+	if err != nil {
+		if errors.Is(err, ErrRoleNotFound) || errors.Is(err, ErrNoMembers) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, memberID := range memberIDs {
+		if strings.TrimSpace(memberID) == actorUserID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (e *Executor) listRoleMemberIDs(directory RoleMemberDirectory, orgID, roleName, authHeader string) ([]string, error) {
+	type authAwareRoleMemberDirectory interface {
+		ListMemberIDsWithAuth(orgID, roleName, authHeader string) ([]string, error)
+	}
+
+	if authAware, ok := directory.(authAwareRoleMemberDirectory); ok {
+		return authAware.ListMemberIDsWithAuth(orgID, roleName, authHeader)
+	}
+	return directory.ListMemberIDs(orgID, roleName)
+}
+
+func (e *Executor) roleDirectory() RoleMemberDirectory {
+	type directoryProvider interface {
+		Directory() RoleMemberDirectory
+	}
+
+	provider, ok := e.assigneeSelector.(directoryProvider)
+	if !ok {
+		return nil
+	}
+	return provider.Directory()
 }
