@@ -106,7 +106,7 @@ func (d *httpRoleDirectory) listMemberIDs(orgID, roleName, authHeader string) ([
 		}
 		if len(result) == 0 {
 			log.Printf("role_directory_http.ListMemberIDs no members org_id=%q role=%q", orgID, roleName)
-			return nil, ErrNoMembers
+			return []string{}, nil
 		}
 		return result, nil
 	}

@@ -95,7 +95,8 @@ func (h *TaskHandler) Action(c *gin.Context) {
 		Comment string `json:"comment"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON: " + err.Error()})
+		log.Printf("task_handler.Action invalid JSON task_id=%q action=%q: %v", taskID, action, err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON payload"})
 		return
 	}
 	if action != "start" && strings.TrimSpace(body.Comment) == "" {

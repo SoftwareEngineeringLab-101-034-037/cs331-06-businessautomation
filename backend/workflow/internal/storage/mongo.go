@@ -262,10 +262,8 @@ func (m *MongoStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAss
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cursor, err := m.taskCol.Find(ctx, bson.M{
-		"org_id": orgID,
-		"$or": []bson.M{
-			{"assigned_user": userID},
-		},
+		"org_id":        orgID,
+		"assigned_user": userID,
 	})
 	if err != nil {
 		return nil, err

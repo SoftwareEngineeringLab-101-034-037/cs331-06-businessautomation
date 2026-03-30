@@ -45,7 +45,8 @@ func (h *InstanceHandler) Start(c *gin.Context) {
 
 	instID, err := h.Exec.StartInstance(wf, req.Data, middleware.GetAuthorizationHeader(c))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "start failed: " + err.Error()})
+		log.Printf("instance_handler.Start failed workflow_id=%q org_id=%q: %v", wf.ID, wf.OrgID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "start failed"})
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"instance_id": instID})

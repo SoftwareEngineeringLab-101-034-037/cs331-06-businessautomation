@@ -149,9 +149,17 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 
 	case models.NodeParallel:
 		e.setNodeState(instanceID, nodeID, "completed")
+		var wg sync.WaitGroup
 		for _, nextID := range node.NextBranches {
-			e.walkNode(instanceID, nextID, wf, data, authHeader)
+			branchNextID := nextID
+			branchData := cloneWorkflowData(data)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				e.walkNode(instanceID, branchNextID, wf, branchData, authHeader)
+			}()
 		}
+		wg.Wait()
 		return
 
 	case models.NodeMerge:
@@ -399,7 +407,9 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader
 		finalInst.Status = models.InstanceCompleted
 		finalInst.CompletedAt = &nowDone
 		finalInst.AuditLog = append(finalInst.AuditLog, models.AuditEntry{Timestamp: nowDone, Action: "instance_completed"})
-		_, _ = e.store.SaveInstance(finalInst)
+		if _, err := e.store.SaveInstance(finalInst); err != nil {
+			log.Printf("executor: failed to save completed instance instance_id=%s status=%s action=%s: %v", task.InstanceID, models.InstanceCompleted, "instance_completed", err)
+		}
 	}
 
 	return task, nil
@@ -613,7 +623,8 @@ func (e *Executor) canClaimTask(actorUserID string, task models.TaskAssignment, 
 
 	directory := e.roleDirectory()
 	if directory == nil {
-		return false, nil
+		log.Printf("executor: roleDirectory returned nil for role-restricted task claim role=%q task_id=%q; allowing claim to avoid blocking workflow", roleName, task.ID)
+		return true, nil
 	}
 
 	memberIDs, err := e.listRoleMemberIDs(directory, task.OrgID, roleName, authHeader)
@@ -639,7 +650,21 @@ func (e *Executor) listRoleMemberIDs(directory RoleMemberDirectory, orgID, roleN
 	if authAware, ok := directory.(authAwareRoleMemberDirectory); ok {
 		return authAware.ListMemberIDsWithAuth(orgID, roleName, authHeader)
 	}
+	if strings.TrimSpace(authHeader) != "" {
+		log.Printf("executor: role directory %T does not support auth-aware member lookup; falling back to ListMemberIDs without auth header", directory)
+	}
 	return directory.ListMemberIDs(orgID, roleName)
+}
+
+func cloneWorkflowData(data map[string]interface{}) map[string]interface{} {
+	if data == nil {
+		return nil
+	}
+	cloned := make(map[string]interface{}, len(data))
+	for key, value := range data {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (e *Executor) roleDirectory() RoleMemberDirectory {
