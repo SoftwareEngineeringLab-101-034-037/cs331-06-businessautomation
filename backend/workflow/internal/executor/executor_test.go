@@ -93,6 +93,18 @@ func (m *mockStore) GetWorkflow(id string) (models.Workflow, bool) {
 	return w, ok
 }
 
+func (m *mockStore) GetWorkflowsByIDs(ids []string) (map[string]models.Workflow, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]models.Workflow, len(ids))
+	for _, id := range ids {
+		if wf, ok := m.workflows[id]; ok {
+			out[id] = wf
+		}
+	}
+	return out, nil
+}
+
 func (m *mockStore) ListWorkflows(orgID string) ([]models.Workflow, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -182,6 +194,35 @@ func (m *mockStore) GetTask(id string) (models.TaskAssignment, bool) {
 	defer m.mu.RUnlock()
 	task, ok := m.tasks[id]
 	return task, ok
+}
+
+func (m *mockStore) CompareAndSwapTask(task models.TaskAssignment, expectedStatus models.TaskStatus) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.saveTaskErr != nil {
+		return false, m.saveTaskErr
+	}
+	current, ok := m.tasks[task.ID]
+	if !ok || current.Status != expectedStatus {
+		return false, nil
+	}
+	m.tasks[task.ID] = task
+	return true, nil
+}
+
+func (m *mockStore) HasActiveTasks(instanceID string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, task := range m.tasks {
+		if task.InstanceID != instanceID {
+			continue
+		}
+		switch task.Status {
+		case models.TaskPending, models.TaskInProgress, models.TaskClarify:
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (m *mockStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error) {
@@ -517,6 +558,22 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	if _, err := exec.ContinueTask(savedTask.ID, "user-1", "approve", "looks good"); err != nil {
 		t.Fatalf("ContinueTask failed: %v", err)
 	}
+	persistedTask, ok := store.GetTask(savedTask.ID)
+	if !ok {
+		t.Fatalf("expected persisted task after ContinueTask")
+	}
+	if persistedTask.Status != models.TaskCompleted {
+		t.Fatalf("expected persisted completed status, got %s", persistedTask.Status)
+	}
+	if persistedTask.ActionCommitted != "approve" {
+		t.Fatalf("expected committed action approve, got %q", persistedTask.ActionCommitted)
+	}
+	if persistedTask.Comment != "looks good" {
+		t.Fatalf("expected persisted comment, got %q", persistedTask.Comment)
+	}
+	if persistedTask.CompletedAt == nil {
+		t.Fatalf("expected persisted completed timestamp")
+	}
 
 	inst, _ = store.GetInstance(instanceID)
 	if inst.Status != models.InstanceCompleted {
@@ -525,6 +582,76 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	if _, ok := inst.NodeStates["approved-end"]; !ok {
 		t.Fatalf("expected approved-end to be visited")
 	}
+}
+
+func TestContinueTaskStartClaimsTaskWithoutComment(t *testing.T) {
+	store := newMockStore()
+	exec := NewExecutor(store, &mockEmail{}, nil)
+
+	wf := models.Workflow{
+		ID:    "wf-start-claim",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{
+			{
+				ID:          "task",
+				Type:        models.NodeTask,
+				Title:       "Review",
+				TaskActions: []string{"approve", "reject"},
+			},
+		},
+	}
+	store.workflows[wf.ID] = wf
+	instanceID := seedInstance(t, store, wf, map[string]interface{}{})
+	taskID, err := store.SaveTask(models.TaskAssignment{
+		OrgID:          "org-1",
+		InstanceID:     instanceID,
+		WorkflowID:     wf.ID,
+		NodeID:         "task",
+		Title:          "Review",
+		AllowedActions: []string{"approve", "reject"},
+		Status:         models.TaskPending,
+		CreatedAt:      time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("save task failed: %v", err)
+	}
+
+	updated, err := exec.ContinueTask(taskID, "user-1", "start", "")
+	if err != nil {
+		t.Fatalf("ContinueTask start failed: %v", err)
+	}
+	if updated.Status != models.TaskInProgress {
+		t.Fatalf("expected in_progress after start, got %s", updated.Status)
+	}
+	if updated.AssignedUser != "user-1" {
+		t.Fatalf("expected task to be claimed by actor, got %q", updated.AssignedUser)
+	}
+	if updated.Comment != "" {
+		t.Fatalf("expected no comment on start, got %q", updated.Comment)
+	}
+	if updated.CompletedAt != nil {
+		t.Fatalf("expected no completed time after start")
+	}
+
+	persisted, ok := store.GetTask(taskID)
+	if !ok {
+		t.Fatalf("expected persisted task")
+	}
+	if persisted.Status != models.TaskInProgress || persisted.AssignedUser != "user-1" {
+		t.Fatalf("unexpected persisted task after start: %+v", persisted)
+	}
+	if got := countAuditAction(mustGetInstance(t, store, instanceID), "task_started"); got != 1 {
+		t.Fatalf("expected one task_started audit entry, got %d", got)
+	}
+}
+
+func mustGetInstance(t *testing.T, store *mockStore, instanceID string) models.Instance {
+	t.Helper()
+	inst, ok := store.GetInstance(instanceID)
+	if !ok {
+		t.Fatalf("instance %s not found", instanceID)
+	}
+	return inst
 }
 
 func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {

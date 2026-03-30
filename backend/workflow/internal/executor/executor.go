@@ -263,7 +263,10 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment string) (mo
 	if !ok {
 		return models.TaskAssignment{}, fmt.Errorf("task not found")
 	}
-	if strings.TrimSpace(comment) == "" {
+	if isTerminalTaskStatus(task.Status) {
+		return models.TaskAssignment{}, fmt.Errorf("task already completed")
+	}
+	if action != "start" && strings.TrimSpace(comment) == "" {
 		return models.TaskAssignment{}, fmt.Errorf("comment is required for task actions")
 	}
 
@@ -280,34 +283,55 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment string) (mo
 		}
 	}
 
+	prevStatus := task.Status
 	now := time.Now()
-	task.Comment = comment
+	task.Comment = strings.TrimSpace(comment)
 	task.CompletedAt = &now
 	switch action {
 	case "start":
+		if task.Status != models.TaskPending {
+			return models.TaskAssignment{}, fmt.Errorf("task cannot be started from status %s", task.Status)
+		}
+		if strings.TrimSpace(task.AssignedUser) == "" {
+			task.AssignedUser = actorUserID
+		}
+		task.Comment = ""
 		task.Status = models.TaskInProgress
 		task.CompletedAt = nil
-		if _, err := e.store.SaveTask(task); err != nil {
+		swapped, err := e.store.CompareAndSwapTask(task, prevStatus)
+		if err != nil {
 			return models.TaskAssignment{}, fmt.Errorf("save task: %w", err)
 		}
+		if !swapped {
+			return models.TaskAssignment{}, fmt.Errorf("task was updated concurrently")
+		}
 		e.audit(task.InstanceID, task.NodeID, "task_started", map[string]interface{}{
-			"task_id": task.ID,
-			"actor":   actorUserID,
+			"task_id":       task.ID,
+			"actor":         actorUserID,
+			"assigned_user": task.AssignedUser,
 		})
 		return task, nil
 	case "approve":
-		task.Status = models.TaskApproved
+		task.Status = models.TaskCompleted
+		task.ActionCommitted = action
 	case "reject":
-		task.Status = models.TaskRejected
+		task.Status = models.TaskCompleted
+		task.ActionCommitted = action
 	case "clarify":
-		task.Status = models.TaskClarify
+		task.Status = models.TaskCompleted
+		task.ActionCommitted = action
 	case "complete":
 		task.Status = models.TaskCompleted
+		task.ActionCommitted = action
 	default:
 		return models.TaskAssignment{}, fmt.Errorf("unknown action: %s", action)
 	}
-	if _, err := e.store.SaveTask(task); err != nil {
+	swapped, err := e.store.CompareAndSwapTask(task, prevStatus)
+	if err != nil {
 		return models.TaskAssignment{}, fmt.Errorf("save task: %w", err)
+	}
+	if !swapped {
+		return models.TaskAssignment{}, fmt.Errorf("task was updated concurrently")
 	}
 
 	inst, ok := e.store.GetInstance(task.InstanceID)
@@ -320,15 +344,19 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment string) (mo
 	}
 
 	e.audit(task.InstanceID, task.NodeID, "task_action", map[string]interface{}{
-		"task_id": task.ID,
-		"action":  action,
-		"actor":   actorUserID,
+		"task_id":       task.ID,
+		"action":        action,
+		"actor":         actorUserID,
 		"assigned_user": task.AssignedUser,
 		"assigned_role": task.AssignedRole,
-		"comment": comment,
-		"decision_at": now.Format(time.RFC3339),
+		"comment":       comment,
+		"decision_at":   now.Format(time.RFC3339),
 	})
 
+	inst, ok = e.store.GetInstance(task.InstanceID)
+	if !ok {
+		return models.TaskAssignment{}, fmt.Errorf("instance not found")
+	}
 	inst.Status = models.InstanceRunning
 	inst.CurrentNode = task.NodeID
 	if _, err := e.store.SaveInstance(inst); err != nil {
@@ -342,8 +370,12 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment string) (mo
 	e.setNodeState(task.InstanceID, task.NodeID, "completed")
 	e.walkNext(task.InstanceID, node, action, &wf, inst.Data)
 
+	hasActiveTasks, err := e.store.HasActiveTasks(task.InstanceID)
+	if err != nil {
+		return models.TaskAssignment{}, fmt.Errorf("check active tasks: %w", err)
+	}
 	finalInst, ok := e.store.GetInstance(task.InstanceID)
-	if ok && finalInst.Status == models.InstanceRunning {
+	if ok && finalInst.Status == models.InstanceRunning && !hasActiveTasks {
 		nowDone := time.Now()
 		finalInst.Status = models.InstanceCompleted
 		finalInst.CompletedAt = &nowDone
@@ -511,4 +543,13 @@ func resolveParam(params map[string]interface{}, key string, data map[string]int
 
 func (e *Executor) GetTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error) {
 	return e.store.ListTasksByAssignee(orgID, userID)
+}
+
+func isTerminalTaskStatus(status models.TaskStatus) bool {
+	switch status {
+	case models.TaskApproved, models.TaskRejected, models.TaskCompleted:
+		return true
+	default:
+		return false
+	}
 }
