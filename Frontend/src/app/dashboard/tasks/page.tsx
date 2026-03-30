@@ -7,7 +7,9 @@ import { MOCK_TASKS } from "@/lib/mock-data";
 import type { Task, TaskStatus, TaskPriority } from "@/types/dashboard";
 import { PRIORITY_CONFIG } from "@/types/dashboard";
 
+const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
+const DEMO_TASKS_ENABLED = process.env.NEXT_PUBLIC_ENABLE_DEMO_TASKS === "true";
 
 type FilterPriority = "all" | TaskPriority;
 
@@ -23,6 +25,7 @@ type BackendTask = {
   assigned_position?: string;
   assigned_user?: string;
   allowed_actions?: string[];
+  action_committed?: string;
   sla_days?: number;
   status: string;
   comment?: string;
@@ -36,18 +39,21 @@ type BackendWorkflow = {
   department?: string;
 };
 
+type BackendRoleMember = {
+  id: string;
+};
+
+type BackendRoleSummary = {
+  id: string;
+  name: string;
+  members?: BackendRoleMember[];
+};
+
 const KANBAN_COLUMNS: { key: "pending" | "in_progress" | "completed"; label: string; statuses: TaskStatus[] }[] = [
   { key: "pending", label: "Pending", statuses: ["pending"] },
   { key: "in_progress", label: "In Progress", statuses: ["in_progress"] },
   { key: "completed", label: "Completed", statuses: ["completed", "escalated", "sent_back"] },
 ];
-
-const PRIORITY_COLORS: Record<TaskPriority, string> = {
-  critical: "#ef4444",
-  high: "#f97316",
-  medium: "#f59e0b",
-  low: "#22c55e",
-};
 
 function mapBackendStatus(status: string): TaskStatus {
   switch (status) {
@@ -90,6 +96,7 @@ function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined): Tas
     title: task.title,
     description: task.description || "No description provided.",
     comment: task.comment,
+    actionCommitted: task.action_committed,
     status,
     priority,
     assignedTo: task.assigned_user || "",
@@ -136,7 +143,7 @@ export default function TasksPage() {
 
   const loadTasks = useCallback(async () => {
     if (!organization?.id || !userId) {
-      setTasks(MOCK_TASKS);
+      setTasks(DEMO_TASKS_ENABLED ? MOCK_TASKS : []);
       setLoading(false);
       return;
     }
@@ -156,12 +163,54 @@ export default function TasksPage() {
       const backendTasks = (await taskRes.json()) as BackendTask[];
       const workflows = (await workflowRes.json()) as BackendWorkflow[];
       const wfMap = new Map(workflows.map((w) => [w.id, w]));
+      const taskMap = new Map<string, BackendTask>();
 
-      const mapped = (backendTasks || []).map((t) => toUITask(t, wfMap.get(t.workflow_id)));
+      for (const task of backendTasks || []) {
+        taskMap.set(task.id, task);
+      }
+
+      try {
+        const roleRes = await authFetch(`${AUTH_API}/api/orgs/${organization.id}/roles`);
+        if (roleRes.ok) {
+          const roles = (await roleRes.json()) as BackendRoleSummary[];
+          const myRoleNames = (roles || [])
+            .filter((role) => (role.members || []).some((member) => member.id === userId))
+            .map((role) => role.name)
+            .filter(Boolean);
+
+          if (myRoleNames.length > 0) {
+            const roleTaskResponses = await Promise.allSettled(
+              myRoleNames.map(async (roleName) => {
+                const response = await authFetch(`${WF_API}/api/orgs/${organization.id}/tasks?role=${encodeURIComponent(roleName)}`);
+                if (!response.ok) {
+                  throw new Error(`Failed to load role tasks for ${roleName}`);
+                }
+                return await response.json() as BackendTask[];
+              }),
+            );
+
+            for (const result of roleTaskResponses) {
+              if (result.status !== "fulfilled") {
+                continue;
+              }
+              for (const task of result.value || []) {
+                if (task.assigned_user && task.assigned_user !== userId) {
+                  continue;
+                }
+                taskMap.set(task.id, task);
+              }
+            }
+          }
+        }
+      } catch (roleErr) {
+        console.warn("Failed to load role-based tasks", roleErr);
+      }
+
+      const mapped = Array.from(taskMap.values()).map((t) => toUITask(t, wfMap.get(t.workflow_id)));
       setTasks(mapped.length > 0 ? mapped : []);
     } catch (err: any) {
       setError(err?.message || "Could not load tasks");
-      setTasks(MOCK_TASKS);
+      setTasks(DEMO_TASKS_ENABLED ? MOCK_TASKS : []);
     } finally {
       setLoading(false);
     }
@@ -284,20 +333,24 @@ export default function TasksPage() {
                     return (
                   <div
                     key={task.id}
-                    className={`kanban-card kanban-priority-${task.priority} ${visualClass}`}
+                    className={`kanban-card ${visualClass}`}
                     onClick={() => handleSelectTask(task)}
                   >
                     <div className="kanban-card-header">
                       <span className="kanban-card-id">{task.id}</span>
                       <span
-                        className="kanban-card-priority"
-                        style={{ background: PRIORITY_COLORS[task.priority] }}
+                        className={`kanban-card-priority ${task.priority}`}
                       >
                         {PRIORITY_CONFIG[task.priority].label}
                       </span>
                     </div>
                     <h4 className="kanban-card-title">{task.title}</h4>
                     <p className="kanban-card-workflow">{task.workflowName}</p>
+                    {task.status === "completed" && task.actionCommitted && (
+                      <p className="kanban-card-workflow">
+                        Outcome: {task.actionCommitted.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase())}
+                      </p>
+                    )}
                     <div className="kanban-card-meta">
                       <div className="kanban-card-meta-item">{task.departmentOrigin}</div>
                       <div className="kanban-card-meta-item">

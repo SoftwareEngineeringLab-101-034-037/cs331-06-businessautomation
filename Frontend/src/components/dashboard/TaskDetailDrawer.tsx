@@ -36,7 +36,7 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
 
   function handleAction(action: string, data?: Record<string, string>) {
     if (onAction) {
-      onAction(task, action, data);
+      onAction(task!, action, data);
       return;
     }
     alert(`Action: ${action}${data ? `\nData: ${JSON.stringify(data)}` : ""}`);
@@ -180,6 +180,12 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
                   <dd>{task.comment}</dd>
                 </div>
               )}
+              {task.actionCommitted && (
+                <div className="detail-info-item">
+                  <dt>Action Committed</dt>
+                  <dd>{formatActionLabel(task.actionCommitted)}</dd>
+                </div>
+              )}
               {task.completedAt && (
                 <div className="detail-info-item">
                   <dt>Completed</dt>
@@ -206,7 +212,9 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
           </section>
 
           {/* Actions */}
-          <TaskActions task={task} onAction={handleAction} />
+          {task.status !== "completed" && (
+            <TaskActions task={task} onAction={handleAction} />
+          )}
         </div>
       </aside>
     </>
@@ -225,4 +233,10 @@ function formatDate(dateStr: string): string {
 
 function isOverdue(dateStr: string): boolean {
   return new Date(dateStr) < new Date();
+}
+
+function formatActionLabel(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }

@@ -23,6 +23,7 @@ export interface Task {
   title: string;
   description: string;
   comment?: string;
+  actionCommitted?: string;
   status: TaskStatus;
   priority: TaskPriority;
   assignedTo: string;
