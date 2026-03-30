@@ -11,6 +11,7 @@ export type TaskStatus =
   | "pending"
   | "in_progress"
   | "completed"
+  | "rejected"
   | "overdue"
   | "escalated"
   | "cancelled"
@@ -55,6 +56,7 @@ export const TASK_STATUS_CONFIG: Record<
   pending: { label: "Pending", color: "#f59e0b", bg: "rgba(245,158,11,0.12)" },
   in_progress: { label: "In Progress", color: "#3b82f6", bg: "rgba(59,130,246,0.12)" },
   completed: { label: "Completed", color: "#22c55e", bg: "rgba(34,197,94,0.12)" },
+  rejected: { label: "Rejected", color: "#ef4444", bg: "rgba(239,68,68,0.12)" },
   overdue: { label: "Overdue", color: "#ef4444", bg: "rgba(239,68,68,0.12)" },
   escalated: { label: "Escalated", color: "#f97316", bg: "rgba(249,115,22,0.12)" },
   cancelled: { label: "Cancelled", color: "#6b7280", bg: "rgba(107,114,128,0.12)" },

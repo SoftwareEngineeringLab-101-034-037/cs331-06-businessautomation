@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
+import { ToastContainer, useToast } from "@/components/Toast";
 import TaskDetailDrawer from "@/components/dashboard/TaskDetailDrawer";
 import { MOCK_TASKS } from "@/lib/mock-data";
 import type { Task, TaskStatus, TaskPriority } from "@/types/dashboard";
@@ -52,7 +53,7 @@ type BackendRoleSummary = {
 const KANBAN_COLUMNS: { key: "pending" | "in_progress" | "completed"; label: string; statuses: TaskStatus[] }[] = [
   { key: "pending", label: "Pending", statuses: ["pending"] },
   { key: "in_progress", label: "In Progress", statuses: ["in_progress"] },
-  { key: "completed", label: "Completed", statuses: ["completed", "escalated", "sent_back"] },
+  { key: "completed", label: "Completed", statuses: ["completed", "rejected", "escalated", "sent_back"] },
 ];
 
 function mapBackendStatus(status: string): TaskStatus {
@@ -69,7 +70,7 @@ function mapBackendStatus(status: string): TaskStatus {
     case "completed":
       return "completed";
     case "rejected":
-      return "sent_back";
+      return "rejected";
     default:
       return "in_progress";
   }
@@ -119,9 +120,89 @@ function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined): Tas
   };
 }
 
+function TaskCard({ task, onSelect }: { task: Task; onSelect: (task: Task) => void }) {
+  const overdue = (task.status === "pending" || task.status === "in_progress")
+    && new Date(task.dueDate).getTime() < Date.now();
+  const visualClass = overdue
+    ? "kanban-card-overdue"
+    : task.status === "rejected"
+      ? "kanban-card-rejected"
+      : task.status === "escalated"
+        ? "kanban-card-escalated"
+        : task.status === "sent_back"
+          ? "kanban-card-sent-back"
+          : "";
+
+  return (
+    <div
+      className={`kanban-card ${visualClass}`}
+      onClick={() => onSelect(task)}
+    >
+      <div className="kanban-card-header">
+        <span className="kanban-card-id">{task.id}</span>
+        <span className={`kanban-card-priority ${task.priority}`}>
+          {PRIORITY_CONFIG[task.priority].label}
+        </span>
+      </div>
+      <h4 className="kanban-card-title">{task.title}</h4>
+      <p className="kanban-card-workflow">{task.workflowName}</p>
+      {task.status === "completed" && task.actionCommitted && (
+        <p className="kanban-card-workflow">
+          Outcome: {task.actionCommitted.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase())}
+        </p>
+      )}
+      <div className="kanban-card-meta">
+        <div className="kanban-card-meta-item">{task.departmentOrigin}</div>
+        <div className="kanban-card-meta-item">
+          {new Date(task.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+        </div>
+      </div>
+      <div className="kanban-card-progress">
+        <div className="kanban-card-progress-bar">
+          <div
+            className="kanban-card-progress-fill"
+            style={{ width: `${(task.stepNumber / task.totalSteps) * 100}%` }}
+          />
+        </div>
+        <span className="kanban-card-progress-text">
+          {task.stepNumber}/{task.totalSteps}
+        </span>
+      </div>
+      <div className="kanban-card-footer">
+        <div className="kanban-card-avatar" title={task.assignedToName}>
+          {task.assignedToName.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
+        </div>
+        <span className="kanban-card-assignee">{task.assignedToName}</span>
+      </div>
+    </div>
+  );
+}
+
+function mergeSignals(signals: Array<AbortSignal | null | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter(Boolean) as AbortSignal[];
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      controller.abort();
+      break;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+  }
+  return controller.signal;
+}
+
 export default function TasksPage() {
   const { getToken, userId } = useAuth();
   const { organization } = useOrganization();
+  const { toasts, showToast, dismissToast } = useToast();
 
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<FilterPriority>("all");
@@ -130,15 +211,26 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const authFetch = useCallback(async (input: string, init: RequestInit = {}): Promise<Response> => {
+  const authFetch = useCallback(async (
+    input: string,
+    init: RequestInit = {},
+    timeoutMs = 10000,
+  ): Promise<Response> => {
     const token = await getToken();
-    return fetch(input, {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    const controller = new AbortController();
+    const timeoutID = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(input, {
+        ...init,
+        signal: mergeSignals([init.signal, controller.signal]),
+        headers: {
+          ...(init.headers ?? {}),
+          Authorization: `Bearer ${token}`,
+        },
+      });
+    } finally {
+      clearTimeout(timeoutID);
+    }
   }, [getToken]);
 
   const loadTasks = useCallback(async () => {
@@ -232,14 +324,29 @@ export default function TasksPage() {
         body: JSON.stringify({ comment: data?.reason || "" }),
       });
       if (!response.ok) {
-        throw new Error(`Action failed (${response.status})`);
+        let message = `Action failed (${response.status})`;
+        try {
+          const payload = (await response.json()) as { error?: string };
+          if (payload?.error) {
+            message = payload.error;
+          }
+        } catch {
+          // Keep the generic status-based message when the body is not JSON.
+        }
+        throw new Error(message);
       }
       await loadTasks();
       setSelectedTask(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Task action failed", err);
+      showToast(
+        err?.name === "AbortError"
+          ? "Task action timed out. Please try again."
+          : (err?.message || "Task action failed."),
+        "error",
+      );
     }
-  }, [authFetch, loadTasks, organization?.id]);
+  }, [authFetch, loadTasks, organization?.id, showToast]);
 
   const filtered = useMemo(() => {
     return tasks.filter((t) => {
@@ -311,63 +418,7 @@ export default function TasksPage() {
             <div className="kanban-column-body">
               {col.tasks.length > 0 ? (
                 col.tasks.map((task) => (
-                  (() => {
-                    const overdue = (task.status === "pending" || task.status === "in_progress")
-                      && new Date(task.dueDate).getTime() < Date.now();
-                    const visualClass = overdue
-                      ? "kanban-card-overdue"
-                      : task.status === "escalated"
-                        ? "kanban-card-escalated"
-                        : task.status === "sent_back"
-                          ? "kanban-card-sent-back"
-                          : "";
-                    return (
-                  <div
-                    key={task.id}
-                    className={`kanban-card ${visualClass}`}
-                    onClick={() => handleSelectTask(task)}
-                  >
-                    <div className="kanban-card-header">
-                      <span className="kanban-card-id">{task.id}</span>
-                      <span
-                        className={`kanban-card-priority ${task.priority}`}
-                      >
-                        {PRIORITY_CONFIG[task.priority].label}
-                      </span>
-                    </div>
-                    <h4 className="kanban-card-title">{task.title}</h4>
-                    <p className="kanban-card-workflow">{task.workflowName}</p>
-                    {task.status === "completed" && task.actionCommitted && (
-                      <p className="kanban-card-workflow">
-                        Outcome: {task.actionCommitted.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase())}
-                      </p>
-                    )}
-                    <div className="kanban-card-meta">
-                      <div className="kanban-card-meta-item">{task.departmentOrigin}</div>
-                      <div className="kanban-card-meta-item">
-                        {new Date(task.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                      </div>
-                    </div>
-                    <div className="kanban-card-progress">
-                      <div className="kanban-card-progress-bar">
-                        <div
-                          className="kanban-card-progress-fill"
-                          style={{ width: `${(task.stepNumber / task.totalSteps) * 100}%` }}
-                        />
-                      </div>
-                      <span className="kanban-card-progress-text">
-                        {task.stepNumber}/{task.totalSteps}
-                      </span>
-                    </div>
-                    <div className="kanban-card-footer">
-                      <div className="kanban-card-avatar" title={task.assignedToName}>
-                        {task.assignedToName.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
-                      </div>
-                      <span className="kanban-card-assignee">{task.assignedToName}</span>
-                    </div>
-                  </div>
-                    );
-                  })()
+                  <TaskCard key={task.id} task={task} onSelect={handleSelectTask} />
                 ))
               ) : (
                 <div className="kanban-empty">
@@ -385,6 +436,7 @@ export default function TasksPage() {
         onClose={handleCloseDrawer}
         onAction={handleAction}
       />
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

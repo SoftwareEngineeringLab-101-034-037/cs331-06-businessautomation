@@ -1164,6 +1164,12 @@
   border-left-color: #f97316 !important;
 }
 
+.kanban-card-rejected {
+  background: var(--surface);
+  border-color: var(--border);
+  border-left-color: #ef4444 !important;
+}
+
 .kanban-card-sent-back {
   background: var(--surface);
   border-color: var(--border);
@@ -1235,6 +1241,10 @@
 }
 
 .tasks-kanban-container .kanban-card-overdue {
+  border-left-color: #ef4444;
+}
+
+.tasks-kanban-container .kanban-card-rejected {
   border-left-color: #ef4444;
 }
 
