@@ -22,9 +22,17 @@ export default function TaskActions({ task, onAction }: TaskActionsProps) {
 
   const allowed = task.status === "pending"
     ? ["start"]
-    : ((task.allowedActions && task.allowedActions.length > 0)
+    : (task.allowedActions && task.allowedActions.length > 0
       ? task.allowedActions
       : ["complete"]);
+
+  function handleClick(action: string) {
+    if (action === "start") {
+      onAction(action);
+      return;
+    }
+    setShowCommentModalFor(action);
+  }
 
   return (
     <>
@@ -38,9 +46,7 @@ export default function TaskActions({ task, onAction }: TaskActionsProps) {
               <button
                 key={action}
                 className={meta.className}
-                onClick={() => {
-                  setShowCommentModalFor(action);
-                }}
+                onClick={() => handleClick(action)}
               >
                 {meta.label}
               </button>
@@ -50,17 +56,30 @@ export default function TaskActions({ task, onAction }: TaskActionsProps) {
       </div>
 
       {showCommentModalFor && (
-        <div className="modal-overlay" onClick={() => setShowCommentModalFor(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => { setShowCommentModalFor(null); setReason(""); }}>
+          <div className="modal-content task-action-modal" onClick={(e) => e.stopPropagation()}>
             <h3 className="modal-title">Add Comment</h3>
-            <p className="modal-desc">Comment is mandatory for this action.</p>
-            <textarea
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="Enter your comment..."
-              className="modal-textarea"
-              rows={3}
-            />
+            <p className="modal-desc">Required. Briefly explain this decision for the audit trail.</p>
+            <div className="wf-field">
+              <label className="wf-field-label">
+                Comment
+                <span className="wf-required-star" style={{ marginLeft: 4 }}>*</span>
+              </label>
+              <span className="wf-field-hint">Use the same kind of short, clear note you would leave in a workflow update.</span>
+              <textarea
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="e.g. Approved after reviewing the submitted invoice"
+                className="wf-textarea"
+                rows={3}
+                style={!reason.trim() ? { borderColor: "#ef4444" } : {}}
+              />
+              {!reason.trim() && (
+                <span className="task-action-error">
+                  A comment is required to continue.
+                </span>
+              )}
+            </div>
             <div className="modal-actions">
               <button className="action-btn action-btn-outline" onClick={() => { setShowCommentModalFor(null); setReason(""); }}>
                 Cancel

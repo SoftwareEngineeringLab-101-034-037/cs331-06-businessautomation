@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth, useOrganization } from "@clerk/nextjs";
-import { MOCK_DEPARTMENTS } from "@/lib/mock-data";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 import { useToast, ToastContainer } from "@/components/Toast";
 
@@ -136,37 +135,66 @@ export default function WorkstationPage() {
   /* Workflow list from backend */
   const [workflows, setWorkflows] = useState<BackendWorkflow[]>([]);
   const [instances, setInstances] = useState<BackendInstance[]>([]);
-  const [instanceRowLimit, setInstanceRowLimit] = useState(10);
-  const [workflowRowLimit, setWorkflowRowLimit] = useState(10);
   const [selectedInstance, setSelectedInstance] = useState<BackendInstance | null>(null);
   const [selectedInstanceTasks, setSelectedInstanceTasks] = useState<BackendTaskForInstance[]>([]);
   const [instanceDrawerLoading, setInstanceDrawerLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const instanceRequestControllerRef = useRef<AbortController | null>(null);
+  const instanceRequestIdRef = useRef(0);
+
+  const closeInstanceDrawer = useCallback(() => {
+    instanceRequestIdRef.current += 1;
+    instanceRequestControllerRef.current?.abort();
+    instanceRequestControllerRef.current = null;
+    setSelectedInstance(null);
+    setSelectedInstanceTasks([]);
+    setInstanceDrawerLoading(false);
+  }, []);
 
   const openInstanceDrawer = useCallback(async (instance: BackendInstance) => {
     if (!organization?.id) return;
+    instanceRequestIdRef.current += 1;
+    const requestID = instanceRequestIdRef.current;
+    instanceRequestControllerRef.current?.abort();
+    const controller = new AbortController();
+    instanceRequestControllerRef.current = controller;
     setSelectedInstance(instance);
+    setSelectedInstanceTasks([]);
     setInstanceDrawerLoading(true);
     try {
       const [instRes, taskRes] = await Promise.all([
-        authFetch(`${orgApiBase}/instances/${instance.id}`),
-        authFetch(`${orgApiBase}/tasks?instance_id=${encodeURIComponent(instance.id)}`),
+        authFetch(`${orgApiBase}/instances/${instance.id}`, { signal: controller.signal }),
+        authFetch(`${orgApiBase}/tasks?instance_id=${encodeURIComponent(instance.id)}`, { signal: controller.signal }),
       ]);
       if (!instRes.ok || !taskRes.ok) throw new Error(`HTTP ${instRes.status}/${taskRes.status}`);
       const [instDetail, taskData] = await Promise.all([
         instRes.json() as Promise<BackendInstance>,
         taskRes.json() as Promise<BackendTaskForInstance[]>,
       ]);
+      if (instanceRequestIdRef.current !== requestID) return;
       setSelectedInstance(instDetail);
       setSelectedInstanceTasks(taskData ?? []);
     } catch (err) {
+      if (controller.signal.aborted) {
+        return;
+      }
       console.error("Failed to load instance details", err);
-      setSelectedInstanceTasks([]);
+      if (instanceRequestIdRef.current === requestID) {
+        setSelectedInstanceTasks([]);
+      }
     } finally {
-      setInstanceDrawerLoading(false);
+      if (instanceRequestIdRef.current === requestID) {
+        setInstanceDrawerLoading(false);
+      }
     }
   }, [organization?.id, orgApiBase, authFetch]);
+
+  useEffect(() => {
+    return () => {
+      instanceRequestControllerRef.current?.abort();
+    };
+  }, []);
 
   const fetchWorkflows = useCallback(async () => {
     if (!organization?.id) return;
@@ -207,8 +235,12 @@ export default function WorkstationPage() {
     const rect = e.currentTarget.getBoundingClientRect();
     const wf = workflows.find((w) => w.id === id);
     const isDraft = wf?.status === "draft";
-    // 2 items (draft) or 3 items (non-draft), each ~38px + 16px padding
-    const itemCount = isDraft ? 2 : 3;
+    const itemCount = [
+      true,
+      wf?.status === "active",
+      !isDraft,
+      true,
+    ].filter(Boolean).length;
     const dropdownHeight = itemCount * 38 + 16;
     const spaceBelow = window.innerHeight - rect.bottom;
     const top = spaceBelow < dropdownHeight + 8 ? rect.top - dropdownHeight - 4 : rect.bottom + 4;
@@ -374,13 +406,6 @@ export default function WorkstationPage() {
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterTag, setFilterTag] = useState("all");
 
-  /* Derived KPIs */
-  const totalWorkflows = workflows.length;
-  const activeWorkflows = workflows.filter((w) => w.status === "active").length;
-  const inactiveWorkflows = workflows.filter((w) => w.status === "inactive").length;
-  const draftWorkflows = workflows.filter((w) => w.status === "draft").length;
-  const totalDepartments = MOCK_DEPARTMENTS.length;
-
   /* Unique filter options from live data */
   const deptOptions = useMemo(() => {
     const set = new Set(workflows.map((w) => w.department).filter(Boolean) as string[]);
@@ -426,89 +451,13 @@ export default function WorkstationPage() {
             <h2 className="page-title">Organisation Workstation</h2>
             <p className="page-subtitle">Manage and monitor all workflows across your organisation</p>
           </div>
-          <Link href="/workflow-builder" className="action-btn action-btn-primary">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="18" height="18">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
-            Create Workflow
-          </Link>
         </div>
-
-        {/* Compact stat row */}
-        <div className="overview-stats" style={{ marginBottom: 28, flexWrap: "wrap" }}>
-          <div className="overview-stat-card">
-            <span className="overview-stat-value">{totalDepartments}</span>
-            <span className="overview-stat-label">Departments</span>
-          </div>
-          <div className="overview-stat-card">
-            <span className="overview-stat-value">{totalWorkflows}</span>
-            <span className="overview-stat-label">Total Workflows</span>
-          </div>
-          <div className="overview-stat-card">
-            <span className="overview-stat-value" style={{ color: "#22c55e" }}>{activeWorkflows}</span>
-            <span className="overview-stat-label">Active</span>
-          </div>
-          <div className="overview-stat-card">
-            <span className="overview-stat-value" style={{ color: "var(--text-muted)" }}>{inactiveWorkflows}</span>
-            <span className="overview-stat-label">Inactive</span>
-          </div>
-          <div className="overview-stat-card">
-            <span className="overview-stat-value" style={{ color: "#f59e0b" }}>{draftWorkflows}</span>
-            <span className="overview-stat-label">Drafts</span>
-          </div>
-        </div>
-
-        <section className="dashboard-section" style={{ marginTop: 20 }}>
-          <div className="section-header" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <h3 className="section-title">Workflow Instances</h3>
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-              <label className="filter-label">Rows:</label>
-              <select className="filter-select" value={instanceRowLimit} onChange={(e) => setInstanceRowLimit(Number(e.target.value))}>
-                {[10, 15, 20, 30].map((n) => (<option key={n} value={n}>{n}</option>))}
-              </select>
-            </div>
-          </div>
-
-          {!loading && !error && instances.length === 0 && (
-            <div className="empty-state" style={{ padding: "28px 0" }}>
-              <p className="table-muted">No workflow instances yet.</p>
-            </div>
-          )}
-
-          {!loading && !error && instances.length > 0 && (
-            <div className="table-container" style={{ maxHeight: `${instanceRowLimit * 48 + 72}px`, overflowY: "auto" }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Instance</th><th>Workflow</th><th>Status</th><th>Current Node</th><th>Started</th><th>Completed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {instances.map((inst) => (
-                    <tr key={inst.id} style={{ cursor: "pointer" }} onClick={() => openInstanceDrawer(inst)}>
-                      <td className="font-medium">{inst.id}</td>
-                      <td>{inst.workflow_name || inst.workflow_id}</td>
-                      <td><span className={`status-dot ${inst.status === "completed" ? "active" : inst.status === "failed" ? "inactive" : "draft"}`}>{inst.status}</span></td>
-                      <td>{inst.current_node || <span className="table-muted">&mdash;</span>}</td>
-                      <td className="table-muted">{timeAgo(inst.started_at)}</td>
-                      <td className="table-muted">{inst.completed_at ? timeAgo(inst.completed_at) : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
 
         {/* Workflows section */}
         <section className="dashboard-section">
           <div className="section-header" style={{ flexWrap: "wrap", gap: 10 }}>
             <h3 className="section-title">Workflows</h3>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginLeft: "auto" }}>
-              <label className="filter-label">Rows:</label>
-              <select className="filter-select" value={workflowRowLimit} onChange={(e) => setWorkflowRowLimit(Number(e.target.value))}>
-                {[10, 15, 20, 30].map((n) => (<option key={n} value={n}>{n}</option>))}
-              </select>
               <select className="filter-select" value={filterDept} onChange={(e) => setFilterDept(e.target.value)}>
                 <option value="all">All Departments</option>
                 {deptOptions.map((d) => (<option key={d} value={d}>{d}</option>))}
@@ -531,6 +480,12 @@ export default function WorkstationPage() {
                 </button>
               )}
               <button className="action-btn action-btn-outline action-btn-sm" onClick={fetchWorkflows}>Refresh</button>
+              <Link href="/workflow-builder" className="action-btn action-btn-primary action-btn-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="18" height="18">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                New Workflow
+              </Link>
             </div>
           </div>
 
@@ -556,7 +511,7 @@ export default function WorkstationPage() {
             </div>
           )}
           {!loading && !error && filtered.length > 0 && (
-            <div className="table-container" style={{ maxHeight: `${workflowRowLimit * 48 + 72}px`, overflowY: "auto" }}>
+            <div className="table-container" style={{ maxHeight: `${5 * 48 + 72}px`, overflowY: "auto" }}>
               <table className="data-table">
                 <thead>
                   <tr>
@@ -597,14 +552,59 @@ export default function WorkstationPage() {
             </div>
           )}
         </section>
+
+        <section className="dashboard-section" style={{ marginTop: 20 }}>
+          <div className="section-header" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <h3 className="section-title">Workflow Instances</h3>
+          </div>
+
+          {!loading && !error && instances.length === 0 && (
+            <div className="empty-state" style={{ padding: "28px 0" }}>
+              <p className="table-muted">No workflow instances yet.</p>
+            </div>
+          )}
+
+          {!loading && !error && instances.length > 0 && (
+            <div className="table-container" style={{ maxHeight: `${10 * 48 + 72}px`, overflowY: "auto" }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Instance</th><th>Workflow</th><th>Status</th><th>Current Node</th><th>Started</th><th>Completed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {instances.map((inst) => (
+                    <tr key={inst.id}>
+                      <td className="font-medium">
+                        <button
+                          type="button"
+                          onClick={() => openInstanceDrawer(inst)}
+                          aria-label={`Open workflow instance ${inst.id}`}
+                          style={{ background: "none", border: "none", padding: 0, color: "var(--accent)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
+                        >
+                          {inst.id}
+                        </button>
+                      </td>
+                      <td>{inst.workflow_name || inst.workflow_id}</td>
+                      <td><span className={`status-dot ${inst.status === "completed" ? "active" : inst.status === "failed" ? "inactive" : "draft"}`}>{inst.status}</span></td>
+                      <td>{inst.current_node || <span className="table-muted">&mdash;</span>}</td>
+                      <td className="table-muted">{timeAgo(inst.started_at)}</td>
+                      <td className="table-muted">{inst.completed_at ? timeAgo(inst.completed_at) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       </div>
 
       {selectedInstance && (
-        <div className="modal-overlay" onClick={() => setSelectedInstance(null)}>
+        <div className="modal-overlay" onClick={closeInstanceDrawer}>
           <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 980, width: "95vw", maxHeight: "86vh", overflow: "hidden" }}>
             <div className="modal-header">
               <h3 className="modal-title">Instance Timeline - {selectedInstance.id}</h3>
-              <button className="modal-close" onClick={() => setSelectedInstance(null)} aria-label="Close timeline">&times;</button>
+              <button className="modal-close" onClick={closeInstanceDrawer} aria-label="Close timeline">&times;</button>
             </div>
             <div className="modal-body" style={{ maxHeight: "68vh", overflowY: "auto" }}>
               {instanceDrawerLoading ? (
