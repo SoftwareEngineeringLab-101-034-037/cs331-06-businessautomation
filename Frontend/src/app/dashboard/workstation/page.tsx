@@ -7,6 +7,8 @@ import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 import { useToast, ToastContainer } from "@/components/Toast";
 
+const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
+
 /* Backend Workflow shape (matches Go struct) */
 interface BackendWorkflow {
   id: string;
@@ -46,6 +48,13 @@ interface BackendTaskForInstance {
   decision?: string;
   comment?: string;
   completed_at?: string;
+}
+
+interface BackendEmployee {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email?: string;
 }
 
 /* helper - pretty relative time */
@@ -98,6 +107,18 @@ function prettyActionName(action: string): string {
   }
 }
 
+function formatInstanceLabel(instanceID: string): string {
+  const trimmed = instanceID.trim();
+  if (!trimmed) return "i-unknown";
+  return `i-${trimmed.slice(0, 6)}`;
+}
+
+function formatEmployeeName(employee?: BackendEmployee): string {
+  if (!employee) return "";
+  const name = `${employee.first_name || ""} ${employee.last_name || ""}`.trim();
+  return name || employee.email || employee.id;
+}
+
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
 
 export default function WorkstationPage() {
@@ -143,6 +164,7 @@ export default function WorkstationPage() {
   /* Workflow list from backend */
   const [workflows, setWorkflows] = useState<BackendWorkflow[]>([]);
   const [instances, setInstances] = useState<BackendInstance[]>([]);
+  const [employees, setEmployees] = useState<BackendEmployee[]>([]);
   const [selectedInstance, setSelectedInstance] = useState<BackendInstance | null>(null);
   const [selectedInstanceTasks, setSelectedInstanceTasks] = useState<BackendTaskForInstance[]>([]);
   const [instanceDrawerLoading, setInstanceDrawerLoading] = useState(false);
@@ -204,24 +226,41 @@ export default function WorkstationPage() {
     };
   }, []);
 
+  const employeeNameByID = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const employee of employees) {
+      map.set(employee.id, formatEmployeeName(employee));
+    }
+    return map;
+  }, [employees]);
+
+  const displayUserName = useCallback((userID?: string) => {
+    const trimmed = (userID || "").trim();
+    if (!trimmed) return "";
+    return employeeNameByID.get(trimmed) || trimmed;
+  }, [employeeNameByID]);
+
   const fetchWorkflows = useCallback(async () => {
     if (!organization?.id) return;
     setLoading(true);
     setError(null);
     try {
-      const [wfRes, instRes] = await Promise.all([
+      const [wfRes, instRes, employeeRes] = await Promise.all([
         authFetch(`${orgApiBase}/workflows`),
         authFetch(`${orgApiBase}/instances`),
+        authFetch(`${AUTH_API}/api/orgs/${organization.id}/employees`),
       ]);
       if (!wfRes.ok || !instRes.ok) throw new Error(`HTTP ${wfRes.status}/${instRes.status}`);
 
-      const [wfData, instData] = await Promise.all([
+      const [wfData, instData, employeeData] = await Promise.all([
         wfRes.json() as Promise<BackendWorkflow[]>,
         instRes.json() as Promise<BackendInstance[]>,
+        employeeRes.ok ? employeeRes.json() as Promise<BackendEmployee[]> : Promise.resolve([]),
       ]);
 
       setWorkflows(wfData ?? []);
       setInstances(instData ?? []);
+      setEmployees(employeeData ?? []);
     } catch (err: any) {
       console.error("Failed to load workflows:", err);
       setError(err.message || "Could not reach workflow service");
@@ -587,10 +626,10 @@ export default function WorkstationPage() {
                         <button
                           type="button"
                           onClick={() => openInstanceDrawer(inst)}
-                          aria-label={`Open workflow instance ${inst.id}`}
+                          aria-label={`Open workflow instance ${formatInstanceLabel(inst.id)}`}
                           style={{ background: "none", border: "none", padding: 0, color: "var(--accent)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
                         >
-                          {inst.id}
+                          {formatInstanceLabel(inst.id)}
                         </button>
                       </td>
                       <td>{inst.workflow_name || inst.workflow_id}</td>
@@ -611,7 +650,7 @@ export default function WorkstationPage() {
         <div className="modal-overlay" onClick={closeInstanceDrawer}>
           <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 980, width: "95vw", maxHeight: "86vh", overflow: "hidden" }}>
             <div className="modal-header">
-              <h3 className="modal-title">Instance Timeline - {selectedInstance.id}</h3>
+              <h3 className="modal-title">Instance Timeline - {formatInstanceLabel(selectedInstance.id)}</h3>
               <button className="modal-close" onClick={closeInstanceDrawer} aria-label="Close timeline">&times;</button>
             </div>
             <div className="modal-body" style={{ maxHeight: "68vh", overflowY: "auto" }}>
@@ -646,8 +685,8 @@ export default function WorkstationPage() {
                             return (
                               <tr key={t.id}>
                                 <td>{t.title} <span className="table-muted">({t.node_id})</span></td>
-                                <td>{t.assigned_user || t.assigned_role || "Role Queue"}</td>
-                                <td>{String(latestDetails.actor || "-")}</td>
+                                <td>{t.assigned_user ? displayUserName(t.assigned_user) : (t.assigned_role || "Role Queue")}</td>
+                                <td>{displayUserName(String(latestDetails.actor || "")) || "-"}</td>
                                 <td>{formatTaskDecision(t.status, t.decision)}</td>
                                 <td>{t.comment || String(latestDetails.comment || "-")}</td>
                                 <td>{t.completed_at ? timeAgo(t.completed_at) : (latestAction?.timestamp ? timeAgo(latestAction.timestamp) : "-")}</td>
@@ -668,8 +707,8 @@ export default function WorkstationPage() {
                         const details = (entry.details || {}) as Record<string, unknown>;
                         const pieces: string[] = [];
                         if (details.assigned_role) pieces.push(`Role: ${String(details.assigned_role)}`);
-                        if (details.assigned_user) pieces.push(`Assigned user: ${String(details.assigned_user)}`);
-                        if (details.actor) pieces.push(`Handled by: ${String(details.actor)}`);
+                        if (details.assigned_user) pieces.push(`Assigned user: ${displayUserName(String(details.assigned_user)) || String(details.assigned_user)}`);
+                        if (details.actor) pieces.push(`Handled by: ${displayUserName(String(details.actor)) || String(details.actor)}`);
                         if (details.action) pieces.push(`Decision: ${String(details.action)}`);
                         if (details.comment) pieces.push(`Comment: ${String(details.comment)}`);
                         if (details.reason) pieces.push(`Reason: ${String(details.reason)}`);

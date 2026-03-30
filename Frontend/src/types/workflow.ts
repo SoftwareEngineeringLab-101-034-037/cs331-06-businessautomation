@@ -333,7 +333,7 @@ export interface WorkflowDraft {
 
 /** Generate a unique step ID */
 export function generateStepId(): string {
-  return `step_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  return `s_${Date.now().toString(36).slice(-4)}${Math.random().toString(36).slice(2, 4)}`;
 }
 
 /** Create a blank step with defaults */
