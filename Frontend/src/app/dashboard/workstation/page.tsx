@@ -43,6 +43,7 @@ interface BackendTaskForInstance {
   assigned_user?: string;
   assigned_role?: string;
   status: string;
+  decision?: string;
   comment?: string;
   completed_at?: string;
 }
@@ -73,6 +74,13 @@ function formatTaskStatus(status: string): string {
     case "completed": return "Completed";
     default: return status;
   }
+}
+
+function formatTaskDecision(status: string, decision?: string): string {
+  if (decision) {
+    return formatTaskStatus(decision);
+  }
+  return formatTaskStatus(status);
 }
 
 function prettyActionName(action: string): string {
@@ -640,7 +648,7 @@ export default function WorkstationPage() {
                                 <td>{t.title} <span className="table-muted">({t.node_id})</span></td>
                                 <td>{t.assigned_user || t.assigned_role || "Role Queue"}</td>
                                 <td>{String(latestDetails.actor || "-")}</td>
-                                <td>{formatTaskStatus(t.status)}</td>
+                                <td>{formatTaskDecision(t.status, t.decision)}</td>
                                 <td>{t.comment || String(latestDetails.comment || "-")}</td>
                                 <td>{t.completed_at ? timeAgo(t.completed_at) : (latestAction?.timestamp ? timeAgo(latestAction.timestamp) : "-")}</td>
                               </tr>
