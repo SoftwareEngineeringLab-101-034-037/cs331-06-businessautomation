@@ -35,7 +35,10 @@ func main() {
 	log.Printf("Connected to MongoDB succesfully")
 
 	email := connectors.NewMockEmail()
-	roleDirectory := executor.NewHTTPRoleDirectory(cfg.AuthServiceURL)
+	roleDirectory, err := executor.NewHTTPRoleDirectory(cfg.AuthServiceURL)
+	if err != nil {
+		log.Fatalf("Failed to configure role directory: %v", err)
+	}
 	assigneeSelector := executor.NewRandomRoleAssigneeSelector(roleDirectory)
 	exec := executor.NewExecutor(store, email, assigneeSelector)
 

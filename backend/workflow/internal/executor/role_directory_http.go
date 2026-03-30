@@ -2,7 +2,9 @@ package executor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,22 +23,29 @@ type roleSummaryResponse struct {
 	} `json:"members"`
 }
 
-func NewHTTPRoleDirectory(baseURL string) RoleMemberDirectory {
+var (
+	ErrInvalidArgs  = errors.New("invalid role directory arguments")
+	ErrRoleNotFound = errors.New("role not found")
+	ErrNoMembers    = errors.New("role has no members")
+)
+
+func NewHTTPRoleDirectory(baseURL string) (RoleMemberDirectory, error) {
 	trimmed := strings.TrimSpace(baseURL)
 	if trimmed == "" {
-		return nil
+		return nil, fmt.Errorf("empty baseURL for HTTP role directory")
 	}
 	return &httpRoleDirectory{
 		baseURL: strings.TrimRight(trimmed, "/"),
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
-	}
+	}, nil
 }
 
 func (d *httpRoleDirectory) ListMemberIDs(orgID, roleName string) ([]string, error) {
 	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(roleName) == "" {
-		return nil, nil
+		log.Printf("role_directory_http.ListMemberIDs invalid args org_id=%q role=%q", orgID, roleName)
+		return nil, ErrInvalidArgs
 	}
 
 	endpoint := fmt.Sprintf("%s/api/orgs/%s/roles", d.baseURL, url.PathEscape(orgID))
@@ -67,8 +76,13 @@ func (d *httpRoleDirectory) ListMemberIDs(orgID, roleName string) ([]string, err
 			}
 			result = append(result, member.ID)
 		}
+		if len(result) == 0 {
+			log.Printf("role_directory_http.ListMemberIDs no members org_id=%q role=%q", orgID, roleName)
+			return nil, ErrNoMembers
+		}
 		return result, nil
 	}
 
-	return nil, nil
+	log.Printf("role_directory_http.ListMemberIDs role not found org_id=%q role=%q", orgID, roleName)
+	return nil, ErrRoleNotFound
 }

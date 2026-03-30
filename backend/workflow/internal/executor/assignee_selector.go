@@ -3,6 +3,7 @@ package executor
 import (
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type TaskAssigneeSelector interface {
 type RandomRoleAssigneeSelector struct {
 	directory RoleMemberDirectory
 	rng       *rand.Rand
+	mu        sync.Mutex
 }
 
 func NewRandomRoleAssigneeSelector(directory RoleMemberDirectory) *RandomRoleAssigneeSelector {
@@ -48,6 +50,8 @@ func (s *RandomRoleAssigneeSelector) Select(orgID, roleName, preferredUserID str
 	if len(members) == 0 {
 		return "", nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return members[s.rng.Intn(len(members))], nil
 }
 
