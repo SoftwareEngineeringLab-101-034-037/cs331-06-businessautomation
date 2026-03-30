@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/business-automation/backend/workflow/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/models"
 )
 
 type emailCall struct {

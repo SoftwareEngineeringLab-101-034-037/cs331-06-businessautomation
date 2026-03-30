@@ -7,9 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/example/business-automation/backend/workflow/internal/middleware"
-	"github.com/example/business-automation/backend/workflow/internal/models"
-	"github.com/example/business-automation/backend/workflow/internal/storage"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/middleware"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/storage"
 )
 
 // WorkflowHandler handles CRUD operations on workflow definitions.

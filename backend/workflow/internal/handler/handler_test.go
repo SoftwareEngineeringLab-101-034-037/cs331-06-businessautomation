@@ -13,9 +13,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/example/business-automation/backend/workflow/internal/executor"
-	"github.com/example/business-automation/backend/workflow/internal/middleware"
-	"github.com/example/business-automation/backend/workflow/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/executor"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/middleware"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/models"
 )
 
 type handlerStore struct {

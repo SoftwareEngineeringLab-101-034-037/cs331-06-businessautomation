@@ -1,6 +1,6 @@
 package storage
 
-import "github.com/example/business-automation/backend/workflow/internal/models"
+import "github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/models"
 
 // Store defines persistence operations required by the service.
 type Store interface {

@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/business-automation/backend/workflow/internal/connectors"
-	"github.com/example/business-automation/backend/workflow/internal/models"
-	"github.com/example/business-automation/backend/workflow/internal/storage"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/connectors"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/storage"
 )
 
 // Executor handles workflow execution with one goroutine per instance.

@@ -11,12 +11,12 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
-	"github.com/example/business-automation/backend/workflow/internal/config"
-	"github.com/example/business-automation/backend/workflow/internal/connectors"
-	"github.com/example/business-automation/backend/workflow/internal/executor"
-	"github.com/example/business-automation/backend/workflow/internal/handler"
-	"github.com/example/business-automation/backend/workflow/internal/middleware"
-	"github.com/example/business-automation/backend/workflow/internal/storage"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/config"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/connectors"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/executor"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/handler"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/middleware"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/storage"
 )
 
 func main() {

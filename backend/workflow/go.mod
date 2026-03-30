@@ -1,4 +1,4 @@
-module github.com/example/business-automation/backend/workflow
+module github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow
 
 go 1.24.0
 
