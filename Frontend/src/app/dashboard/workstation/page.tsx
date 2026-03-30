@@ -491,15 +491,6 @@ export default function WorkstationPage() {
       }
     >
       <div className="dashboard-page">
-
-        {/* Page header */}
-        <div className="page-header">
-          <div>
-            <h2 className="page-title">Organisation Workstation</h2>
-            <p className="page-subtitle">Manage and monitor all workflows across your organisation</p>
-          </div>
-        </div>
-
         {/* Workflows section */}
         <section className="dashboard-section">
           <div className="section-header" style={{ flexWrap: "wrap", gap: 10 }}>
