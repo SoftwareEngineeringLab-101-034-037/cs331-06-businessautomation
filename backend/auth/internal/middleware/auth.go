@@ -1,12 +1,14 @@
 package middleware
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"gorm.io/gorm"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/database"
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
@@ -79,6 +81,11 @@ func OrgAdminOnly() gin.HandlerFunc {
 		// Look up the user and check they belong to this org as an admin
 		var user models.User
 		err := database.DB.Where("id = ?", userID).First(&user).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Printf("[OrgAdminOnly] user not found: user_id=%s org_id=%s", userID, orgID)
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Not an admin of this organization"})
+			return
+		}
 		if err != nil {
 			log.Printf("[OrgAdminOnly] database error looking up user: %v", err)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
@@ -116,6 +123,11 @@ func OrgMemberOnly() gin.HandlerFunc {
 
 		var user models.User
 		err := database.DB.Where("id = ?", userID).First(&user).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Printf("[OrgMemberOnly] user not found: user_id=%s org_id=%s", userID, orgID)
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Not a member of this organization"})
+			return
+		}
 		if err != nil {
 			log.Printf("[OrgMemberOnly] database error looking up user: %v", err)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Database error"})

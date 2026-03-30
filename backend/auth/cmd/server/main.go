@@ -86,6 +86,10 @@ func main() {
 		memberOrgAPI := api.Group("/orgs/:orgId")
 		memberOrgAPI.Use(middleware.OrgMemberOnly())
 		{
+			// Workflow callers that depend on role lookup must forward the original user
+			// Authorization header into StartInstance()/downstream execution. This route
+			// requires a user JWT, so non-user-initiated workflows need a separate
+			// service-token-capable endpoint instead of calling /roles without user context.
 			memberOrgAPI.GET("/roles", employeeHandler.ListRoles)
 		}
 

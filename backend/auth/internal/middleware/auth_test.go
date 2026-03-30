@@ -220,6 +220,14 @@ func TestOrgAdminOnlyAllowsAdmin(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
 	}
+
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+	if body["org_id"] != orgID {
+		t.Fatalf("expected org_id %q, got %#v", orgID, body["org_id"])
+	}
 }
 
 func TestOrgAdminOnlyForbiddenWhenNotAdmin(t *testing.T) {
@@ -318,6 +326,14 @@ func TestOrgMemberOnlyAllowsMember(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+	if body["org_id"] != orgID {
+		t.Fatalf("expected org_id %q, got %#v", orgID, body["org_id"])
 	}
 }
 
