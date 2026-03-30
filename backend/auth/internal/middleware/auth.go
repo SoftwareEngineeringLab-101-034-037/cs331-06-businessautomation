@@ -97,6 +97,42 @@ func OrgAdminOnly() gin.HandlerFunc {
 	}
 }
 
+// OrgMemberOnly ensures the authenticated user belongs to the organization
+// specified by the :orgId URL parameter.
+func OrgMemberOnly() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := c.GetString(UserIDKey)
+		orgID := c.Param("orgId")
+
+		if userID == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authentication required"})
+			return
+		}
+
+		if orgID == "" {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "Organization ID is required"})
+			return
+		}
+
+		var user models.User
+		err := database.DB.Where("id = ?", userID).First(&user).Error
+		if err != nil {
+			log.Printf("[OrgMemberOnly] database error looking up user: %v", err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+			return
+		}
+
+		if user.OrganizationID == nil || *user.OrganizationID != orgID {
+			log.Printf("[OrgMemberOnly] denied: user_id=%s org_id=%s (org_id=%v)", userID, orgID, user.OrganizationID)
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Not a member of this organization"})
+			return
+		}
+
+		c.Set(OrgIDKey, orgID)
+		c.Next()
+	}
+}
+
 func GetUserID(c *gin.Context) string {
 	return c.GetString(UserIDKey)
 }

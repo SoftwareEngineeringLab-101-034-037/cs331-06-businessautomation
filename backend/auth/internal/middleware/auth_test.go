@@ -288,6 +288,71 @@ func TestOrgAdminOnlyForbiddenWhenDifferentOrg(t *testing.T) {
 	}
 }
 
+func TestOrgMemberOnlyAllowsMember(t *testing.T) {
+	restoreDB(t)
+	db := setupMiddlewareTestDB(t)
+	database.DB = db
+
+	orgID := "org_1"
+	now := time.Now()
+	if err := db.Exec(`
+		INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_member", "member@example.com", "Member", "User", orgID, false, true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(UserIDKey, "user_member")
+		c.Next()
+	})
+	r.GET("/orgs/:orgId/member", OrgMemberOnly(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "org_id": GetOrgID(c)})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/orgs/org_1/member", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestOrgMemberOnlyForbiddenWhenDifferentOrg(t *testing.T) {
+	restoreDB(t)
+	db := setupMiddlewareTestDB(t)
+	database.DB = db
+
+	now := time.Now()
+	if err := db.Exec(`
+		INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_member", "member@example.com", "Member", "User", "org_2", false, true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(UserIDKey, "user_member")
+		c.Next()
+	})
+	r.GET("/orgs/:orgId/member", OrgMemberOnly(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/orgs/org_1/member", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
 func setupMiddlewareTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
