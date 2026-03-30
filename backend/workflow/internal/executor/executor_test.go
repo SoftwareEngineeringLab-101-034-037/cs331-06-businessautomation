@@ -386,7 +386,7 @@ func TestStartInstanceNoStartNodeMarksFailed(t *testing.T) {
 		},
 	}
 
-	instanceID, err := exec.StartInstance(wf, map[string]interface{}{})
+	instanceID, err := exec.StartInstance(wf, map[string]interface{}{}, "")
 	if err != nil {
 		t.Fatalf("StartInstance failed: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestRunLinearActionFlowCompletesAndSendsEmail(t *testing.T) {
 	}
 	instanceID := seedInstance(t, store, wf, data)
 
-	exec.run(instanceID, wf, data)
+	exec.run(instanceID, wf, data, "")
 
 	inst, ok := store.GetInstance(instanceID)
 	if !ok {
@@ -478,7 +478,7 @@ func TestRunConditionRoutesToNoBranch(t *testing.T) {
 	data := map[string]interface{}{"amount": 20}
 	instanceID := seedInstance(t, store, wf, data)
 
-	exec.run(instanceID, wf, data)
+	exec.run(instanceID, wf, data, "")
 
 	inst, _ := store.GetInstance(instanceID)
 	if _, ok := inst.NodeStates["no-end"]; !ok {
@@ -534,7 +534,7 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	data := map[string]interface{}{"request_id": "r-1"}
 	instanceID := seedInstance(t, store, wf, data)
 
-	exec.run(instanceID, wf, data)
+	exec.run(instanceID, wf, data, "")
 
 	inst, _ := store.GetInstance(instanceID)
 	if inst.Status != models.InstanceWaiting {
@@ -684,7 +684,7 @@ func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 	}
 	instanceID := seedInstance(t, store, wf, map[string]interface{}{})
 
-	exec.run(instanceID, wf, map[string]interface{}{})
+	exec.run(instanceID, wf, map[string]interface{}{}, "")
 
 	inst, _ := store.GetInstance(instanceID)
 	if inst.Status != models.InstanceCompleted {
@@ -722,7 +722,7 @@ func TestRunActionSkippedForUnknownAndMissingConnector(t *testing.T) {
 	}
 	instanceID := seedInstance(t, store, wf, map[string]interface{}{})
 
-	exec.run(instanceID, wf, map[string]interface{}{})
+	exec.run(instanceID, wf, map[string]interface{}{}, "")
 
 	inst, _ := store.GetInstance(instanceID)
 	if got := countAuditAction(inst, "action_skipped"); got != 2 {

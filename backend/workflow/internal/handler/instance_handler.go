@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/example/business-automation/backend/workflow/internal/executor"
+	"github.com/example/business-automation/backend/workflow/internal/middleware"
 	"github.com/example/business-automation/backend/workflow/internal/models"
 	"github.com/example/business-automation/backend/workflow/internal/storage"
 )
@@ -42,7 +43,7 @@ func (h *InstanceHandler) Start(c *gin.Context) {
 		return
 	}
 
-	instID, err := h.Exec.StartInstance(wf, req.Data)
+	instID, err := h.Exec.StartInstance(wf, req.Data, middleware.GetAuthorizationHeader(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "start failed: " + err.Error()})
 		return

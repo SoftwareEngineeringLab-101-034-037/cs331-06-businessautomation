@@ -34,6 +34,14 @@ func NewRandomRoleAssigneeSelector(directory RoleMemberDirectory) *RandomRoleAss
 }
 
 func (s *RandomRoleAssigneeSelector) Select(orgID, roleName, preferredUserID string) (string, error) {
+	return s.selectAssignee(orgID, roleName, preferredUserID, "")
+}
+
+func (s *RandomRoleAssigneeSelector) SelectWithAuth(orgID, roleName, preferredUserID, authHeader string) (string, error) {
+	return s.selectAssignee(orgID, roleName, preferredUserID, authHeader)
+}
+
+func (s *RandomRoleAssigneeSelector) selectAssignee(orgID, roleName, preferredUserID, authHeader string) (string, error) {
 	trimmedPreferredUserID := strings.TrimSpace(preferredUserID)
 	trimmedRoleName := strings.TrimSpace(roleName)
 	if trimmedPreferredUserID != "" {
@@ -45,7 +53,7 @@ func (s *RandomRoleAssigneeSelector) Select(orgID, roleName, preferredUserID str
 	if trimmedRoleName == "" {
 		return "", nil
 	}
-	members, err := s.directory.ListMemberIDs(orgID, trimmedRoleName)
+	members, err := s.listMemberIDs(orgID, trimmedRoleName, authHeader)
 	if err != nil {
 		return "", err
 	}
@@ -55,6 +63,17 @@ func (s *RandomRoleAssigneeSelector) Select(orgID, roleName, preferredUserID str
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return members[s.rng.Intn(len(members))], nil
+}
+
+func (s *RandomRoleAssigneeSelector) listMemberIDs(orgID, roleName, authHeader string) ([]string, error) {
+	type authAwareRoleMemberDirectory interface {
+		ListMemberIDsWithAuth(orgID, roleName, authHeader string) ([]string, error)
+	}
+
+	if authAware, ok := s.directory.(authAwareRoleMemberDirectory); ok {
+		return authAware.ListMemberIDsWithAuth(orgID, roleName, authHeader)
+	}
+	return s.directory.ListMemberIDs(orgID, roleName)
 }
 
 func (s *RandomRoleAssigneeSelector) Directory() RoleMemberDirectory {

@@ -46,7 +46,7 @@ func NewExecutor(s storage.Store, e connectors.EmailConnector, selector TaskAssi
 	}
 }
 
-func (e *Executor) StartInstance(wf models.Workflow, data map[string]interface{}) (string, error) {
+func (e *Executor) StartInstance(wf models.Workflow, data map[string]interface{}, authHeader string) (string, error) {
 	now := time.Now()
 	inst := models.Instance{
 		WorkflowID: wf.ID,
@@ -65,11 +65,11 @@ func (e *Executor) StartInstance(wf models.Workflow, data map[string]interface{}
 	if err != nil {
 		return "", err
 	}
-	go e.run(id, wf, data)
+	go e.run(id, wf, data, authHeader)
 	return id, nil
 }
 
-func (e *Executor) run(instanceID string, wf models.Workflow, data map[string]interface{}) {
+func (e *Executor) run(instanceID string, wf models.Workflow, data map[string]interface{}, authHeader string) {
 	log.Printf("executor: running instance=%s workflow=%s", instanceID, wf.ID)
 
 	start := wf.StartNode()
@@ -78,7 +78,7 @@ func (e *Executor) run(instanceID string, wf models.Workflow, data map[string]in
 		return
 	}
 
-	e.walkNode(instanceID, start.ID, &wf, data)
+	e.walkNode(instanceID, start.ID, &wf, data, authHeader)
 
 	inst, ok := e.store.GetInstance(instanceID)
 	if !ok {
@@ -97,7 +97,7 @@ func (e *Executor) run(instanceID string, wf models.Workflow, data map[string]in
 	}
 }
 
-func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data map[string]interface{}) {
+func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data map[string]interface{}, authHeader string) {
 	node := wf.FindNode(nodeID)
 	if node == nil {
 		log.Printf("executor: unknown node %s", nodeID)
@@ -109,7 +109,7 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 	switch node.Type {
 	case models.NodeStart:
 		e.setNodeState(instanceID, nodeID, "completed")
-		e.walkNext(instanceID, node, "", wf, data)
+		e.walkNext(instanceID, node, "", wf, data, authHeader)
 		return
 
 	case models.NodeEnd:
@@ -117,7 +117,7 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 		return
 
 	case models.NodeTask:
-		action, err := e.executeTask(instanceID, wf, node, data)
+		action, err := e.executeTask(instanceID, wf, node, data, authHeader)
 		if err != nil {
 			e.setNodeState(instanceID, nodeID, "failed")
 			e.markFailed(instanceID, fmt.Sprintf("task node %s: %v", nodeID, err))
@@ -128,13 +128,13 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 			return
 		}
 		e.setNodeState(instanceID, nodeID, "completed")
-		e.walkNext(instanceID, node, action, wf, data)
+		e.walkNext(instanceID, node, action, wf, data, authHeader)
 		return
 
 	case models.NodeAction:
 		e.executeAction(instanceID, node, data)
 		e.setNodeState(instanceID, nodeID, "completed")
-		e.walkNext(instanceID, node, "", wf, data)
+		e.walkNext(instanceID, node, "", wf, data, authHeader)
 		return
 
 	case models.NodeCondition:
@@ -144,13 +144,13 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 			"branch":     branch,
 		})
 		e.setNodeState(instanceID, nodeID, "completed")
-		e.walkNext(instanceID, node, branch, wf, data)
+		e.walkNext(instanceID, node, branch, wf, data, authHeader)
 		return
 
 	case models.NodeParallel:
 		e.setNodeState(instanceID, nodeID, "completed")
 		for _, nextID := range node.NextBranches {
-			e.walkNode(instanceID, nextID, wf, data)
+			e.walkNode(instanceID, nextID, wf, data, authHeader)
 		}
 		return
 
@@ -178,21 +178,21 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 			"required_inputs": node.RequiredInputs,
 		})
 		e.setNodeState(instanceID, nodeID, "completed")
-		e.walkNext(instanceID, node, "", wf, data)
+		e.walkNext(instanceID, node, "", wf, data, authHeader)
 		return
 	}
 }
 
-func (e *Executor) walkNext(instanceID string, node *models.WorkflowNode, result string, wf *models.Workflow, data map[string]interface{}) {
+func (e *Executor) walkNext(instanceID string, node *models.WorkflowNode, result string, wf *models.Workflow, data map[string]interface{}, authHeader string) {
 	for _, nextID := range node.NextIDs(result) {
-		e.walkNode(instanceID, nextID, wf, data)
+		e.walkNode(instanceID, nextID, wf, data, authHeader)
 	}
 }
 
-func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *models.WorkflowNode, data map[string]interface{}) (string, error) {
+func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *models.WorkflowNode, data map[string]interface{}, authHeader string) (string, error) {
 	assignedUser := node.AssignedUser
 	if e.assigneeSelector != nil {
-		resolvedUser, err := e.assigneeSelector.Select(wf.OrgID, node.AssignedRole, node.AssignedUser)
+		resolvedUser, err := e.selectAssignee(wf.OrgID, node.AssignedRole, node.AssignedUser, authHeader)
 		if err != nil {
 			// Do not fail workflow execution on assignee lookup issues.
 			// Create the task anyway so it remains visible for manual pickup.
@@ -387,7 +387,7 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader
 	}
 
 	e.setNodeState(task.InstanceID, task.NodeID, "completed")
-	e.walkNext(task.InstanceID, node, action, &wf, inst.Data)
+	e.walkNext(task.InstanceID, node, action, &wf, inst.Data, authHeader)
 
 	hasActiveTasks, err := e.store.HasActiveTasks(task.InstanceID)
 	if err != nil {
@@ -652,4 +652,15 @@ func (e *Executor) roleDirectory() RoleMemberDirectory {
 		return nil
 	}
 	return provider.Directory()
+}
+
+func (e *Executor) selectAssignee(orgID, roleName, preferredUserID, authHeader string) (string, error) {
+	type authAwareTaskAssigneeSelector interface {
+		SelectWithAuth(orgID, roleName, preferredUserID, authHeader string) (string, error)
+	}
+
+	if authAware, ok := e.assigneeSelector.(authAwareTaskAssigneeSelector); ok {
+		return authAware.SelectWithAuth(orgID, roleName, preferredUserID, authHeader)
+	}
+	return e.assigneeSelector.Select(orgID, roleName, preferredUserID)
 }
