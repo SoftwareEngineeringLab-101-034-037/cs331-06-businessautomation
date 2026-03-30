@@ -35,7 +35,7 @@ func main() {
 	log.Printf("Connected to MongoDB succesfully")
 
 	email := connectors.NewMockEmail()
-	roleDirectory, err := executor.NewHTTPRoleDirectory(cfg.AuthServiceURL)
+	roleDirectory, err := executor.NewHTTPRoleDirectory(cfg.AuthServiceURL, cfg.AuthServiceToken)
 	if err != nil {
 		log.Fatalf("Failed to configure role directory: %v", err)
 	}

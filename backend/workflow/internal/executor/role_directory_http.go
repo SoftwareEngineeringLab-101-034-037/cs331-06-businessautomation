@@ -12,14 +12,22 @@ import (
 )
 
 type httpRoleDirectory struct {
-	baseURL string
-	client  *http.Client
+	baseURL   string
+	authToken string
+	client    *http.Client
 }
 
 type roleSummaryResponse struct {
-	Name    string `json:"name"`
-	Members []struct {
-		ID string `json:"id"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Description     string    `json:"description"`
+	CreatedByUserID string    `json:"created_by_user_id"`
+	CreatedAt       time.Time `json:"created_at"`
+	Members         []struct {
+		ID        string `json:"id"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		Email     string `json:"email"`
 	} `json:"members"`
 }
 
@@ -29,13 +37,14 @@ var (
 	ErrNoMembers    = errors.New("role has no members")
 )
 
-func NewHTTPRoleDirectory(baseURL string) (RoleMemberDirectory, error) {
+func NewHTTPRoleDirectory(baseURL, authToken string) (RoleMemberDirectory, error) {
 	trimmed := strings.TrimSpace(baseURL)
 	if trimmed == "" {
 		return nil, fmt.Errorf("empty baseURL for HTTP role directory")
 	}
 	return &httpRoleDirectory{
-		baseURL: strings.TrimRight(trimmed, "/"),
+		baseURL:   strings.TrimRight(trimmed, "/"),
+		authToken: strings.TrimSpace(authToken),
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -43,13 +52,32 @@ func NewHTTPRoleDirectory(baseURL string) (RoleMemberDirectory, error) {
 }
 
 func (d *httpRoleDirectory) ListMemberIDs(orgID, roleName string) ([]string, error) {
+	return d.listMemberIDs(orgID, roleName, "")
+}
+
+func (d *httpRoleDirectory) ListMemberIDsWithAuth(orgID, roleName, authHeader string) ([]string, error) {
+	return d.listMemberIDs(orgID, roleName, authHeader)
+}
+
+func (d *httpRoleDirectory) listMemberIDs(orgID, roleName, authHeader string) ([]string, error) {
 	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(roleName) == "" {
 		log.Printf("role_directory_http.ListMemberIDs invalid args org_id=%q role=%q", orgID, roleName)
 		return nil, ErrInvalidArgs
 	}
 
 	endpoint := fmt.Sprintf("%s/api/orgs/%s/roles", d.baseURL, url.PathEscape(orgID))
-	resp, err := d.client.Get(endpoint)
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case strings.TrimSpace(authHeader) != "":
+		req.Header.Set("Authorization", strings.TrimSpace(authHeader))
+	case d.authToken != "":
+		req.Header.Set("Authorization", "Bearer "+d.authToken)
+	}
+
+	resp, err := d.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
