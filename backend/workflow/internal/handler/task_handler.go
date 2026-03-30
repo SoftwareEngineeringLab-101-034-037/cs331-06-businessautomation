@@ -7,19 +7,22 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/example/business-automation/backend/workflow/internal/executor"
 	"github.com/example/business-automation/backend/workflow/internal/middleware"
 	"github.com/example/business-automation/backend/workflow/internal/models"
 	"github.com/example/business-automation/backend/workflow/internal/storage"
 )
 
+type TaskExecutor interface {
+	ContinueTask(taskID, actorUserID, action, comment string) (models.TaskAssignment, error)
+}
+
 // TaskHandler handles listing and actioning task assignments.
 type TaskHandler struct {
 	Store storage.Store
-	Exec  *executor.Executor
+	Exec  TaskExecutor
 }
 
-func NewTaskHandler(store storage.Store, exec *executor.Executor) *TaskHandler {
+func NewTaskHandler(store storage.Store, exec TaskExecutor) *TaskHandler {
 	return &TaskHandler{Store: store, Exec: exec}
 }
 
@@ -28,7 +31,10 @@ func (h *TaskHandler) List(c *gin.Context) {
 	orgId := c.Param("orgId")
 	role := c.Query("role")
 	instanceID := c.Query("instance_id")
-	assignedUser := c.Query("assigned_user")
+	assignedUser := ""
+	if c.Query("assigned_user") != "" {
+		assignedUser = middleware.GetUserID(c)
+	}
 
 	var tasks []models.TaskAssignment
 	var err error
@@ -83,28 +89,40 @@ func (h *TaskHandler) Action(c *gin.Context) {
 	var body struct {
 		Comment string `json:"comment"`
 	}
-	_ = c.ShouldBindJSON(&body)
-	if strings.TrimSpace(body.Comment) == "" {
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if action != "start" && strings.TrimSpace(body.Comment) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "comment is required for task actions"})
 		return
 	}
+	actorUserID := middleware.GetUserID(c)
 	if h.Exec == nil {
 		now := time.Now()
-		task.Comment = body.Comment
+		task.Comment = strings.TrimSpace(body.Comment)
 		task.CompletedAt = &now
 
 		switch action {
 		case "start":
+			if strings.TrimSpace(task.AssignedUser) == "" {
+				task.AssignedUser = actorUserID
+			}
+			task.Comment = ""
 			task.Status = models.TaskInProgress
 			task.CompletedAt = nil
 		case "approve":
-			task.Status = models.TaskApproved
+			task.Status = models.TaskCompleted
+			task.ActionCommitted = action
 		case "reject":
-			task.Status = models.TaskRejected
+			task.Status = models.TaskCompleted
+			task.ActionCommitted = action
 		case "clarify":
-			task.Status = models.TaskClarify
+			task.Status = models.TaskCompleted
+			task.ActionCommitted = action
 		case "complete":
 			task.Status = models.TaskCompleted
+			task.ActionCommitted = action
 		default:
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action: " + action})
 			return
@@ -118,7 +136,6 @@ func (h *TaskHandler) Action(c *gin.Context) {
 		return
 	}
 
-	actorUserID := middleware.GetUserID(c)
 	updatedTask, err := h.Exec.ContinueTask(taskID, actorUserID, action, body.Comment)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

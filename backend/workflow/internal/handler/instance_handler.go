@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -74,12 +75,22 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		err       error
 	)
 	if workflowID != "" {
+		wf, ok := h.Store.GetWorkflow(workflowID)
+		if !ok {
+			c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
+			return
+		}
+		if wf.OrgID != orgID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+			return
+		}
 		instances, err = h.Store.ListInstancesByWorkflow(workflowID)
 	} else {
 		instances, err = h.Store.ListInstancesByOrg(orgID)
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("instance_handler.List org=%s workflow=%s list failed: %v", orgID, workflowID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 
@@ -87,13 +98,31 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		models.Instance
 		WorkflowName string `json:"workflow_name,omitempty"`
 	}
+	workflowIDs := make([]string, 0, len(instances))
+	seenWorkflowIDs := make(map[string]struct{}, len(instances))
+	for _, inst := range instances {
+		if inst.OrgID != orgID || inst.WorkflowID == "" {
+			continue
+		}
+		if _, seen := seenWorkflowIDs[inst.WorkflowID]; seen {
+			continue
+		}
+		seenWorkflowIDs[inst.WorkflowID] = struct{}{}
+		workflowIDs = append(workflowIDs, inst.WorkflowID)
+	}
+	workflowMap, err := h.Store.GetWorkflowsByIDs(workflowIDs)
+	if err != nil {
+		log.Printf("instance_handler.List org=%s workflow=%s batch workflow lookup failed: %v", orgID, workflowID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
 	out := make([]enrichedInstance, 0, len(instances))
 	for _, inst := range instances {
 		if inst.OrgID != orgID {
 			continue
 		}
 		wfName := ""
-		if wf, ok := h.Store.GetWorkflow(inst.WorkflowID); ok {
+		if wf, ok := workflowMap[inst.WorkflowID]; ok {
 			wfName = wf.Name
 		}
 		out = append(out, enrichedInstance{Instance: inst, WorkflowName: wfName})
