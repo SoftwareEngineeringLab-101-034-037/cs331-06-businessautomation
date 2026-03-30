@@ -268,21 +268,12 @@ export default function TasksPage() {
     }));
   }, [filtered]);
 
-  const totalFiltered = filtered.length;
-
   return (
-    <div className="dashboard-page tasks-dashboard-page" style={{ maxWidth: "100%", padding: "0 16px" }}>
-      <div className="page-header">
-        <div>
-          <h2 className="page-title">My Tasks</h2>
-          <p className="page-subtitle">{totalFiltered} task{totalFiltered !== 1 ? "s" : ""} across {columns.filter((c) => c.tasks.length > 0).length} columns</p>
-        </div>
-      </div>
-
+    <div className="dashboard-page tasks-dashboard-page" style={{ maxWidth: "100%", padding: "28px 16px 0" }}>
       {loading && <p className="table-muted">Loading tasks...</p>}
       {error && <p style={{ color: "#ef4444" }}>{error}</p>}
 
-      <div className="filters-bar" style={{ marginBottom: 16 }}>
+      <div className="filters-bar">
         <div className="filter-search">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
             <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />

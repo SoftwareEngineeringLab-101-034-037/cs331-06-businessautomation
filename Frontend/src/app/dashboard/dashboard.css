@@ -1216,65 +1216,43 @@
   flex-shrink: 0;
 }
 
-.tasks-dashboard-page {
-  height: calc(100vh - 56px);
-  max-height: calc(100vh - 56px);
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.tasks-dashboard-page .filters-bar {
-  flex-shrink: 0;
-}
-
 .tasks-kanban-container {
-  flex: 1 1 auto;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: stretch;
+  overflow: hidden;
 }
 
 .tasks-kanban-container .kanban-column {
-  flex: initial;
+  flex: 1 1 auto;
   min-width: 0;
   max-width: none;
-  height: 100%;
-  max-height: none;
-  min-height: 0;
-  overflow: hidden;
+  max-height: calc(100vh - 160px);
 }
 
 .tasks-kanban-container .kanban-card {
   border-left-color: #22c55e;
 }
 
-.tasks-kanban-container .kanban-column-header {
-  flex-shrink: 0;
+.tasks-kanban-container .kanban-card-overdue {
+  border-left-color: #ef4444;
 }
 
-.tasks-kanban-container .kanban-column-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: none;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+.tasks-kanban-container .kanban-card-escalated {
+  border-left-color: #f97316;
+}
+
+.tasks-kanban-container .kanban-card-sent-back {
+  border-left-color: #f59e0b;
 }
 
 @media (max-width: 768px) {
   .tasks-kanban-container {
     grid-template-columns: 1fr;
-    overflow-y: auto;
   }
 
   .tasks-kanban-container .kanban-column {
     min-width: 0;
-    height: auto;
   }
 }
 
