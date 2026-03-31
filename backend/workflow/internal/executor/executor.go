@@ -20,8 +20,9 @@ type Executor struct {
 	email            connectors.EmailConnector
 	assigneeSelector TaskAssigneeSelector
 
-	mu           sync.Mutex
-	mergeWaiters map[string]int
+	mu            sync.Mutex
+	mergeWaiters  map[string]int
+	instanceLocks map[string]*sync.Mutex
 }
 
 var (
@@ -35,6 +36,7 @@ var (
 	ErrTaskNodeNotFound     = errors.New("task node not found in workflow")
 	ErrForbiddenTaskAction  = errors.New("forbidden task action")
 	ErrTaskClaimNotAllowed  = errors.New("task claim not allowed")
+	ErrPendingTaskStartOnly = errors.New("pending tasks can only be started")
 )
 
 func NewExecutor(s storage.Store, e connectors.EmailConnector, selector TaskAssigneeSelector) *Executor {
@@ -43,6 +45,7 @@ func NewExecutor(s storage.Store, e connectors.EmailConnector, selector TaskAssi
 		email:            e,
 		assigneeSelector: selector,
 		mergeWaiters:     make(map[string]int),
+		instanceLocks:    make(map[string]*sync.Mutex),
 	}
 }
 
@@ -243,13 +246,11 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 		"allowed_actions": node.TaskActions,
 	})
 
-	inst, ok := e.store.GetInstance(instanceID)
-	if ok {
+	if _, err := e.saveInstanceMutation(instanceID, func(inst *models.Instance) {
 		inst.Status = models.InstanceWaiting
 		inst.CurrentNode = node.ID
-		if _, err := e.store.SaveInstance(inst); err != nil {
-			log.Printf("executor: failed to save waiting instance: %v", err)
-		}
+	}); err != nil && !errors.Is(err, ErrInstanceNotFound) {
+		log.Printf("executor: failed to save waiting instance instance_id=%s node_id=%s: %v", instanceID, node.ID, err)
 	}
 
 	return "", nil
@@ -290,6 +291,9 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader
 	}
 	comment = strings.TrimSpace(comment)
 	actorUserID = strings.TrimSpace(actorUserID)
+	if task.Status == models.TaskPending && action != "start" {
+		return models.TaskAssignment{}, ErrPendingTaskStartOnly
+	}
 	if action != "start" && comment == "" {
 		return models.TaskAssignment{}, ErrCommentRequired
 	}
@@ -384,14 +388,16 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader
 		"decision_at":   now.Format(time.RFC3339),
 	})
 
-	inst, ok = e.store.GetInstance(task.InstanceID)
-	if !ok {
-		return models.TaskAssignment{}, ErrInstanceNotFound
-	}
-	inst.Status = models.InstanceRunning
-	inst.CurrentNode = task.NodeID
-	if _, err := e.store.SaveInstance(inst); err != nil {
-		return models.TaskAssignment{}, fmt.Errorf("save instance: %w", err)
+	inst, err = e.saveInstanceMutation(task.InstanceID, func(inst *models.Instance) {
+		inst.Status = models.InstanceRunning
+		inst.CurrentNode = task.NodeID
+	})
+	if err != nil {
+		log.Printf("executor: failed to save running instance after task CAS instance_id=%s task_id=%s action=%s: %v", task.InstanceID, task.ID, action, err)
+		inst, ok = e.store.GetInstance(task.InstanceID)
+		if !ok {
+			inst = models.Instance{Data: task.Data}
+		}
 	}
 
 	e.setNodeState(task.InstanceID, task.NodeID, "completed")
@@ -403,11 +409,12 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader
 	}
 	finalInst, ok := e.store.GetInstance(task.InstanceID)
 	if ok && finalInst.Status == models.InstanceRunning && !hasActiveTasks {
-		nowDone := time.Now()
-		finalInst.Status = models.InstanceCompleted
-		finalInst.CompletedAt = &nowDone
-		finalInst.AuditLog = append(finalInst.AuditLog, models.AuditEntry{Timestamp: nowDone, Action: "instance_completed"})
-		if _, err := e.store.SaveInstance(finalInst); err != nil {
+		if _, err := e.saveInstanceMutation(task.InstanceID, func(inst *models.Instance) {
+			nowDone := time.Now()
+			inst.Status = models.InstanceCompleted
+			inst.CompletedAt = &nowDone
+			inst.AuditLog = append(inst.AuditLog, models.AuditEntry{Timestamp: nowDone, Action: "instance_completed"})
+		}); err != nil {
 			log.Printf("executor: failed to save completed instance instance_id=%s status=%s action=%s: %v", task.InstanceID, models.InstanceCompleted, "instance_completed", err)
 		}
 	}
@@ -416,55 +423,52 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader
 }
 
 func (e *Executor) setNodeState(instanceID, nodeID, status string) {
-	inst, ok := e.store.GetInstance(instanceID)
-	if !ok {
-		return
+	if _, err := e.saveInstanceMutation(instanceID, func(inst *models.Instance) {
+		if inst.NodeStates == nil {
+			inst.NodeStates = make(map[string]models.NodeState)
+		}
+		ns := inst.NodeStates[nodeID]
+		now := time.Now()
+		ns.Status = status
+		if status == "running" {
+			ns.StartedAt = &now
+		}
+		if status == "completed" || status == "failed" {
+			ns.CompletedAt = &now
+		}
+		inst.NodeStates[nodeID] = ns
+		inst.CurrentNode = nodeID
+	}); err != nil {
+		log.Printf("executor: failed to persist node state instance_id=%s node_id=%s status=%s: %v", instanceID, nodeID, status, err)
 	}
-	if inst.NodeStates == nil {
-		inst.NodeStates = make(map[string]models.NodeState)
-	}
-	ns := inst.NodeStates[nodeID]
-	now := time.Now()
-	ns.Status = status
-	if status == "running" {
-		ns.StartedAt = &now
-	}
-	if status == "completed" || status == "failed" {
-		ns.CompletedAt = &now
-	}
-	inst.NodeStates[nodeID] = ns
-	inst.CurrentNode = nodeID
-	_, _ = e.store.SaveInstance(inst)
 }
 
 func (e *Executor) audit(instanceID, nodeID, action string, details map[string]interface{}) {
-	inst, ok := e.store.GetInstance(instanceID)
-	if !ok {
-		return
+	if _, err := e.saveInstanceMutation(instanceID, func(inst *models.Instance) {
+		inst.AuditLog = append(inst.AuditLog, models.AuditEntry{
+			Timestamp: time.Now(),
+			NodeID:    nodeID,
+			Action:    action,
+			Details:   details,
+		})
+	}); err != nil {
+		log.Printf("executor: failed to append audit entry instance_id=%s node_id=%s action=%s: %v", instanceID, nodeID, action, err)
 	}
-	inst.AuditLog = append(inst.AuditLog, models.AuditEntry{
-		Timestamp: time.Now(),
-		NodeID:    nodeID,
-		Action:    action,
-		Details:   details,
-	})
-	_, _ = e.store.SaveInstance(inst)
 }
 
 func (e *Executor) markFailed(instanceID, reason string) {
-	inst, ok := e.store.GetInstance(instanceID)
-	if !ok {
-		return
+	if _, err := e.saveInstanceMutation(instanceID, func(inst *models.Instance) {
+		now := time.Now()
+		inst.Status = models.InstanceFailed
+		inst.CompletedAt = &now
+		inst.AuditLog = append(inst.AuditLog, models.AuditEntry{
+			Timestamp: now,
+			Action:    "instance_failed",
+			Details:   map[string]interface{}{"reason": reason},
+		})
+	}); err != nil {
+		log.Printf("executor: failed to mark instance failed instance_id=%s: %v", instanceID, err)
 	}
-	now := time.Now()
-	inst.Status = models.InstanceFailed
-	inst.CompletedAt = &now
-	inst.AuditLog = append(inst.AuditLog, models.AuditEntry{
-		Timestamp: now,
-		Action:    "instance_failed",
-		Details:   map[string]interface{}{"reason": reason},
-	})
-	_, _ = e.store.SaveInstance(inst)
 }
 
 func (e *Executor) evalCondition(condition string, data map[string]interface{}) string {
@@ -592,6 +596,9 @@ func (e *Executor) CanActOnTask(actorUserID string, task models.TaskAssignment, 
 	if actorUserID == "" {
 		return ErrForbiddenTaskAction
 	}
+	if task.Status == models.TaskPending && action != "start" {
+		return ErrPendingTaskStartOnly
+	}
 
 	assignedUser := strings.TrimSpace(task.AssignedUser)
 	if assignedUser != "" {
@@ -665,6 +672,32 @@ func cloneWorkflowData(data map[string]interface{}) map[string]interface{} {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func (e *Executor) saveInstanceMutation(instanceID string, mutate func(inst *models.Instance)) (models.Instance, error) {
+	lock := e.instanceLock(instanceID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	inst, ok := e.store.GetInstance(instanceID)
+	if !ok {
+		return models.Instance{}, ErrInstanceNotFound
+	}
+	mutate(&inst)
+	_, err := e.store.SaveInstance(inst)
+	return inst, err
+}
+
+func (e *Executor) instanceLock(instanceID string) *sync.Mutex {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	lock, ok := e.instanceLocks[instanceID]
+	if !ok {
+		lock = &sync.Mutex{}
+		e.instanceLocks[instanceID] = lock
+	}
+	return lock
 }
 
 func (e *Executor) roleDirectory() RoleMemberDirectory {

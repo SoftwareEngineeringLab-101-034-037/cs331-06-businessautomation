@@ -38,6 +38,11 @@ func (h *InstanceHandler) Start(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
 		return
 	}
+	orgID := c.Param("orgId")
+	if wf.OrgID != orgID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
 	if wf.Status != models.WorkflowActive {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow is not active"})
 		return
