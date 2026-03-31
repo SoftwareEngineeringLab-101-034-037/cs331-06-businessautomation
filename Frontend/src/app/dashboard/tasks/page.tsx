@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { ToastContainer, useToast } from "@/components/Toast";
 import TaskDetailDrawer from "@/components/dashboard/TaskDetailDrawer";
@@ -134,9 +134,11 @@ function TaskCard({ task, onSelect }: { task: Task; onSelect: (task: Task) => vo
           : "";
 
   return (
-    <div
+    <button
+      type="button"
       className={`kanban-card ${visualClass}`}
       onClick={() => onSelect(task)}
+      aria-label={`Open task ${task.title}`}
     >
       <div className="kanban-card-header">
         <span className="kanban-card-id">{task.id}</span>
@@ -174,7 +176,7 @@ function TaskCard({ task, onSelect }: { task: Task; onSelect: (task: Task) => vo
         </div>
         <span className="kanban-card-assignee">{task.assignedToName}</span>
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -210,6 +212,7 @@ export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestVersionRef = useRef(0);
 
   const authFetch = useCallback(async (
     input: string,
@@ -234,14 +237,21 @@ export default function TasksPage() {
   }, [getToken]);
 
   const loadTasks = useCallback(async () => {
+    const requestVersion = requestVersionRef.current + 1;
+    requestVersionRef.current = requestVersion;
+
     if (!organization?.id || !userId) {
-      setTasks(DEMO_TASKS_ENABLED ? MOCK_TASKS : []);
-      setLoading(false);
+      if (requestVersion === requestVersionRef.current) {
+        setTasks(DEMO_TASKS_ENABLED ? MOCK_TASKS : []);
+        setLoading(false);
+      }
       return;
     }
 
-    setLoading(true);
-    setError(null);
+    if (requestVersion === requestVersionRef.current) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const [taskRes, workflowRes] = await Promise.all([
         authFetch(`${WF_API}/api/orgs/${organization.id}/tasks?assigned_user=${encodeURIComponent(userId)}`),
@@ -263,6 +273,9 @@ export default function TasksPage() {
 
       try {
         const roleRes = await authFetch(`${AUTH_API}/api/orgs/${organization.id}/roles`);
+        if (requestVersion !== requestVersionRef.current) {
+          return;
+        }
         if (roleRes.ok) {
           const roles = (await roleRes.json()) as BackendRoleSummary[];
           const myRoleNames = (roles || [])
@@ -280,6 +293,10 @@ export default function TasksPage() {
                 return await response.json() as BackendTask[];
               }),
             );
+
+            if (requestVersion !== requestVersionRef.current) {
+              return;
+            }
 
             for (const result of roleTaskResponses) {
               if (result.status !== "fulfilled") {
@@ -299,12 +316,18 @@ export default function TasksPage() {
       }
 
       const mapped = Array.from(taskMap.values()).map((t) => toUITask(t, wfMap.get(t.workflow_id)));
-      setTasks(mapped.length > 0 ? mapped : []);
+      if (requestVersion === requestVersionRef.current) {
+        setTasks(mapped.length > 0 ? mapped : []);
+      }
     } catch (err: any) {
-      setError(err?.message || "Could not load tasks");
-      setTasks(DEMO_TASKS_ENABLED ? MOCK_TASKS : []);
+      if (requestVersion === requestVersionRef.current) {
+        setError(err?.message || "Could not load tasks");
+        setTasks(DEMO_TASKS_ENABLED ? MOCK_TASKS : []);
+      }
     } finally {
-      setLoading(false);
+      if (requestVersion === requestVersionRef.current) {
+        setLoading(false);
+      }
     }
   }, [authFetch, organization?.id, userId]);
 

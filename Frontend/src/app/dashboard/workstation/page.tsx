@@ -77,9 +77,13 @@ function formatTaskStatus(status: string): string {
   switch (status) {
     case "pending": return "Pending";
     case "in_progress": return "In Progress";
+    case "approve": return "Approved";
     case "approved": return "Approved";
+    case "reject": return "Rejected";
     case "rejected": return "Rejected";
+    case "clarify": return "Needs Clarification";
     case "clarification_requested": return "Needs Clarification";
+    case "complete": return "Completed";
     case "completed": return "Completed";
     default: return status;
   }
