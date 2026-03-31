@@ -133,6 +133,10 @@ func (h *EmployeeHandler) CreateRole(c *gin.Context) {
 
 // GET /api/orgs/:orgId/roles
 func (h *EmployeeHandler) ListRoles(c *gin.Context) {
+	// This handler is intentionally user-context only via OrgMemberOnly().
+	// Workflow initiations that need role resolution must propagate the original
+	// user Authorization header, or add a separate service-token endpoint for
+	// non-user-initiated execution paths.
 	orgID := c.Param("orgId")
 	roles, err := h.Service.ListRoleSummaries(orgID)
 	if err != nil {

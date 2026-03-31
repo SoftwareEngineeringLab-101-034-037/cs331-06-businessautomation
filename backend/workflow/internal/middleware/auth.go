@@ -87,6 +87,10 @@ func GetOrgID(c *gin.Context) string {
 	return c.GetString(OrgIDKey)
 }
 
+func GetAuthorizationHeader(c *gin.Context) string {
+	return strings.TrimSpace(c.GetHeader("Authorization"))
+}
+
 // RequireOrgMatch ensures the :orgId path parameter matches the org_id
 // claim from the authenticated JWT. Returns 403 if they differ.
 func RequireOrgMatch() gin.HandlerFunc {

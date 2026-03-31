@@ -331,9 +331,13 @@ export interface WorkflowDraft {
   tags: string[];
 }
 
-/** Generate a unique step ID */
-export function generateStepId(): string {
-  return `step_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+let stepIdSequence = 0;
+
+/** Generate a sequential step ID with a unique suffix to avoid collisions */
+export function generateStepId(order: number): string {
+  const safeOrder = Number.isFinite(order) && order > 0 ? order : 1;
+  stepIdSequence += 1;
+  return `s_${safeOrder.toString().padStart(3, "0")}_${stepIdSequence.toString().padStart(4, "0")}`;
 }
 
 /** Create a blank step with defaults */
@@ -341,16 +345,17 @@ export function createBlankStep(
   order: number,
   position?: { x: number; y: number },
 ): WorkflowStep {
+  const normalizedOrder = Math.max(1, Math.floor(order));
   return {
-    id: generateStepId(),
+    id: generateStepId(normalizedOrder),
     type: "task",
-    title: `Step ${order}`,
+    title: `Step ${normalizedOrder}`,
     description: "",
     actionType: "custom_task",
     assignedRole: "",
     slaDays: 1,
     isRequired: true,
     branches: 2,
-    position: position ?? { x: 250, y: 80 + order * 150 },
+    position: position ?? { x: 250, y: 80 + normalizedOrder * 150 },
   };
 }

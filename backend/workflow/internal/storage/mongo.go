@@ -11,7 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"github.com/example/business-automation/backend/workflow/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/models"
 )
 
 type MongoStore struct {
@@ -64,12 +64,14 @@ func (m *MongoStore) ensureIndexes(ctx context.Context) error {
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "workflow_id", Value: 1}}},
 		{Keys: bson.D{{Key: "org_id", Value: 1}}},
+		{Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "started_at", Value: -1}}},
 	}); err != nil {
 		return err
 	}
 	if _, err := m.taskCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "assigned_role", Value: 1}, {Key: "status", Value: 1}}},
+		{Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "assigned_user", Value: 1}, {Key: "status", Value: 1}}},
 		{Keys: bson.D{{Key: "instance_id", Value: 1}}},
 	}); err != nil {
 		return err
@@ -98,6 +100,28 @@ func (m *MongoStore) GetWorkflow(id string) (models.Workflow, bool) {
 		return models.Workflow{}, false
 	}
 	return w, true
+}
+
+func (m *MongoStore) GetWorkflowsByIDs(ids []string) (map[string]models.Workflow, error) {
+	result := make(map[string]models.Workflow, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := m.wfCol.Find(ctx, bson.M{"id": bson.M{"$in": ids}})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var workflows []models.Workflow
+	if err := cursor.All(ctx, &workflows); err != nil {
+		return nil, err
+	}
+	for _, wf := range workflows {
+		result[wf.ID] = wf
+	}
+	return result, nil
 }
 
 func (m *MongoStore) ListWorkflows(orgID string) ([]models.Workflow, error) {
@@ -167,6 +191,22 @@ func (m *MongoStore) ListInstancesByWorkflow(workflowID string) ([]models.Instan
 	return out, nil
 }
 
+func (m *MongoStore) ListInstancesByOrg(orgID string) ([]models.Instance, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := m.instCol.Find(ctx, bson.M{"org_id": orgID},
+		options.Find().SetSort(bson.D{{Key: "started_at", Value: -1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var out []models.Instance
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // -- Tasks --
 
 func (m *MongoStore) SaveTask(t models.TaskAssignment) (string, error) {
@@ -188,6 +228,52 @@ func (m *MongoStore) GetTask(id string) (models.TaskAssignment, bool) {
 		return models.TaskAssignment{}, false
 	}
 	return t, true
+}
+
+func (m *MongoStore) CompareAndSwapTask(task models.TaskAssignment, expectedStatus models.TaskStatus) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := m.taskCol.ReplaceOne(ctx, bson.M{
+		"id":     task.ID,
+		"status": expectedStatus,
+	}, task)
+	if err != nil {
+		return false, err
+	}
+	return res.MatchedCount == 1, nil
+}
+
+func (m *MongoStore) HasActiveTasks(instanceID string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	count, err := m.taskCol.CountDocuments(ctx, bson.M{
+		"instance_id": instanceID,
+		"status": bson.M{
+			"$in": []models.TaskStatus{models.TaskPending, models.TaskInProgress, models.TaskClarify},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (m *MongoStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := m.taskCol.Find(ctx, bson.M{
+		"org_id":        orgID,
+		"assigned_user": userID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var out []models.TaskAssignment
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (m *MongoStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error) {

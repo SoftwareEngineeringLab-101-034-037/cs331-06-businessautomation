@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/business-automation/backend/workflow/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/models"
 )
 
 type emailCall struct {
@@ -93,6 +93,18 @@ func (m *mockStore) GetWorkflow(id string) (models.Workflow, bool) {
 	return w, ok
 }
 
+func (m *mockStore) GetWorkflowsByIDs(ids []string) (map[string]models.Workflow, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]models.Workflow, len(ids))
+	for _, id := range ids {
+		if wf, ok := m.workflows[id]; ok {
+			out[id] = wf
+		}
+	}
+	return out, nil
+}
+
 func (m *mockStore) ListWorkflows(orgID string) ([]models.Workflow, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -151,6 +163,18 @@ func (m *mockStore) ListInstancesByWorkflow(workflowID string) ([]models.Instanc
 	return out, nil
 }
 
+func (m *mockStore) ListInstancesByOrg(orgID string) ([]models.Instance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []models.Instance
+	for _, inst := range m.instances {
+		if inst.OrgID == orgID {
+			out = append(out, inst)
+		}
+	}
+	return out, nil
+}
+
 func (m *mockStore) SaveTask(t models.TaskAssignment) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -170,6 +194,50 @@ func (m *mockStore) GetTask(id string) (models.TaskAssignment, bool) {
 	defer m.mu.RUnlock()
 	task, ok := m.tasks[id]
 	return task, ok
+}
+
+func (m *mockStore) CompareAndSwapTask(task models.TaskAssignment, expectedStatus models.TaskStatus) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.saveTaskErr != nil {
+		return false, m.saveTaskErr
+	}
+	current, ok := m.tasks[task.ID]
+	if !ok || current.Status != expectedStatus {
+		return false, nil
+	}
+	m.tasks[task.ID] = task
+	return true, nil
+}
+
+func (m *mockStore) HasActiveTasks(instanceID string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, task := range m.tasks {
+		if task.InstanceID != instanceID {
+			continue
+		}
+		switch task.Status {
+		case models.TaskPending, models.TaskInProgress, models.TaskClarify:
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *mockStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.listTaskErr != nil {
+		return nil, m.listTaskErr
+	}
+	var out []models.TaskAssignment
+	for _, task := range m.tasks {
+		if task.OrgID == orgID && task.AssignedUser == userID {
+			out = append(out, task)
+		}
+	}
+	return out, nil
 }
 
 func (m *mockStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error) {
@@ -270,7 +338,7 @@ func TestResolveParam(t *testing.T) {
 }
 
 func TestEvalCondition(t *testing.T) {
-	e := NewExecutor(newMockStore(), &mockEmail{})
+	e := NewExecutor(newMockStore(), &mockEmail{}, nil)
 	tests := []struct {
 		name string
 		cond string
@@ -282,7 +350,8 @@ func TestEvalCondition(t *testing.T) {
 		{name: "not equals true", cond: "status != rejected", data: map[string]interface{}{"status": "approved"}, want: "yes"},
 		{name: "greater than true", cond: "amount > 100", data: map[string]interface{}{"amount": 150}, want: "yes"},
 		{name: "less than false", cond: "amount < 100", data: map[string]interface{}{"amount": 150}, want: "no"},
-		{name: "invalid expression falls back", cond: "this is invalid", data: map[string]interface{}{}, want: "yes"},
+		{name: "invalid expression falls back", cond: "this is invalid", data: map[string]interface{}{}, want: "no"},
+		{name: "invalid numeric comparison returns no", cond: "amount > nope", data: map[string]interface{}{"amount": 150}, want: "no"},
 	}
 
 	for _, tt := range tests {
@@ -296,18 +365,18 @@ func TestEvalCondition(t *testing.T) {
 }
 
 func TestToFloat(t *testing.T) {
-	if got := toFloat("12.5"); got != 12.5 {
+	if got, ok := toFloat("12.5"); !ok || got != 12.5 {
 		t.Fatalf("unexpected float: %v", got)
 	}
-	if got := toFloat("bad"); got != 0 {
-		t.Fatalf("expected 0 for invalid float, got %v", got)
+	if got, ok := toFloat("bad"); ok || got != 0 {
+		t.Fatalf("expected invalid float parse, got value=%v ok=%v", got, ok)
 	}
 }
 
 func TestStartInstanceNoStartNodeMarksFailed(t *testing.T) {
 	store := newMockStore()
 	email := &mockEmail{}
-	exec := NewExecutor(store, email)
+	exec := NewExecutor(store, email, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-no-start",
@@ -317,7 +386,7 @@ func TestStartInstanceNoStartNodeMarksFailed(t *testing.T) {
 		},
 	}
 
-	instanceID, err := exec.StartInstance(wf, map[string]interface{}{})
+	instanceID, err := exec.StartInstance(wf, map[string]interface{}{}, "")
 	if err != nil {
 		t.Fatalf("StartInstance failed: %v", err)
 	}
@@ -331,7 +400,7 @@ func TestStartInstanceNoStartNodeMarksFailed(t *testing.T) {
 func TestRunLinearActionFlowCompletesAndSendsEmail(t *testing.T) {
 	store := newMockStore()
 	email := &mockEmail{}
-	exec := NewExecutor(store, email)
+	exec := NewExecutor(store, email, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-linear",
@@ -361,7 +430,7 @@ func TestRunLinearActionFlowCompletesAndSendsEmail(t *testing.T) {
 	}
 	instanceID := seedInstance(t, store, wf, data)
 
-	exec.run(instanceID, wf, data)
+	exec.run(instanceID, wf, data, "")
 
 	inst, ok := store.GetInstance(instanceID)
 	if !ok {
@@ -390,7 +459,11 @@ func TestRunLinearActionFlowCompletesAndSendsEmail(t *testing.T) {
 
 func TestRunConditionRoutesToNoBranch(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{})
+	exec := NewExecutor(store, &mockEmail{}, NewRandomRoleAssigneeSelector(NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {
+			"manager": {"user-1"},
+		},
+	})))
 
 	wf := models.Workflow{
 		ID:    "wf-condition",
@@ -405,7 +478,7 @@ func TestRunConditionRoutesToNoBranch(t *testing.T) {
 	data := map[string]interface{}{"amount": 20}
 	instanceID := seedInstance(t, store, wf, data)
 
-	exec.run(instanceID, wf, data)
+	exec.run(instanceID, wf, data, "")
 
 	inst, _ := store.GetInstance(instanceID)
 	if _, ok := inst.NodeStates["no-end"]; !ok {
@@ -429,7 +502,11 @@ func TestRunConditionRoutesToNoBranch(t *testing.T) {
 
 func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{})
+	exec := NewExecutor(store, &mockEmail{}, NewRandomRoleAssigneeSelector(NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {
+			"manager": {"user-1"},
+		},
+	})))
 
 	wf := models.Workflow{
 		ID:    "wf-task",
@@ -453,14 +530,18 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 			{ID: "fallback-end", Type: models.NodeEnd, Title: "Fallback"},
 		},
 	}
+	store.workflows[wf.ID] = wf
 	data := map[string]interface{}{"request_id": "r-1"}
 	instanceID := seedInstance(t, store, wf, data)
 
-	exec.run(instanceID, wf, data)
+	exec.run(instanceID, wf, data, "")
 
 	inst, _ := store.GetInstance(instanceID)
-	if _, ok := inst.NodeStates["approved-end"]; !ok {
-		t.Fatalf("expected approved-end to be visited")
+	if inst.Status != models.InstanceWaiting {
+		t.Fatalf("expected waiting status after task creation, got %s", inst.Status)
+	}
+	if _, ok := inst.NodeStates["approved-end"]; ok {
+		t.Fatalf("did not expect approved-end before human action")
 	}
 	if _, ok := inst.NodeStates["rejected-end"]; ok {
 		t.Fatalf("did not expect rejected-end to be visited")
@@ -482,11 +563,112 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	if countAuditAction(inst, "task_assigned") != 1 {
 		t.Fatalf("expected task_assigned audit entry")
 	}
+
+	if _, err := exec.ContinueTask(savedTask.ID, "user-1", "start", "", ""); err != nil {
+		t.Fatalf("ContinueTask start failed: %v", err)
+	}
+	if _, err := exec.ContinueTask(savedTask.ID, "user-1", "approve", "looks good", ""); err != nil {
+		t.Fatalf("ContinueTask failed: %v", err)
+	}
+	persistedTask, ok := store.GetTask(savedTask.ID)
+	if !ok {
+		t.Fatalf("expected persisted task after ContinueTask")
+	}
+	if persistedTask.Status != models.TaskCompleted {
+		t.Fatalf("expected persisted completed status, got %s", persistedTask.Status)
+	}
+	if persistedTask.ActionCommitted != "approve" {
+		t.Fatalf("expected committed action approve, got %q", persistedTask.ActionCommitted)
+	}
+	if persistedTask.Comment != "looks good" {
+		t.Fatalf("expected persisted comment, got %q", persistedTask.Comment)
+	}
+	if persistedTask.CompletedAt == nil {
+		t.Fatalf("expected persisted completed timestamp")
+	}
+
+	inst, _ = store.GetInstance(instanceID)
+	if inst.Status != models.InstanceCompleted {
+		t.Fatalf("expected completed status after continue, got %s", inst.Status)
+	}
+	if _, ok := inst.NodeStates["approved-end"]; !ok {
+		t.Fatalf("expected approved-end to be visited")
+	}
+}
+
+func TestContinueTaskStartClaimsTaskWithoutComment(t *testing.T) {
+	store := newMockStore()
+	exec := NewExecutor(store, &mockEmail{}, nil)
+
+	wf := models.Workflow{
+		ID:    "wf-start-claim",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{
+			{
+				ID:          "task",
+				Type:        models.NodeTask,
+				Title:       "Review",
+				TaskActions: []string{"approve", "reject"},
+			},
+		},
+	}
+	store.workflows[wf.ID] = wf
+	instanceID := seedInstance(t, store, wf, map[string]interface{}{})
+	taskID, err := store.SaveTask(models.TaskAssignment{
+		OrgID:          "org-1",
+		InstanceID:     instanceID,
+		WorkflowID:     wf.ID,
+		NodeID:         "task",
+		Title:          "Review",
+		AllowedActions: []string{"approve", "reject"},
+		Status:         models.TaskPending,
+		CreatedAt:      time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("save task failed: %v", err)
+	}
+
+	updated, err := exec.ContinueTask(taskID, "user-1", "start", "", "")
+	if err != nil {
+		t.Fatalf("ContinueTask start failed: %v", err)
+	}
+	if updated.Status != models.TaskInProgress {
+		t.Fatalf("expected in_progress after start, got %s", updated.Status)
+	}
+	if updated.AssignedUser != "user-1" {
+		t.Fatalf("expected task to be claimed by actor, got %q", updated.AssignedUser)
+	}
+	if updated.Comment != "" {
+		t.Fatalf("expected no comment on start, got %q", updated.Comment)
+	}
+	if updated.CompletedAt != nil {
+		t.Fatalf("expected no completed time after start")
+	}
+
+	persisted, ok := store.GetTask(taskID)
+	if !ok {
+		t.Fatalf("expected persisted task")
+	}
+	if persisted.Status != models.TaskInProgress || persisted.AssignedUser != "user-1" {
+		t.Fatalf("unexpected persisted task after start: %+v", persisted)
+	}
+	if got := countAuditAction(mustGetInstance(t, store, instanceID), "task_started"); got != 1 {
+		t.Fatalf("expected one task_started audit entry, got %d", got)
+	}
+}
+
+func mustGetInstance(t *testing.T, store *mockStore, instanceID string) models.Instance {
+	t.Helper()
+	inst, ok := store.GetInstance(instanceID)
+	if !ok {
+		t.Fatalf("instance %s not found", instanceID)
+	}
+	return inst
 }
 
 func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{})
+	exec := NewExecutor(store, &mockEmail{}, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-parallel",
@@ -502,7 +684,7 @@ func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 	}
 	instanceID := seedInstance(t, store, wf, map[string]interface{}{})
 
-	exec.run(instanceID, wf, map[string]interface{}{})
+	exec.run(instanceID, wf, map[string]interface{}{}, "")
 
 	inst, _ := store.GetInstance(instanceID)
 	if inst.Status != models.InstanceCompleted {
@@ -518,7 +700,7 @@ func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 
 func TestRunActionSkippedForUnknownAndMissingConnector(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{})
+	exec := NewExecutor(store, &mockEmail{}, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-action-skips",
@@ -540,7 +722,7 @@ func TestRunActionSkippedForUnknownAndMissingConnector(t *testing.T) {
 	}
 	instanceID := seedInstance(t, store, wf, map[string]interface{}{})
 
-	exec.run(instanceID, wf, map[string]interface{}{})
+	exec.run(instanceID, wf, map[string]interface{}{}, "")
 
 	inst, _ := store.GetInstance(instanceID)
 	if got := countAuditAction(inst, "action_skipped"); got != 2 {

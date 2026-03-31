@@ -220,6 +220,14 @@ func TestOrgAdminOnlyAllowsAdmin(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
 	}
+
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+	if body["org_id"] != orgID {
+		t.Fatalf("expected org_id %q, got %#v", orgID, body["org_id"])
+	}
 }
 
 func TestOrgAdminOnlyForbiddenWhenNotAdmin(t *testing.T) {
@@ -280,6 +288,79 @@ func TestOrgAdminOnlyForbiddenWhenDifferentOrg(t *testing.T) {
 
 	// User is admin of org_2, trying to access org_1
 	req := httptest.NewRequest(http.MethodGet, "/orgs/org_1/admin", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestOrgMemberOnlyAllowsMember(t *testing.T) {
+	restoreDB(t)
+	db := setupMiddlewareTestDB(t)
+	database.DB = db
+
+	orgID := "org_1"
+	now := time.Now()
+	if err := db.Exec(`
+		INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_member", "member@example.com", "Member", "User", orgID, false, true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(UserIDKey, "user_member")
+		c.Next()
+	})
+	r.GET("/orgs/:orgId/member", OrgMemberOnly(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "org_id": GetOrgID(c)})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/orgs/org_1/member", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+	if body["org_id"] != orgID {
+		t.Fatalf("expected org_id %q, got %#v", orgID, body["org_id"])
+	}
+}
+
+func TestOrgMemberOnlyForbiddenWhenDifferentOrg(t *testing.T) {
+	restoreDB(t)
+	db := setupMiddlewareTestDB(t)
+	database.DB = db
+
+	now := time.Now()
+	if err := db.Exec(`
+		INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "user_member", "member@example.com", "Member", "User", "org_2", false, true, now, now).Error; err != nil {
+		t.Fatalf("failed seeding user: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(UserIDKey, "user_member")
+		c.Next()
+	})
+	r.GET("/orgs/:orgId/member", OrgMemberOnly(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/orgs/org_1/member", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

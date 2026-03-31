@@ -10,9 +10,11 @@ import (
 
 // Config holds all configuration for the workflow service.
 type Config struct {
-	MongoURI       string
-	ClerkIssuerURL string
-	Port           string
+	MongoURI         string
+	ClerkIssuerURL   string
+	AuthServiceURL   string
+	AuthServiceToken string
+	Port             string
 }
 
 // Load reads configuration from environment variables, trying several .env
@@ -31,9 +33,11 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		MongoURI:       strings.TrimSpace(getEnv("MONGO_URI", "")),
-		ClerkIssuerURL: strings.TrimSpace(getEnv("CLERK_ISSUER_URL", "")),
-		Port:           strings.TrimSpace(getEnv("PORT", "8085")),
+		MongoURI:         strings.TrimSpace(getEnv("MONGO_URI", "")),
+		ClerkIssuerURL:   strings.TrimSpace(getEnv("CLERK_ISSUER_URL", "")),
+		AuthServiceURL:   strings.TrimSpace(getEnv("AUTH_SERVICE_URL", "http://localhost:8080")),
+		AuthServiceToken: strings.TrimSpace(getEnv("AUTH_SERVICE_TOKEN", "")),
+		Port:             strings.TrimSpace(getEnv("PORT", "8085")),
 	}
 
 	var missing []string

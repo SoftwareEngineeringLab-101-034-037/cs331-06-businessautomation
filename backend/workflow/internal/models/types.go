@@ -221,11 +221,12 @@ type NodeState struct {
 type TaskStatus string
 
 const (
-	TaskPending   TaskStatus = "pending"
-	TaskApproved  TaskStatus = "approved"
-	TaskRejected  TaskStatus = "rejected"
-	TaskClarify   TaskStatus = "clarification_requested"
-	TaskCompleted TaskStatus = "completed"
+	TaskPending    TaskStatus = "pending"
+	TaskInProgress TaskStatus = "in_progress"
+	TaskApproved   TaskStatus = "approved"
+	TaskRejected   TaskStatus = "rejected"
+	TaskClarify    TaskStatus = "clarification_requested"
+	TaskCompleted  TaskStatus = "completed"
 )
 
 type TaskAssignment struct {
@@ -243,6 +244,7 @@ type TaskAssignment struct {
 	FormTemplateID   string                 `json:"form_template_id,omitempty" bson:"form_template_id,omitempty"`
 	SLADays          int                    `json:"sla_days,omitempty" bson:"sla_days,omitempty"`
 	Status           TaskStatus             `json:"status" bson:"status"`
+	ActionCommitted  string                 `json:"action_committed,omitempty" bson:"action_committed,omitempty"`
 	Data             map[string]interface{} `json:"data,omitempty" bson:"data,omitempty"`
 	Comment          string                 `json:"comment,omitempty" bson:"comment,omitempty"`
 	CreatedAt        time.Time              `json:"created_at" bson:"created_at"`

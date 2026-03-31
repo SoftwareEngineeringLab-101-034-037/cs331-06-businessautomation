@@ -11,12 +11,12 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
-	"github.com/example/business-automation/backend/workflow/internal/config"
-	"github.com/example/business-automation/backend/workflow/internal/connectors"
-	"github.com/example/business-automation/backend/workflow/internal/executor"
-	"github.com/example/business-automation/backend/workflow/internal/handler"
-	"github.com/example/business-automation/backend/workflow/internal/middleware"
-	"github.com/example/business-automation/backend/workflow/internal/storage"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/config"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/connectors"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/executor"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/handler"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/middleware"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/storage"
 )
 
 func main() {
@@ -35,11 +35,16 @@ func main() {
 	log.Printf("Connected to MongoDB succesfully")
 
 	email := connectors.NewMockEmail()
-	exec := executor.NewExecutor(store, email)
+	roleDirectory, err := executor.NewHTTPRoleDirectory(cfg.AuthServiceURL, cfg.AuthServiceToken)
+	if err != nil {
+		log.Fatalf("Failed to configure role directory: %v", err)
+	}
+	assigneeSelector := executor.NewRandomRoleAssigneeSelector(roleDirectory)
+	exec := executor.NewExecutor(store, email, assigneeSelector)
 
 	workflowHandler := handler.NewWorkflowHandler(store)
 	instanceHandler := handler.NewInstanceHandler(store, exec)
-	taskHandler := handler.NewTaskHandler(store)
+	taskHandler := handler.NewTaskHandler(store, exec)
 
 	// ── Clerk JWT auth ────────────────────────────────────────────────────────
 	jwksURL := strings.TrimRight(cfg.ClerkIssuerURL, "/") + "/.well-known/jwks.json"
@@ -85,6 +90,7 @@ func main() {
 
 			// Instance management
 			orgApi.POST("/instances", instanceHandler.Start)
+			orgApi.GET("/instances", instanceHandler.List)
 			orgApi.GET("/instances/:id", instanceHandler.Get)
 
 			// Task management

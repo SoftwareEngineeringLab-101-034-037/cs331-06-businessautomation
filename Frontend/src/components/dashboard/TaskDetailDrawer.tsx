@@ -9,9 +9,10 @@ interface TaskDetailDrawerProps {
   task: Task | null;
   isOpen: boolean;
   onClose: () => void;
+  onAction?: (task: Task, action: string, data?: Record<string, string>) => void;
 }
 
-export default function TaskDetailDrawer({ task, isOpen, onClose }: TaskDetailDrawerProps) {
+export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: TaskDetailDrawerProps) {
   // Close on Escape key
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -34,6 +35,10 @@ export default function TaskDetailDrawer({ task, isOpen, onClose }: TaskDetailDr
   const progress = (task.stepNumber / task.totalSteps) * 100;
 
   function handleAction(action: string, data?: Record<string, string>) {
+    if (onAction) {
+      onAction(task!, action, data);
+      return;
+    }
     alert(`Action: ${action}${data ? `\nData: ${JSON.stringify(data)}` : ""}`);
   }
 
@@ -148,10 +153,6 @@ export default function TaskDetailDrawer({ task, isOpen, onClose }: TaskDetailDr
             <h3 className="detail-section-title">Details</h3>
             <div className="drawer-info-grid">
               <div className="detail-info-item">
-                <dt>Assigned By</dt>
-                <dd>{task.assignedByName}</dd>
-              </div>
-              <div className="detail-info-item">
                 <dt>Workflow</dt>
                 <dd>{task.workflowName}</dd>
               </div>
@@ -169,6 +170,12 @@ export default function TaskDetailDrawer({ task, isOpen, onClose }: TaskDetailDr
                   {formatDate(task.dueDate)}
                 </dd>
               </div>
+              {task.actionCommitted && (
+                <div className="detail-info-item">
+                  <dt>Action Committed</dt>
+                  <dd>{formatActionLabel(task.actionCommitted)}</dd>
+                </div>
+              )}
               {task.completedAt && (
                 <div className="detail-info-item">
                   <dt>Completed</dt>
@@ -184,6 +191,17 @@ export default function TaskDetailDrawer({ task, isOpen, onClose }: TaskDetailDr
             </div>
           </section>
 
+          {task.comment && (
+            <section className="detail-section">
+              <h3 className="detail-section-title">
+                {task.status === "completed" ? "Completion Comment" : "Latest Comment"}
+              </h3>
+              <div className="detail-comment-block">
+                <p className="detail-comment-text">{task.comment}</p>
+              </div>
+            </section>
+          )}
+
           {/* Tags */}
           <section className="detail-section">
             <h3 className="detail-section-title">Tags</h3>
@@ -195,7 +213,9 @@ export default function TaskDetailDrawer({ task, isOpen, onClose }: TaskDetailDr
           </section>
 
           {/* Actions */}
-          <TaskActions task={task} onAction={handleAction} />
+          {task.status !== "completed" && (
+            <TaskActions task={task} onAction={handleAction} />
+          )}
         </div>
       </aside>
     </>
@@ -214,4 +234,10 @@ function formatDate(dateStr: string): string {
 
 function isOverdue(dateStr: string): boolean {
   return new Date(dateStr) < new Date();
+}
+
+function formatActionLabel(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }

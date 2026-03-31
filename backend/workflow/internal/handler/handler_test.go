@@ -13,9 +13,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/example/business-automation/backend/workflow/internal/executor"
-	"github.com/example/business-automation/backend/workflow/internal/middleware"
-	"github.com/example/business-automation/backend/workflow/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/executor"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/middleware"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/models"
 )
 
 type handlerStore struct {
@@ -67,6 +67,18 @@ func (s *handlerStore) GetWorkflow(id string) (models.Workflow, bool) {
 	defer s.mu.RUnlock()
 	wf, ok := s.workflows[id]
 	return wf, ok
+}
+
+func (s *handlerStore) GetWorkflowsByIDs(ids []string) (map[string]models.Workflow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]models.Workflow, len(ids))
+	for _, id := range ids {
+		if wf, ok := s.workflows[id]; ok {
+			out[id] = wf
+		}
+	}
+	return out, nil
 }
 
 func (s *handlerStore) ListWorkflows(orgID string) ([]models.Workflow, error) {
@@ -130,6 +142,18 @@ func (s *handlerStore) ListInstancesByWorkflow(workflowID string) ([]models.Inst
 	return out, nil
 }
 
+func (s *handlerStore) ListInstancesByOrg(orgID string) ([]models.Instance, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]models.Instance, 0)
+	for _, inst := range s.instances {
+		if inst.OrgID == orgID {
+			out = append(out, inst)
+		}
+	}
+	return out, nil
+}
+
 func (s *handlerStore) SaveTask(task models.TaskAssignment) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -146,6 +170,83 @@ func (s *handlerStore) GetTask(id string) (models.TaskAssignment, bool) {
 	defer s.mu.RUnlock()
 	task, ok := s.tasks[id]
 	return task, ok
+}
+
+func (s *handlerStore) CompareAndSwapTask(task models.TaskAssignment, expectedStatus models.TaskStatus) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.tasks[task.ID]
+	if !ok || current.Status != expectedStatus {
+		return false, nil
+	}
+	s.tasks[task.ID] = task
+	return true, nil
+}
+
+func (s *handlerStore) HasActiveTasks(instanceID string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, task := range s.tasks {
+		if task.InstanceID != instanceID {
+			continue
+		}
+		switch task.Status {
+		case models.TaskPending, models.TaskInProgress, models.TaskClarify:
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+type mockTaskExecutor struct {
+	mu            sync.Mutex
+	calls         []taskContinueCall
+	responseTask  models.TaskAssignment
+	responseError error
+	authError     error
+}
+
+type taskContinueCall struct {
+	taskID      string
+	actorUserID string
+	action      string
+	comment     string
+	authHeader  string
+}
+
+func (m *mockTaskExecutor) ContinueTask(taskID, actorUserID, action, comment, authHeader string) (models.TaskAssignment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, taskContinueCall{
+		taskID:      taskID,
+		actorUserID: actorUserID,
+		action:      action,
+		comment:     comment,
+		authHeader:  authHeader,
+	})
+	if m.responseError != nil {
+		return models.TaskAssignment{}, m.responseError
+	}
+	return m.responseTask, nil
+}
+
+func (m *mockTaskExecutor) CanActOnTask(actorUserID string, task models.TaskAssignment, action, authHeader string) error {
+	if m.authError != nil {
+		return m.authError
+	}
+	return nil
+}
+
+func (s *handlerStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]models.TaskAssignment, 0)
+	for _, task := range s.tasks {
+		if task.OrgID == orgID && task.AssignedUser == userID {
+			out = append(out, task)
+		}
+	}
+	return out, nil
 }
 
 func (s *handlerStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error) {
@@ -185,6 +286,7 @@ func (n *noopEmail) Send(to, subject, body string) error { return nil }
 func testRequest(t *testing.T, r *gin.Engine, method, path string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -477,7 +579,7 @@ func TestInstanceHandlerStartAndGet(t *testing.T) {
 	store.workflows[activeWF.ID] = activeWF
 	store.workflows[inactiveWF.ID] = inactiveWF
 
-	exec := executor.NewExecutor(store, &noopEmail{})
+	exec := executor.NewExecutor(store, &noopEmail{}, nil)
 	h := NewInstanceHandler(store, exec)
 
 	r := gin.New()
@@ -534,11 +636,22 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	store := newHandlerStore()
+	exec := &mockTaskExecutor{
+		responseTask: models.TaskAssignment{
+			ID:              "task-1",
+			OrgID:           "org-1",
+			Status:          models.TaskCompleted,
+			ActionCommitted: "approve",
+			Comment:         "approved",
+			CreatedAt:       time.Now(),
+		},
+	}
 	store.tasks["task-1"] = models.TaskAssignment{
 		ID:           "task-1",
 		OrgID:        "org-1",
 		InstanceID:   "inst-1",
 		AssignedRole: "manager",
+		AssignedUser: "user-1",
 		Status:       models.TaskPending,
 		CreatedAt:    time.Now(),
 	}
@@ -552,14 +665,38 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 		CreatedAt:    time.Now(),
 	}
 
-	h := NewTaskHandler(store)
+	h := NewTaskHandler(store, exec)
+	legacyHandler := NewTaskHandler(store, nil)
 	r := gin.New()
-	r.GET("/api/orgs/:orgId/tasks", h.List)
-	r.PUT("/api/orgs/:orgId/tasks/:id/:action", h.Action)
+	r.GET("/api/orgs/:orgId/tasks", func(c *gin.Context) {
+		c.Set(middleware.UserIDKey, "user-1")
+		h.List(c)
+	})
+	r.PUT("/api/orgs/:orgId/tasks/:id/:action", func(c *gin.Context) {
+		c.Set(middleware.UserIDKey, "user-1")
+		h.Action(c)
+	})
+	legacyRouter := gin.New()
+	legacyRouter.PUT("/api/orgs/:orgId/tasks/:id/:action", func(c *gin.Context) {
+		c.Set(middleware.UserIDKey, "user-1")
+		legacyHandler.Action(c)
+	})
 
 	rec := testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks", nil)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for missing query, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks?assigned_user=someone-else", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for assigned user list, got %d", rec.Code)
+	}
+	var myTasks []models.TaskAssignment
+	if err := json.Unmarshal(rec.Body.Bytes(), &myTasks); err != nil {
+		t.Fatalf("decode assigned user list failed: %v", err)
+	}
+	if len(myTasks) != 1 || myTasks[0].ID != "task-1" {
+		t.Fatalf("expected only current user's task, got %+v", myTasks)
 	}
 
 	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks?role=manager", nil)
@@ -591,7 +728,27 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 		t.Fatalf("expected 404 for missing task action, got %d", rec.Code)
 	}
 
-	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/tasks/task-1/unknown", []byte(`{"comment":"x"}`))
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/tasks/task-1/approve", []byte(`{`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for malformed json, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, legacyRouter, http.MethodPut, "/api/orgs/org-1/tasks/task-1/start", []byte(`{"comment":""}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for start without comment, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	startedTask, ok := store.GetTask("task-1")
+	if !ok {
+		t.Fatalf("expected started task to exist")
+	}
+	if startedTask.Status != models.TaskInProgress {
+		t.Fatalf("expected in_progress after start, got %s", startedTask.Status)
+	}
+	if startedTask.AssignedUser != "user-1" {
+		t.Fatalf("expected task to be claimed by current user, got %q", startedTask.AssignedUser)
+	}
+
+	rec = testRequest(t, legacyRouter, http.MethodPut, "/api/orgs/org-1/tasks/task-1/unknown", []byte(`{"comment":"x"}`))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for unknown action, got %d", rec.Code)
 	}
@@ -625,21 +782,22 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 		action string
 		want   models.TaskStatus
 	}{
-		{action: "approve", want: models.TaskApproved},
-		{action: "reject", want: models.TaskRejected},
-		{action: "clarify", want: models.TaskClarify},
+		{action: "approve", want: models.TaskCompleted},
+		{action: "reject", want: models.TaskCompleted},
+		{action: "clarify", want: models.TaskCompleted},
 		{action: "complete", want: models.TaskCompleted},
 	}
 	for i, tt := range tests {
 		taskID := fmt.Sprintf("task-action-%d", i)
 		store.tasks[taskID] = models.TaskAssignment{
-			ID:        taskID,
-			OrgID:     "org-1",
-			Status:    models.TaskPending,
-			CreatedAt: time.Now(),
+			ID:           taskID,
+			OrgID:        "org-1",
+			AssignedUser: "user-1",
+			Status:       models.TaskInProgress,
+			CreatedAt:    time.Now(),
 		}
 
-		rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/tasks/"+taskID+"/"+tt.action, []byte(`{"comment":"done"}`))
+		rec = testRequest(t, legacyRouter, http.MethodPut, "/api/orgs/org-1/tasks/"+taskID+"/"+tt.action, []byte(`{"comment":"done"}`))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 for action %s, got %d", tt.action, rec.Code)
 		}
@@ -651,8 +809,22 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 		if updated.Status != tt.want {
 			t.Fatalf("unexpected status for action %s: got %s want %s", tt.action, updated.Status, tt.want)
 		}
+		if updated.ActionCommitted != tt.action {
+			t.Fatalf("unexpected action committed for action %s: got %q want %q", tt.action, updated.ActionCommitted, tt.action)
+		}
 		if updated.Comment != "done" || updated.CompletedAt == nil {
 			t.Fatalf("expected comment/completion timestamp to be set: %+v", updated)
 		}
+	}
+
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/tasks/task-1/approve", []byte(`{"comment":"approved"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for executor-backed action, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(exec.calls) != 1 {
+		t.Fatalf("expected executor ContinueTask to be called once, got %d", len(exec.calls))
+	}
+	if exec.calls[0].taskID != "task-1" || exec.calls[0].actorUserID != "user-1" || exec.calls[0].action != "approve" || exec.calls[0].comment != "approved" || exec.calls[0].authHeader == "" {
+		t.Fatalf("unexpected executor call: %+v", exec.calls[0])
 	}
 }

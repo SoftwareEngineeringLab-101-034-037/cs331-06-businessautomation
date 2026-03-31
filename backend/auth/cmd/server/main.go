@@ -83,6 +83,15 @@ func main() {
 	{
 		// Routes accessible by any authenticated user
 		api.POST("/orgs/:orgId/invitations/:invitationId/accept", employeeHandler.AcceptInvitation)
+		memberOrgAPI := api.Group("/orgs/:orgId")
+		memberOrgAPI.Use(middleware.OrgMemberOnly())
+		{
+			// Workflow callers that depend on role lookup must forward the original user
+			// Authorization header into StartInstance()/downstream execution. This route
+			// requires a user JWT, so non-user-initiated workflows need a separate
+			// service-token-capable endpoint instead of calling /roles without user context.
+			memberOrgAPI.GET("/roles", employeeHandler.ListRoles)
+		}
 
 		// Routes restricted to org admins
 		orgApi := api.Group("/orgs/:orgId")
@@ -94,7 +103,6 @@ func main() {
 			orgApi.PUT("/departments/:deptID", employeeHandler.UpdateDepartment)
 			orgApi.DELETE("/departments/:deptID", employeeHandler.DeleteDepartment)
 			orgApi.POST("/roles", employeeHandler.CreateRole)
-			orgApi.GET("/roles", employeeHandler.ListRoles)
 			orgApi.PUT("/roles/:roleID", employeeHandler.UpdateRole)
 			orgApi.DELETE("/roles/:roleID", employeeHandler.DeleteRole)
 			orgApi.POST("/employees/invite", employeeHandler.InviteSingle)
