@@ -153,10 +153,6 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
             <h3 className="detail-section-title">Details</h3>
             <div className="drawer-info-grid">
               <div className="detail-info-item">
-                <dt>Assigned By</dt>
-                <dd>{task.assignedByName}</dd>
-              </div>
-              <div className="detail-info-item">
                 <dt>Workflow</dt>
                 <dd>{task.workflowName}</dd>
               </div>
@@ -174,12 +170,6 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
                   {formatDate(task.dueDate)}
                 </dd>
               </div>
-              {task.comment && (
-                <div className="detail-info-item">
-                  <dt>Latest Comment</dt>
-                  <dd>{task.comment}</dd>
-                </div>
-              )}
               {task.actionCommitted && (
                 <div className="detail-info-item">
                   <dt>Action Committed</dt>
@@ -200,6 +190,17 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
               )}
             </div>
           </section>
+
+          {task.comment && (
+            <section className="detail-section">
+              <h3 className="detail-section-title">
+                {task.status === "completed" ? "Completion Comment" : "Latest Comment"}
+              </h3>
+              <div className="detail-comment-block">
+                <p className="detail-comment-text">{task.comment}</p>
+              </div>
+            </section>
+          )}
 
           {/* Tags */}
           <section className="detail-section">

@@ -120,7 +120,15 @@ function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined): Tas
   };
 }
 
-function TaskCard({ task, onSelect }: { task: Task; onSelect: (task: Task) => void }) {
+function TaskCard({
+  task,
+  onSelect,
+  onStart,
+}: {
+  task: Task;
+  onSelect: (task: Task) => void;
+  onStart: (task: Task) => void;
+}) {
   const overdue = (task.status === "pending" || task.status === "in_progress")
     && new Date(task.dueDate).getTime() < Date.now();
   const visualClass = overdue
@@ -134,10 +142,17 @@ function TaskCard({ task, onSelect }: { task: Task; onSelect: (task: Task) => vo
           : "";
 
   return (
-    <button
-      type="button"
+    <div
       className={`kanban-card ${visualClass}`}
       onClick={() => onSelect(task)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect(task);
+        }
+      }}
+      role="button"
+      tabIndex={0}
       aria-label={`Open task ${task.title}`}
     >
       <div className="kanban-card-header">
@@ -171,12 +186,26 @@ function TaskCard({ task, onSelect }: { task: Task; onSelect: (task: Task) => vo
         </span>
       </div>
       <div className="kanban-card-footer">
-        <div className="kanban-card-avatar" title={task.assignedToName}>
-          {task.assignedToName.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
+        <div className="kanban-card-footer-main">
+          <div className="kanban-card-avatar" title={task.assignedToName}>
+            {task.assignedToName.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
+          </div>
+          <span className="kanban-card-assignee">{task.assignedToName}</span>
         </div>
-        <span className="kanban-card-assignee">{task.assignedToName}</span>
+        {task.status === "pending" && (
+          <button
+            type="button"
+            className="kanban-card-start-btn"
+            onClick={(event) => {
+              event.stopPropagation();
+              onStart(task);
+            }}
+          >
+            Start
+          </button>
+        )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -371,6 +400,10 @@ export default function TasksPage() {
     }
   }, [authFetch, loadTasks, organization?.id, showToast]);
 
+  const handleQuickStart = useCallback((task: Task) => {
+    void handleAction(task, "start");
+  }, [handleAction]);
+
   const filtered = useMemo(() => {
     return tasks.filter((t) => {
       if (priorityFilter !== "all" && t.priority !== priorityFilter) return false;
@@ -441,7 +474,7 @@ export default function TasksPage() {
             <div className="kanban-column-body">
               {col.tasks.length > 0 ? (
                 col.tasks.map((task) => (
-                  <TaskCard key={task.id} task={task} onSelect={handleSelectTask} />
+                  <TaskCard key={task.id} task={task} onSelect={handleSelectTask} onStart={handleQuickStart} />
                 ))
               ) : (
                 <div className="kanban-empty">
