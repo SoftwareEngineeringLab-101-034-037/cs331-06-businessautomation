@@ -206,4 +206,10 @@ export const DASHBOARD_NAV: NavItem[] = [
     icon: "team",
     roles: ["admin"],
   },
+  {
+    label: "Integrations",
+    href: "/dashboard/integrations",
+    icon: "integrations",
+    roles: ["admin"],
+  },
 ];
