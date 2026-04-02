@@ -15,6 +15,7 @@ type Config struct {
 	GoogleClientID      string
 	GoogleClientSecret  string
 	GoogleRedirectURI   string
+	AuthServiceURL      string
 	WorkflowEngineURL   string
 	WorkflowServiceKey  string
 	PollIntervalSeconds int
@@ -39,6 +40,7 @@ func Load() (*Config, error) {
 		GoogleClientID:      strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")),
 		GoogleClientSecret:  strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET")),
 		GoogleRedirectURI:   strings.TrimSpace(os.Getenv("GOOGLE_REDIRECT_URI")),
+		AuthServiceURL:      getenv("AUTH_SERVICE_URL", "http://localhost:8080"),
 		WorkflowEngineURL:   getenv("WORKFLOW_ENGINE_URL", "http://localhost:8085"),
 		WorkflowServiceKey:  strings.TrimSpace(os.Getenv("WORKFLOW_INTEGRATION_KEY")),
 		PollIntervalSeconds: interval,

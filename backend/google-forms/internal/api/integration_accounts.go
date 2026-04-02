@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -11,9 +12,9 @@ func (s *Server) handleIntegrationAccounts(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+	orgID := authorizedOrgIDFromContext(r.Context())
 	if orgID == "" {
-		writeError(w, http.StatusBadRequest, "org_id required")
+		writeError(w, http.StatusUnauthorized, "org authorization required")
 		return
 	}
 
@@ -45,15 +46,21 @@ func (s *Server) handleIntegrationAccountByID(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	accountID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/integration/accounts/"))
+	rawAccountID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/integration/accounts/"))
+	decodedAccountID, err := url.PathUnescape(rawAccountID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid account_id path")
+		return
+	}
+	accountID := strings.TrimSpace(decodedAccountID)
 	if accountID == "" {
 		writeError(w, http.StatusBadRequest, "account_id required")
 		return
 	}
 
-	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+	orgID := authorizedOrgIDFromContext(r.Context())
 	if orgID == "" {
-		writeError(w, http.StatusBadRequest, "org_id required")
+		writeError(w, http.StatusUnauthorized, "org authorization required")
 		return
 	}
 
