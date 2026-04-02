@@ -231,7 +231,8 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 		FormTemplateID:   node.FormTemplateID,
 		SLADays:          node.SLADays,
 		Status:           models.TaskPending,
-		Data:             data,
+		Data:             cloneWorkflowData(data),
+		VisibleData:      buildTaskVisibleData(node, data),
 		CreatedAt:        time.Now(),
 	}
 	taskID, err := e.store.SaveTask(task)
@@ -672,6 +673,107 @@ func cloneWorkflowData(data map[string]interface{}) map[string]interface{} {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func buildTaskVisibleData(node *models.WorkflowNode, data map[string]interface{}) map[string]interface{} {
+	if data == nil {
+		return nil
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(node.TaskDataVisibility))
+	if mode == "" {
+		mode = "all"
+	}
+
+	visible := make(map[string]interface{})
+	switch mode {
+	case "none":
+		// Intentionally leave empty unless explicit include toggles are enabled.
+	case "selected":
+		for _, rawKey := range node.VisibleDataKeys {
+			key := strings.TrimSpace(rawKey)
+			if key == "" {
+				continue
+			}
+			if value, ok := data[key]; ok {
+				visible[key] = value
+			}
+		}
+	default:
+		for key, value := range data {
+			visible[key] = value
+		}
+	}
+
+	if node.IncludeFormSubmission {
+		if value, ok := data["form_submission"]; ok {
+			visible["form_submission"] = value
+		}
+	}
+
+	if node.IncludeFormFiles {
+		files := extractFormFileRefs(data["form_submission"])
+		if len(files) > 0 {
+			visible["form_submission_files"] = files
+		}
+	}
+
+	if len(visible) == 0 {
+		return nil
+	}
+	return visible
+}
+
+func extractFormFileRefs(value interface{}) []string {
+	out := make([]string, 0)
+	seen := make(map[string]struct{})
+
+	var visit func(v interface{})
+	visit = func(v interface{}) {
+		switch x := v.(type) {
+		case map[string]interface{}:
+			for _, child := range x {
+				visit(child)
+			}
+		case []interface{}:
+			for _, child := range x {
+				visit(child)
+			}
+		case []string:
+			for _, child := range x {
+				visit(child)
+			}
+		case string:
+			for _, part := range strings.Split(x, ",") {
+				candidate := strings.TrimSpace(part)
+				if !isLikelyFileURL(candidate) {
+					continue
+				}
+				if _, exists := seen[candidate]; exists {
+					continue
+				}
+				seen[candidate] = struct{}{}
+				out = append(out, candidate)
+			}
+		}
+	}
+
+	visit(value)
+	return out
+}
+
+func isLikelyFileURL(value string) bool {
+	if value == "" {
+		return false
+	}
+	lower := strings.ToLower(value)
+	if !strings.HasPrefix(lower, "https://") && !strings.HasPrefix(lower, "http://") {
+		return false
+	}
+	return strings.Contains(lower, "drive.google.com") ||
+		strings.Contains(lower, "googleusercontent.com") ||
+		strings.Contains(lower, "/file/") ||
+		strings.Contains(lower, "upload")
 }
 
 func (e *Executor) saveInstanceMutation(instanceID string, mutate func(inst *models.Instance)) (models.Instance, error) {

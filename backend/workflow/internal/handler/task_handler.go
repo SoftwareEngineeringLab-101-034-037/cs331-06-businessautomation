@@ -72,6 +72,9 @@ func (h *TaskHandler) List(c *gin.Context) {
 	if tasks == nil {
 		tasks = []models.TaskAssignment{}
 	}
+	for i := range tasks {
+		tasks[i] = sanitizeTaskForResponse(tasks[i])
+	}
 	c.JSON(http.StatusOK, tasks)
 }
 
@@ -153,7 +156,7 @@ func (h *TaskHandler) Action(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 			return
 		}
-		c.JSON(http.StatusOK, task)
+		c.JSON(http.StatusOK, sanitizeTaskForResponse(task))
 		return
 	}
 
@@ -162,7 +165,14 @@ func (h *TaskHandler) Action(c *gin.Context) {
 		writeTaskActionError(c, "task_handler.Action continue", err)
 		return
 	}
-	c.JSON(http.StatusOK, updatedTask)
+	c.JSON(http.StatusOK, sanitizeTaskForResponse(updatedTask))
+}
+
+func sanitizeTaskForResponse(task models.TaskAssignment) models.TaskAssignment {
+	if task.Status != models.TaskInProgress && task.Status != models.TaskCompleted {
+		task.VisibleData = nil
+	}
+	return task
 }
 
 func writeTaskActionError(c *gin.Context, context string, err error) {

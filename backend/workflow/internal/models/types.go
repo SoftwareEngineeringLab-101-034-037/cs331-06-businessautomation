@@ -162,6 +162,15 @@ type WorkflowNode struct {
 	FormTemplateID string `json:"form_template_id,omitempty" bson:"form_template_id,omitempty"`
 	// SLADays is the deadline in business days; 0 means no SLA.
 	SLADays int `json:"sla_days,omitempty" bson:"sla_days,omitempty"`
+	// TaskDataVisibility controls what instance data is shown to assignees.
+	// Allowed values: all | selected | none
+	TaskDataVisibility string `json:"task_data_visibility,omitempty" bson:"task_data_visibility,omitempty"`
+	// VisibleDataKeys is used when TaskDataVisibility == selected.
+	VisibleDataKeys []string `json:"visible_data_keys,omitempty" bson:"visible_data_keys,omitempty"`
+	// IncludeFormSubmission exposes the full normalized form payload.
+	IncludeFormSubmission bool `json:"include_form_submission,omitempty" bson:"include_form_submission,omitempty"`
+	// IncludeFormFiles exposes extracted file URLs from form_submission.
+	IncludeFormFiles bool `json:"include_form_files,omitempty" bson:"include_form_files,omitempty"`
 
 	// ── Connector (type == action) ─────────────────────────────────────────
 
@@ -245,7 +254,8 @@ type TaskAssignment struct {
 	SLADays          int                    `json:"sla_days,omitempty" bson:"sla_days,omitempty"`
 	Status           TaskStatus             `json:"status" bson:"status"`
 	ActionCommitted  string                 `json:"action_committed,omitempty" bson:"action_committed,omitempty"`
-	Data             map[string]interface{} `json:"data,omitempty" bson:"data,omitempty"`
+	Data             map[string]interface{} `json:"-" bson:"data,omitempty"`
+	VisibleData      map[string]interface{} `json:"visible_data,omitempty" bson:"visible_data,omitempty"`
 	Comment          string                 `json:"comment,omitempty" bson:"comment,omitempty"`
 	CreatedAt        time.Time              `json:"created_at" bson:"created_at"`
 	CompletedAt      *time.Time             `json:"completed_at,omitempty" bson:"completed_at,omitempty"`
