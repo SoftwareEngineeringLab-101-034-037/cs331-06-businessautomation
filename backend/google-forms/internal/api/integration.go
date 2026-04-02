@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/example/business-automation/backend/google-forms/internal/oauth"
 )
@@ -19,7 +18,10 @@ func (s *Server) handleIntegrationStatus(w http.ResponseWriter, r *http.Request)
 	workflowHealthy := false
 	workflowErr := ""
 	workflowURL := strings.TrimRight(s.cfg.WorkflowEngineURL, "/") + "/health"
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := s.httpClient
+	if client == nil {
+		client = &http.Client{}
+	}
 	resp, err := client.Get(workflowURL)
 	if err != nil {
 		workflowErr = err.Error()

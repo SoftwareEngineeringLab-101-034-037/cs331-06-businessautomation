@@ -45,6 +45,9 @@ func main() {
 		Addr:              ":" + cfg.Port,
 		Handler:           withCORS(handler),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {
