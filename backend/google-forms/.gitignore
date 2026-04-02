@@ -19,4 +19,8 @@ go.work
 
 # OS
 .DS_Store
+# Environment files
+.env*
+!.env.example
+
 Thumbs.db
