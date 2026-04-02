@@ -8,7 +8,12 @@ import (
 
 type OAuthToken struct {
 	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Provider     string             `bson:"provider"      json:"provider"`
 	OrgID        string             `bson:"org_id"        json:"org_id"`
+	AccountID    string             `bson:"account_id"    json:"account_id"`
+	AccountEmail string             `bson:"account_email" json:"account_email"`
+	AccountName  string             `bson:"account_name"  json:"account_name"`
+	IsPrimary    bool               `bson:"is_primary"    json:"is_primary"`
 	AccessToken  string             `bson:"access_token"  json:"-"`
 	RefreshToken string             `bson:"refresh_token" json:"-"`
 	TokenType    string             `bson:"token_type"    json:"token_type"`

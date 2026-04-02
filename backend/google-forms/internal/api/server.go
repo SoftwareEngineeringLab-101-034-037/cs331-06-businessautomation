@@ -34,6 +34,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/forms/", s.handleFormByPath)
 	s.mux.HandleFunc("/watches", s.handleWatches)
 	s.mux.HandleFunc("/watches/", s.handleWatchByID)
+	s.mux.HandleFunc("/integration/status", s.handleIntegrationStatus)
+	s.mux.HandleFunc("/integration/accounts", s.handleIntegrationAccounts)
+	s.mux.HandleFunc("/integration/accounts/", s.handleIntegrationAccountByID)
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})

@@ -43,7 +43,16 @@ func NewMongo(uri, dbName string) (*MongoStore, error) {
 
 func (s *MongoStore) ensureIndexes(ctx context.Context) {
 	s.tokens.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "org_id", Value: 1}},
+		Keys: bson.D{{Key: "org_id", Value: 1}},
+	})
+	s.tokens.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "provider", Value: 1}, {Key: "is_primary", Value: 1}},
+	})
+	s.tokens.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "provider", Value: 1}, {Key: "connected_at", Value: -1}},
+	})
+	s.tokens.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "org_id", Value: 1}, {Key: "provider", Value: 1}, {Key: "account_id", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	})
 	s.watches.Indexes().CreateOne(ctx, mongo.IndexModel{
@@ -55,23 +64,108 @@ func (s *MongoStore) ensureIndexes(ctx context.Context) {
 }
 
 func (s *MongoStore) SaveToken(ctx context.Context, token *models.OAuthToken) error {
-	filter := bson.M{"org_id": token.OrgID}
+	if token.Provider == "" {
+		token.Provider = "google_forms"
+	}
+	if token.AccountID == "" {
+		token.AccountID = "primary"
+	}
+	if token.IsPrimary {
+		_, _ = s.tokens.UpdateMany(ctx,
+			bson.M{"org_id": token.OrgID, "provider": token.Provider},
+			bson.M{"$set": bson.M{"is_primary": false}},
+		)
+	}
+
+	filter := bson.M{"org_id": token.OrgID, "provider": token.Provider, "account_id": token.AccountID}
 	update := bson.M{"$set": token}
 	_, err := s.tokens.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true))
 	return err
 }
 
 func (s *MongoStore) GetToken(ctx context.Context, orgID string) (*models.OAuthToken, error) {
+	filter := bson.M{
+		"org_id": orgID,
+		"$or": []bson.M{
+			{"provider": "google_forms"},
+			{"provider": bson.M{"$exists": false}},
+		},
+	}
 	var t models.OAuthToken
-	err := s.tokens.FindOne(ctx, bson.M{"org_id": orgID}).Decode(&t)
+	err := s.tokens.FindOne(ctx, filter, options.FindOne().SetSort(bson.D{{Key: "is_primary", Value: -1}, {Key: "connected_at", Value: -1}})).Decode(&t)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil
 	}
+	s.normalizeTokenDefaults(ctx, &t)
 	return &t, err
 }
 
+func (s *MongoStore) GetTokenByAccount(ctx context.Context, orgID, provider, accountID string) (*models.OAuthToken, error) {
+	filter := bson.M{
+		"org_id": orgID,
+		"$or": []bson.M{
+			{"provider": provider},
+			{"provider": bson.M{"$exists": false}},
+		},
+		"account_id": accountID,
+	}
+	if accountID == "primary" {
+		filter = bson.M{
+			"org_id": orgID,
+			"$or": []bson.M{
+				{"provider": provider, "account_id": accountID},
+				{"provider": bson.M{"$exists": false}, "account_id": bson.M{"$exists": false}},
+			},
+		}
+	}
+
+	var t models.OAuthToken
+	err := s.tokens.FindOne(ctx, filter).Decode(&t)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, nil
+	}
+	s.normalizeTokenDefaults(ctx, &t)
+	return &t, err
+}
+
+func (s *MongoStore) ListTokens(ctx context.Context, orgID, provider string) ([]*models.OAuthToken, error) {
+	cur, err := s.tokens.Find(ctx,
+		bson.M{
+			"org_id": orgID,
+			"$or": []bson.M{
+				{"provider": provider},
+				{"provider": bson.M{"$exists": false}},
+			},
+		},
+		options.Find().SetSort(bson.D{{Key: "is_primary", Value: -1}, {Key: "connected_at", Value: -1}}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	var out []*models.OAuthToken
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	for _, tok := range out {
+		s.normalizeTokenDefaults(ctx, tok)
+	}
+	return out, nil
+}
+
 func (s *MongoStore) DeleteToken(ctx context.Context, orgID string) error {
-	_, err := s.tokens.DeleteOne(ctx, bson.M{"org_id": orgID})
+	_, err := s.tokens.DeleteMany(ctx, bson.M{
+		"org_id": orgID,
+		"$or": []bson.M{
+			{"provider": "google_forms"},
+			{"provider": bson.M{"$exists": false}},
+		},
+	})
+	return err
+}
+
+func (s *MongoStore) DeleteTokenByAccount(ctx context.Context, orgID, provider, accountID string) error {
+	_, err := s.tokens.DeleteOne(ctx, bson.M{"org_id": orgID, "provider": provider, "account_id": accountID})
 	return err
 }
 
@@ -134,4 +228,22 @@ func (s *MongoStore) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return s.client.Disconnect(ctx)
+}
+
+func (s *MongoStore) normalizeTokenDefaults(ctx context.Context, tok *models.OAuthToken) {
+	if tok == nil {
+		return
+	}
+	update := bson.M{}
+	if tok.Provider == "" {
+		tok.Provider = "google_forms"
+		update["provider"] = tok.Provider
+	}
+	if tok.AccountID == "" {
+		tok.AccountID = "primary"
+		update["account_id"] = tok.AccountID
+	}
+	if len(update) > 0 {
+		_, _ = s.tokens.UpdateByID(ctx, tok.ID, bson.M{"$set": update})
+	}
 }
