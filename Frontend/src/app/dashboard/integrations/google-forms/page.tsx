@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useOrganization } from "@clerk/nextjs";
+import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 
 const GF_API = process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
@@ -36,6 +36,7 @@ type ConnectedAccount = {
 };
 
 export default function GoogleFormsIntegrationPage() {
+  const { getToken } = useAuth();
   const { organization } = useOrganization();
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
@@ -47,6 +48,17 @@ export default function GoogleFormsIntegrationPage() {
     return `${GF_API}/auth/google/connect?org_id=${encodeURIComponent(organization.id)}`;
   }, [organization?.id]);
 
+  const authFetch = useCallback(async (input: string, init: RequestInit = {}) => {
+    const token = await getToken();
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  }, [getToken]);
+
   const loadData = useCallback(async () => {
     if (!organization?.id) return;
     setLoading(true);
@@ -54,8 +66,8 @@ export default function GoogleFormsIntegrationPage() {
 
     try {
       const [statusRes, accountsRes] = await Promise.all([
-        fetch(`${GF_API}/integration/status?org_id=${encodeURIComponent(organization.id)}`),
-        fetch(`${GF_API}/integration/accounts?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
+        authFetch(`${GF_API}/integration/status?org_id=${encodeURIComponent(organization.id)}`),
+        authFetch(`${GF_API}/integration/accounts?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
       ]);
 
       if (!statusRes.ok) {
@@ -79,7 +91,7 @@ export default function GoogleFormsIntegrationPage() {
     } finally {
       setLoading(false);
     }
-  }, [organization?.id]);
+  }, [organization?.id, authFetch]);
 
   useEffect(() => {
     loadData();
@@ -91,7 +103,7 @@ export default function GoogleFormsIntegrationPage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(
+        const res = await authFetch(
           `${GF_API}/integration/accounts/${encodeURIComponent(accountID)}?org_id=${encodeURIComponent(organization.id)}`,
           { method: "DELETE" },
         );
@@ -105,7 +117,7 @@ export default function GoogleFormsIntegrationPage() {
         setLoading(false);
       }
     },
-    [organization?.id, loadData],
+    [organization?.id, loadData, authFetch],
   );
 
   const disconnectAll = useCallback(async () => {
@@ -113,7 +125,7 @@ export default function GoogleFormsIntegrationPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${GF_API}/auth/google/disconnect?org_id=${encodeURIComponent(organization.id)}`, {
+      const res = await authFetch(`${GF_API}/auth/google/disconnect?org_id=${encodeURIComponent(organization.id)}`, {
         method: "DELETE",
       });
       if (!res.ok) {
@@ -125,7 +137,7 @@ export default function GoogleFormsIntegrationPage() {
       setError(err?.message || "Failed to disconnect accounts");
       setLoading(false);
     }
-  }, [organization?.id, loadData]);
+  }, [organization?.id, loadData, authFetch]);
 
   const missingFields = (status?.missing_fields || []).join(", ");
 
@@ -152,18 +164,17 @@ export default function GoogleFormsIntegrationPage() {
             <button className="action-btn action-btn-outline" onClick={loadData} disabled={loading || !organization?.id}>
               {loading ? "Refreshing..." : "Refresh"}
             </button>
-            <a
+            <button
               className="action-btn action-btn-primary"
-              href={connectUrl || "#"}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => {
-                if (!connectUrl || !status?.configured) e.preventDefault();
+              type="button"
+              disabled={!connectUrl || !status?.configured}
+              onClick={() => {
+                if (!connectUrl || !status?.configured) return;
+                window.open(connectUrl, "_blank", "noopener,noreferrer");
               }}
-              aria-disabled={!connectUrl || !status?.configured}
             >
               Connect New Account
-            </a>
+            </button>
           </div>
         </div>
 

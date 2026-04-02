@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { Fragment, useEffect } from "react";
 import type { Task } from "@/types/dashboard";
 import { TASK_STATUS_CONFIG, PRIORITY_CONFIG } from "@/types/dashboard";
 import TaskActions from "./TaskActions";
@@ -202,6 +202,35 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
             </section>
           )}
 
+          {(task.status === "in_progress" || task.status === "completed") && task.visibleData && Object.keys(task.visibleData).length > 0 && (
+            <section className="detail-section">
+              <h3 className="detail-section-title">
+                {task.status === "in_progress" ? "Visible Workflow Data (Live)" : "Visible Workflow Data"}
+              </h3>
+              <div className="workflow-data-panel">
+                <div className="workflow-data-header">
+                  <span>Fields available to assignee</span>
+                  <span className="workflow-data-count">{Object.keys(task.visibleData).length}</span>
+                </div>
+                <div className="workflow-data-grid">
+                  {Object.entries(task.visibleData)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([key, value]) => (
+                      <div key={key} className="workflow-data-item">
+                        <div className="workflow-data-keyline">
+                          <span className="workflow-data-label">{prettifyDataKey(key)}</span>
+                          <span className="workflow-data-codekey">{key}</span>
+                        </div>
+                        <div className="workflow-data-value">
+                          <ValueRenderer value={value} />
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            </section>
+          )}
+
           {/* Tags */}
           <section className="detail-section">
             <h3 className="detail-section-title">Tags</h3>
@@ -240,4 +269,98 @@ function formatActionLabel(value: string): string {
   return value
     .replaceAll("_", " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function prettifyDataKey(key: string): string {
+  return key
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function ValueRenderer({ value }: { value: unknown }) {
+  if (value == null) {
+    return <span className="workflow-data-empty">No value</span>;
+  }
+
+  if (typeof value === "boolean") {
+    return (
+      <span className={`workflow-data-boolean ${value ? "true" : "false"}`}>
+        {value ? "True" : "False"}
+      </span>
+    );
+  }
+
+  if (typeof value === "number" || typeof value === "string") {
+    return <span className="workflow-data-text">{String(value)}</span>;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <span className="workflow-data-empty">Empty list</span>;
+    }
+
+    const allPrimitive = value.every((entry) =>
+      entry == null || typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean",
+    );
+
+    if (allPrimitive) {
+      return (
+        <div className="workflow-data-chip-list">
+          {value.map((entry, index) => (
+            <span key={`${String(entry)}-${index}`} className="workflow-data-chip">
+              {entry == null ? "null" : String(entry)}
+            </span>
+          ))}
+        </div>
+      );
+    }
+
+    return (
+      <details className="workflow-data-details">
+        <summary>Show list ({value.length})</summary>
+        <pre className="workflow-data-json">{JSON.stringify(value, null, 2)}</pre>
+      </details>
+    );
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const entries = Object.entries(record);
+    if (entries.length === 0) {
+      return <span className="workflow-data-empty">Empty object</span>;
+    }
+
+    const primitiveEntries = entries.filter(([, nestedValue]) =>
+      nestedValue == null || typeof nestedValue === "string" || typeof nestedValue === "number" || typeof nestedValue === "boolean",
+    );
+    const complexEntries = entries.filter(([, nestedValue]) =>
+      !(nestedValue == null || typeof nestedValue === "string" || typeof nestedValue === "number" || typeof nestedValue === "boolean"),
+    );
+
+    return (
+      <Fragment>
+        {primitiveEntries.length > 0 && (
+          <div className="workflow-data-subgrid">
+            {primitiveEntries.map(([nestedKey, nestedValue]) => (
+              <div key={nestedKey} className="workflow-data-subitem">
+                <span className="workflow-data-subkey">{prettifyDataKey(nestedKey)}</span>
+                <span className="workflow-data-subvalue">
+                  {nestedValue == null ? "null" : String(nestedValue)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {complexEntries.length > 0 && (
+          <details className="workflow-data-details">
+            <summary>Show nested data ({complexEntries.length})</summary>
+            <pre className="workflow-data-json">{JSON.stringify(value, null, 2)}</pre>
+          </details>
+        )}
+      </Fragment>
+    );
+  }
+
+  return <span className="workflow-data-text">{String(value)}</span>;
 }

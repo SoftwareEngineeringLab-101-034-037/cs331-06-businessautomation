@@ -30,6 +30,7 @@ type BackendTask = {
   sla_days?: number;
   status: string;
   comment?: string;
+  visible_data?: Record<string, unknown>;
   created_at: string;
   completed_at?: string;
 };
@@ -114,6 +115,7 @@ function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined): Tas
     stepNumber: 1,
     totalSteps: 1,
     allowedActions: task.allowed_actions,
+    visibleData: task.visible_data,
     nodeId: task.node_id,
     orgId: task.org_id,
     instanceId: task.instance_id,

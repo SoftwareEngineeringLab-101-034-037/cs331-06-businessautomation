@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import {
@@ -14,6 +14,7 @@ import { useTheme } from "@/components/ThemeProvider";
 import WorkflowCanvas from "@/components/dashboard/WorkflowCanvas";
 import { TriggerEditor, StepEditor } from "@/components/dashboard/StepEditor";
 import { useToast, ToastContainer } from "@/components/Toast";
+import { parseFieldMapping, serializeFieldMapping } from "@/lib/workflow-mapping";
 import type {
   WorkflowDraft,
   WorkflowStep,
@@ -122,20 +123,17 @@ export default function WorkflowBuilderPage() {
     });
   }, [getToken]);
 
-  const parseFieldMapping = useCallback((raw: string): Record<string, string> => {
-    const out: Record<string, string> = {};
-    for (const pair of raw.split(",")) {
-      const [from, to] = pair.split(":").map((p) => p.trim());
-      if (from && to) out[from] = to;
+  const parseVisibleDataKeys = useCallback((keys: string[] | undefined): string[] => {
+    if (!Array.isArray(keys)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of keys) {
+      const key = String(raw || "").trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(key);
     }
     return out;
-  }, []);
-
-  const serializeFieldMapping = useCallback((mapping: Record<string, string>): string => {
-    return Object.entries(mapping)
-      .filter(([source, target]) => source.trim() && target.trim())
-      .map(([source, target]) => `${source}:${target}`)
-      .join(", ");
   }, []);
 
   const normalizeVariableKey = useCallback((input: string): string => {
@@ -352,7 +350,11 @@ export default function WorkflowBuilderPage() {
     }
 
     if (existing.form_id !== formID) {
-      await fetch(`${GF_API}/watches/${existing.id}`, { method: "DELETE" });
+    const deleteRes = await fetch(`${GF_API}/watches/${existing.id}`, { method: "DELETE" });
+    if (!deleteRes.ok) {
+      const txt = await deleteRes.text();
+      throw new Error(`watch delete failed (${deleteRes.status}): ${txt}`);
+    }
       const recreateRes = await fetch(`${GF_API}/watches`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -425,6 +427,25 @@ export default function WorkflowBuilderPage() {
       };
     });
   }, [triggerFormFields, buildSuggestedFieldMapping, serializeFieldMapping, buildFieldSchemaJSON]);
+
+  const suggestedTaskDataKeys = useMemo(() => {
+    const suggested = new Set<string>([
+      "trigger_source",
+      "trigger_type",
+      "form_id",
+      "form_response_id",
+      "form_submitted_at",
+      "form_submission",
+    ]);
+
+    const fieldMapping = parseFieldMapping(draft.trigger.config.field_mapping || "");
+    for (const alias of Object.values(fieldMapping)) {
+      const key = alias.trim();
+      if (key) suggested.add(key);
+    }
+
+    return Array.from(suggested).sort((a, b) => a.localeCompare(b));
+  }, [draft.trigger.config.field_mapping, parseFieldMapping]);
 
   /* ── Editing existing workflow (via ?id=) ── */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1080,6 +1101,10 @@ export default function WorkflowBuilderPage() {
         node.task_actions = s.taskActions || [];
         node.form_template_id = s.formTemplateId || "";
         node.sla_days = s.slaDays || 0;
+        node.task_data_visibility = s.taskDataVisibility || "all";
+        node.visible_data_keys = parseVisibleDataKeys(s.visibleDataKeys);
+        node.include_form_submission = Boolean(s.includeFullFormResponse);
+        node.include_form_files = Boolean(s.includeFormFiles);
       }
 
       // ── Action connector fields ───────────────────
@@ -1139,7 +1164,7 @@ export default function WorkflowBuilderPage() {
       const hasBody = res.status !== 204 && res.headers.get("content-length") !== "0" && res.headers.get("content-type")?.includes("json");
       const resBody = hasBody ? await res.json() : null;
 
-      const savedWorkflowID = editingId || resBody?.id || resBody?.workflow?.id || resBody?.id;
+      const savedWorkflowID = editingId || resBody?.id || resBody?.workflow?.id;
       if (savedWorkflowID) {
         try {
           await syncGoogleFormsWatch(savedWorkflowID, true, draft.trigger.type, normalizedTriggerConfig);
@@ -1155,7 +1180,7 @@ export default function WorkflowBuilderPage() {
       console.error(err);
       showToast("Failed to publish workflow: " + (err.message || err), "error");
     }
-  }, [canPublish, hasChanges, commitMessage, draft, editingId, router, showToast, syncGoogleFormsWatch, organization?.id, extractGoogleFormID]);
+  }, [canPublish, hasChanges, commitMessage, draft, editingId, router, showToast, syncGoogleFormsWatch, organization?.id, extractGoogleFormID, parseVisibleDataKeys]);
 
   const handleSaveDraft = useCallback(async () => {
     if (!draft.name.trim()) { showToast("Please enter a workflow name before saving.", "warning"); return; }
@@ -1186,6 +1211,10 @@ export default function WorkflowBuilderPage() {
         node.task_actions = s.taskActions || [];
         node.form_template_id = s.formTemplateId || "";
         node.sla_days = s.slaDays || 0;
+        node.task_data_visibility = s.taskDataVisibility || "all";
+        node.visible_data_keys = parseVisibleDataKeys(s.visibleDataKeys);
+        node.include_form_submission = Boolean(s.includeFullFormResponse);
+        node.include_form_files = Boolean(s.includeFormFiles);
       } else if (s.type === "condition") {
         node.condition = s.condition || "";
         node.next_yes = out.find((e) => e.sourceHandle === "yes")?.target || "";
@@ -1236,7 +1265,7 @@ export default function WorkflowBuilderPage() {
     } catch (err: any) {
       showToast("Failed to save draft: " + (err.message || err), "error");
     }
-  }, [draft, editingId, router, showToast, syncGoogleFormsWatch, extractGoogleFormID]);
+  }, [draft, editingId, router, showToast, syncGoogleFormsWatch, extractGoogleFormID, parseVisibleDataKeys]);
 
   /* ── Selected step for editor ── */
   const selectedStep =
@@ -1646,6 +1675,7 @@ export default function WorkflowBuilderPage() {
                   step={selectedStep}
                   stepIndex={selectedStepIndex}
                   availableRoles={roles.map((r) => r.name)}
+                  suggestedDataKeys={suggestedTaskDataKeys}
                   availableForms={googleForms}
                   formsLoading={googleFormsLoading}
                   onRefreshForms={loadGoogleForms}

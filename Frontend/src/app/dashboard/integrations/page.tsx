@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useOrganization } from "@clerk/nextjs";
+import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 
 const GF_API = process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
@@ -43,11 +43,23 @@ const INTEGRATIONS: IntegrationDescriptor[] = [
 ];
 
 export default function IntegrationsPage() {
+  const { getToken } = useAuth();
   const { organization } = useOrganization();
   const [loading, setLoading] = useState(false);
   const [statuses, setStatuses] = useState<Record<string, IntegrationStatus>>({});
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+
+  const authFetch = useCallback(async (input: string, init: RequestInit = {}) => {
+    const token = await getToken();
+    return fetch(input, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  }, [getToken]);
 
   const loadStatuses = useCallback(async () => {
     if (!organization?.id) return;
@@ -55,10 +67,10 @@ export default function IntegrationsPage() {
     setError(null);
 
     try {
-      const responses = await Promise.all(
+      const settled = await Promise.allSettled(
         INTEGRATIONS.map(async (integration) => {
           if (integration.id !== "google_forms") return [integration.id, {} as IntegrationStatus] as const;
-          const res = await fetch(`${GF_API}/integration/status?org_id=${encodeURIComponent(organization.id)}`);
+          const res = await authFetch(`${GF_API}/integration/status?org_id=${encodeURIComponent(organization.id)}`);
           if (!res.ok) {
             const body = await res.text();
             throw new Error(`${res.status} ${body}`);
@@ -68,13 +80,22 @@ export default function IntegrationsPage() {
         }),
       );
 
+      const responses = settled.map((result, index) => {
+        const integration = INTEGRATIONS[index];
+        if (result.status === "fulfilled") {
+          return result.value;
+        }
+        return [integration.id, { service: integration.id, oauth_error: "status check failed" } as IntegrationStatus] as const;
+      });
+
       setStatuses(Object.fromEntries(responses));
+      setError(null);
     } catch (err: any) {
       setError(err?.message || "Failed to load integration status");
     } finally {
       setLoading(false);
     }
-  }, [organization?.id]);
+  }, [organization?.id, authFetch]);
 
   useEffect(() => {
     loadStatuses();

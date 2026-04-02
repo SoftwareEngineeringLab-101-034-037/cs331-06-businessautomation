@@ -9,6 +9,7 @@ import type {
   NodeType,
   ConnectorType,
   TaskAction,
+  TaskDataVisibilityMode,
 } from "@/types/workflow";
 import {
   TRIGGER_CONFIG,
@@ -19,6 +20,7 @@ import {
   CONNECTOR_CONFIG,
   TASK_ACTION_OPTIONS,
 } from "@/types/workflow";
+import { parseFieldMapping, serializeFieldMapping } from "@/lib/workflow-mapping";
 
 const GOOGLE_FORMS_CREATE_URL = "https://docs.google.com/forms/u/0/create";
 
@@ -30,20 +32,16 @@ type GoogleFormField = {
   field_type?: string;
 };
 
-function parseFieldMapping(raw: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const pair of raw.split(",")) {
-    const [source, target] = pair.split(":").map((v) => v.trim());
-    if (source && target) out[source] = target;
+function parseCommaSeparatedList(raw: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw.split(",")) {
+    const key = item.trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
   }
   return out;
-}
-
-function serializeFieldMapping(mapping: Record<string, string>): string {
-  return Object.entries(mapping)
-    .filter(([source, target]) => source.trim() && target.trim())
-    .map(([source, target]) => `${source}:${target}`)
-    .join(", ");
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -209,7 +207,7 @@ export function TriggerEditor({
                 <button
                   className="action-btn action-btn-outline"
                   type="button"
-                  onClick={onRefreshForms}
+                  onClick={() => onRefreshForms?.()}
                   disabled={formsLoading}
                   style={{ marginTop: 8 }}
                 >
@@ -270,7 +268,7 @@ export function TriggerEditor({
                 <button
                   className="action-btn action-btn-outline"
                   type="button"
-                  onClick={onRefreshFormFields}
+                  onClick={() => onRefreshFormFields?.()}
                   disabled={formFieldsLoading || !(trigger.config.form_id || trigger.config.form_url)}
                 >
                   {formFieldsLoading ? "Loading fields..." : "Load Form Fields"}
@@ -335,6 +333,7 @@ interface StepEditorProps {
   onChange: (updated: WorkflowStep) => void;
   onClose: () => void;
   availableRoles?: string[];
+  suggestedDataKeys?: string[];
   availableForms?: Array<{
     form_id: string;
     title: string;
@@ -350,6 +349,7 @@ export function StepEditor({
   onChange,
   onClose,
   availableRoles = PRESET_ORG_ROLES,
+  suggestedDataKeys = [],
   availableForms = [],
   formsLoading = false,
   onRefreshForms,
@@ -365,6 +365,8 @@ export function StepEditor({
   const filteredPositions = PRESET_POSITIONS.filter((p) =>
     p.toLowerCase().includes(posSearch.toLowerCase()),
   );
+  const visibilityMode: TaskDataVisibilityMode = step.taskDataVisibility || "all";
+  const visibleDataKeys = step.visibleDataKeys || [];
 
   function selectRole(role: string) {
     onChange({ ...step, assignedRole: role });
@@ -636,6 +638,86 @@ export function StepEditor({
                 </div>
               </div>
             </div>
+
+            {/* ── Assignee data visibility ── */}
+            <div className="wf-section">
+              <div className="wf-section-label">Assignee Data Visibility</div>
+              <span className="wf-field-hint">
+                Control which instance values are shown in the assignee task drawer.
+              </span>
+
+              <div className="wf-task-actions-grid" style={{ marginTop: 8 }}>
+                {([
+                  { value: "all", label: "Show All Data" },
+                  { value: "selected", label: "Select Keys" },
+                  { value: "none", label: "Hide All Data" },
+                ] as Array<{ value: TaskDataVisibilityMode; label: string }>).map((opt) => {
+                  const selected = visibilityMode === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      className={`wf-task-action-btn ${selected ? "active" : ""}`}
+                      onClick={() => onChange({ ...step, taskDataVisibility: opt.value })}
+                      style={selected ? { borderColor: "#3b82f6", background: "rgba(59,130,246,0.16)", color: "#1d4ed8" } : {}}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {visibilityMode === "selected" && (
+                <div className="wf-field" style={{ marginTop: 10 }}>
+                  <label className="wf-field-label">Visible Keys</label>
+                  <input
+                    className="wf-input"
+                    placeholder="amount, employee_name, form_response_id"
+                    value={visibleDataKeys.join(", ")}
+                    onChange={(e) => onChange({ ...step, visibleDataKeys: parseCommaSeparatedList(e.target.value) })}
+                  />
+                  <span className="wf-field-hint">Comma-separated top-level instance keys.</span>
+                  {suggestedDataKeys.length > 0 && (
+                    <div className="wf-task-actions-grid" style={{ marginTop: 8 }}>
+                      {suggestedDataKeys.map((key) => {
+                        const selected = visibleDataKeys.includes(key);
+                        return (
+                          <button
+                            key={key}
+                            className={`wf-task-action-btn ${selected ? "active" : ""}`}
+                            style={selected ? { borderColor: "#22c55e", background: "rgba(34,197,94,0.16)", color: "#15803d" } : {}}
+                            onClick={() => {
+                              const next = selected
+                                ? visibleDataKeys.filter((k) => k !== key)
+                                : [...visibleDataKeys, key];
+                              onChange({ ...step, visibleDataKeys: next });
+                            }}
+                          >
+                            {key}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="wf-task-actions-grid" style={{ marginTop: 10 }}>
+                <button
+                  className={`wf-task-action-btn ${step.includeFullFormResponse ? "active" : ""}`}
+                  style={step.includeFullFormResponse ? { borderColor: "#8b5cf6", background: "rgba(139,92,246,0.16)", color: "#6d28d9" } : {}}
+                  onClick={() => onChange({ ...step, includeFullFormResponse: !step.includeFullFormResponse })}
+                >
+                  Include Full Form Response
+                </button>
+                <button
+                  className={`wf-task-action-btn ${step.includeFormFiles ? "active" : ""}`}
+                  style={step.includeFormFiles ? { borderColor: "#0ea5e9", background: "rgba(14,165,233,0.16)", color: "#0369a1" } : {}}
+                  onClick={() => onChange({ ...step, includeFormFiles: !step.includeFormFiles })}
+                >
+                  Include Form File Links
+                </button>
+              </div>
+            </div>
           </>
         )}
 
@@ -714,7 +796,7 @@ export function StepEditor({
                       className="action-btn action-btn-outline"
                       type="button"
                       style={{ marginTop: 8 }}
-                      onClick={onRefreshForms}
+                      onClick={() => onRefreshForms?.()}
                       disabled={formsLoading}
                     >
                       {formsLoading ? "Refreshing..." : "Refresh list"}

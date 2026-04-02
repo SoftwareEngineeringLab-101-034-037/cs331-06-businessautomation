@@ -103,26 +103,32 @@ export function useToast() {
   useEffect(() => {
     const now = Date.now();
     const activeToasts = toasts.filter((t) => t.expiresAt > now);
-    if (activeToasts.length !== toasts.length) {
-      setToasts(activeToasts);
-      return;
+    const activeIDs = new Set(activeToasts.map((t) => t.id));
+    const expiredIDs = toasts
+      .filter((t) => !activeIDs.has(t.id))
+      .map((t) => t.id);
+
+    for (const id of expiredIDs) {
+      dismissToast(id);
     }
 
+    const liveToasts = toastsRef.current.filter((t) => t.expiresAt > now);
+
     for (const [id, timer] of Object.entries(timersRef.current)) {
-      if (!activeToasts.some((t) => t.id === id)) {
+      if (!liveToasts.some((t) => t.id === id)) {
         clearTimeout(timer);
         delete timersRef.current[id];
       }
     }
 
-    for (const toast of activeToasts) {
+    for (const toast of liveToasts) {
       if (timersRef.current[toast.id]) continue;
       const remaining = Math.max(1, toast.expiresAt - now);
       timersRef.current[toast.id] = setTimeout(() => {
         dismissToast(toast.id);
       }, remaining);
     }
-  }, [toasts, dismissToast, setToasts]);
+  }, [toasts, dismissToast]);
 
   useEffect(() => {
     const syncFromStorage = () => {

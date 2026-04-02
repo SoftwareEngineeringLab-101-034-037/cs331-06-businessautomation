@@ -44,6 +44,7 @@ export interface Task {
   stepNumber: number;
   totalSteps: number;
   allowedActions?: string[];
+  visibleData?: Record<string, unknown>;
   nodeId?: string;
   orgId?: string;
   instanceId?: string;
