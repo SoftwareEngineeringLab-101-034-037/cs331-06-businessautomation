@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/subtle"
 	"log"
 	"net/http"
 	"strings"
@@ -30,11 +31,15 @@ func NewInstanceHandler(store storage.Store, exec *executor.Executor, integratio
 
 // POST /integrations/google-forms/events
 func (h *InstanceHandler) StartFromGoogleForms(c *gin.Context) {
-	if h.IntegrationKey != "" {
-		if c.GetHeader("X-Integration-Key") != h.IntegrationKey {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid integration key"})
-			return
-		}
+	if strings.TrimSpace(h.IntegrationKey) == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "integration key not configured"})
+		return
+	}
+
+	header := c.GetHeader("X-Integration-Key")
+	if subtle.ConstantTimeCompare([]byte(header), []byte(h.IntegrationKey)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid integration key"})
+		return
 	}
 
 	var req struct {

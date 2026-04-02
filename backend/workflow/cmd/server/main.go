@@ -24,6 +24,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	if strings.TrimSpace(cfg.IntegrationKey) == "" {
+		log.Printf("WARNING: WORKFLOW_INTEGRATION_KEY is empty; integration ingress is disabled")
+		log.Fatalf("WORKFLOW_INTEGRATION_KEY must be set")
+	}
 
 	// Connect to MongoDB (required)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
