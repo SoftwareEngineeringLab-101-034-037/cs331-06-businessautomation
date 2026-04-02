@@ -43,7 +43,7 @@ func main() {
 	exec := executor.NewExecutor(store, email, assigneeSelector)
 
 	workflowHandler := handler.NewWorkflowHandler(store)
-	instanceHandler := handler.NewInstanceHandler(store, exec)
+	instanceHandler := handler.NewInstanceHandler(store, exec, cfg.IntegrationKey)
 	taskHandler := handler.NewTaskHandler(store, exec)
 
 	// ── Clerk JWT auth ────────────────────────────────────────────────────────
@@ -73,6 +73,7 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	r.POST("/integrations/google-forms/events", instanceHandler.StartFromGoogleForms)
 
 	// Protected
 	api := r.Group("/api")
