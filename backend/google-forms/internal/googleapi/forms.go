@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 const formsAPI = "https://forms.googleapis.com/v1/forms"
+const driveFilesAPI = "https://www.googleapis.com/drive/v3/files"
 
 type Form struct {
 	FormID       string     `json:"formId"`
@@ -40,6 +42,23 @@ type Question struct {
 
 type TextQuestion struct {
 	Paragraph bool `json:"paragraph,omitempty"`
+}
+
+type ListedForm struct {
+	FormID       string `json:"form_id"`
+	Title        string `json:"title"`
+	ResponderURI string `json:"responder_uri,omitempty"`
+	EditURI      string `json:"edit_uri,omitempty"`
+	ModifiedTime string `json:"modified_time,omitempty"`
+}
+
+type driveFilesReply struct {
+	Files []struct {
+		ID           string `json:"id"`
+		Name         string `json:"name"`
+		WebViewLink  string `json:"webViewLink"`
+		ModifiedTime string `json:"modifiedTime"`
+	} `json:"files"`
 }
 
 func CreateForm(client *http.Client, title string) (*Form, error) {
@@ -132,4 +151,44 @@ func SetPublished(client *http.Client, formID string, published bool) error {
 		return fmt.Errorf("set published: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// ListForms lists existing Google Forms visible to the connected account.
+func ListForms(client *http.Client, pageSize int) ([]ListedForm, error) {
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+
+	q := url.Values{}
+	q.Set("q", "mimeType='application/vnd.google-apps.form' and trashed=false")
+	q.Set("fields", "files(id,name,webViewLink,modifiedTime)")
+	q.Set("orderBy", "modifiedTime desc")
+	q.Set("pageSize", fmt.Sprintf("%d", pageSize))
+
+	endpoint := fmt.Sprintf("%s?%s", driveFilesAPI, q.Encode())
+	resp, err := client.Get(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("list forms: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list forms: status %d", resp.StatusCode)
+	}
+
+	var out driveFilesReply
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("list forms decode: %w", err)
+	}
+
+	forms := make([]ListedForm, 0, len(out.Files))
+	for _, f := range out.Files {
+		forms = append(forms, ListedForm{
+			FormID:       f.ID,
+			Title:        f.Name,
+			ResponderURI: fmt.Sprintf("https://docs.google.com/forms/d/%s/viewform", f.ID),
+			EditURI:      f.WebViewLink,
+			ModifiedTime: f.ModifiedTime,
+		})
+	}
+	return forms, nil
 }

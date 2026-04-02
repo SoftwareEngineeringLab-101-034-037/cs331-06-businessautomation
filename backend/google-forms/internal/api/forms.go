@@ -4,23 +4,29 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/example/business-automation/backend/google-forms/internal/googleapi"
+	"github.com/example/business-automation/backend/google-forms/internal/oauth"
 )
 
 func (s *Server) handleForms(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodPost:
+		s.createForm(w, r)
+	case http.MethodGet:
+		s.listForms(w, r)
+	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
 	}
-	s.createForm(w, r)
 }
 
 // handleFormByPath routes:
 //
 //	GET /forms/{formId}              → getForm
 //	GET /forms/{formId}/responses    → listFormResponses
+//	GET /forms/{formId}/fields       → listFormFields
 func (s *Server) handleFormByPath(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/forms/"), "/", 2)
 	formID := parts[0]
@@ -28,9 +34,15 @@ func (s *Server) handleFormByPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "form_id required")
 		return
 	}
-	if len(parts) > 1 && parts[1] == "responses" {
-		s.listFormResponses(w, r, formID)
-		return
+	if len(parts) > 1 {
+		switch parts[1] {
+		case "responses":
+			s.listFormResponses(w, r, formID)
+			return
+		case "fields":
+			s.listFormFields(w, r, formID)
+			return
+		}
 	}
 	s.getForm(w, r, formID)
 }
@@ -53,6 +65,14 @@ func (s *Server) createForm(w http.ResponseWriter, r *http.Request) {
 
 	client, err := s.oauthSvc.GetClient(r.Context(), req.OrgID)
 	if err != nil {
+		if oauth.IsNotConfiguredError(err) {
+			writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
+			return
+		}
+		if oauth.IsReconnectRequiredError(err) {
+			writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
+			return
+		}
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -84,6 +104,43 @@ func (s *Server) createForm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, updated)
 }
 
+func (s *Server) listForms(w http.ResponseWriter, r *http.Request) {
+	orgID := r.URL.Query().Get("org_id")
+	if orgID == "" {
+		writeError(w, http.StatusBadRequest, "org_id required")
+		return
+	}
+
+	client, err := s.oauthSvc.GetClient(r.Context(), orgID)
+	if err != nil {
+		if oauth.IsNotConfiguredError(err) {
+			writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
+			return
+		}
+		if oauth.IsReconnectRequiredError(err) {
+			writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
+			return
+		}
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	forms, err := googleapi.ListForms(client, 50)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "status 403") {
+			writeError(w, http.StatusForbidden, "Google account lacks permission to list forms (required scope: drive.metadata.readonly). Reconnect the account and grant requested permissions.")
+			return
+		}
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"forms": forms,
+		"count": len(forms),
+	})
+}
+
 func (s *Server) getForm(w http.ResponseWriter, r *http.Request, formID string) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -96,6 +153,14 @@ func (s *Server) getForm(w http.ResponseWriter, r *http.Request, formID string) 
 	}
 	client, err := s.oauthSvc.GetClient(r.Context(), orgID)
 	if err != nil {
+		if oauth.IsNotConfiguredError(err) {
+			writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
+			return
+		}
+		if oauth.IsReconnectRequiredError(err) {
+			writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
+			return
+		}
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -119,6 +184,14 @@ func (s *Server) listFormResponses(w http.ResponseWriter, r *http.Request, formI
 	}
 	client, err := s.oauthSvc.GetClient(r.Context(), orgID)
 	if err != nil {
+		if oauth.IsNotConfiguredError(err) {
+			writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
+			return
+		}
+		if oauth.IsReconnectRequiredError(err) {
+			writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
+			return
+		}
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -131,5 +204,78 @@ func (s *Server) listFormResponses(w http.ResponseWriter, r *http.Request, formI
 		"form_id":   formID,
 		"responses": responses,
 		"count":     len(responses),
+	})
+}
+
+func (s *Server) listFormFields(w http.ResponseWriter, r *http.Request, formID string) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	orgID := r.URL.Query().Get("org_id")
+	if orgID == "" {
+		writeError(w, http.StatusBadRequest, "org_id required")
+		return
+	}
+
+	client, err := s.oauthSvc.GetClient(r.Context(), orgID)
+	if err != nil {
+		if oauth.IsNotConfiguredError(err) {
+			writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
+			return
+		}
+		if oauth.IsReconnectRequiredError(err) {
+			writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
+			return
+		}
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	form, err := googleapi.GetForm(client, formID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	type formField struct {
+		QuestionID string `json:"question_id"`
+		ItemID     string `json:"item_id,omitempty"`
+		Title      string `json:"title"`
+		Required   bool   `json:"required"`
+		FieldType  string `json:"field_type,omitempty"`
+	}
+
+	fields := make([]formField, 0)
+	for idx, item := range form.Items {
+		if item.QuestionItem == nil {
+			continue
+		}
+		qid := strings.TrimSpace(item.QuestionItem.Question.QuestionID)
+		if qid == "" {
+			continue
+		}
+		title := strings.TrimSpace(item.Title)
+		if title == "" {
+			title = "Question " + strconv.Itoa(idx+1)
+		}
+		fieldType := "text"
+		if item.QuestionItem.Question.TextQuestion != nil && item.QuestionItem.Question.TextQuestion.Paragraph {
+			fieldType = "paragraph"
+		}
+		fields = append(fields, formField{
+			QuestionID: qid,
+			ItemID:     item.ItemID,
+			Title:      title,
+			Required:   item.QuestionItem.Question.Required,
+			FieldType:  fieldType,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"form_id": formID,
+		"title":   form.Info.Title,
+		"count":   len(fields),
+		"fields":  fields,
 	})
 }
