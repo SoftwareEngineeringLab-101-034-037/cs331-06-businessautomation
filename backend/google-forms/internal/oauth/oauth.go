@@ -2,6 +2,8 @@ package oauth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -34,7 +37,16 @@ type Service struct {
 	store         storage.Store
 	configured    bool
 	missingFields []string
+	stateMu       sync.Mutex
+	authStates    map[string]pendingAuthState
 }
+
+type pendingAuthState struct {
+	OrgID     string
+	ExpiresAt time.Time
+}
+
+const authStateTTL = 10 * time.Minute
 
 var ErrOAuthNotConfigured = errors.New("google oauth is not configured on server")
 var ErrOAuthReconnectRequired = errors.New("google oauth reconnect required")
@@ -64,6 +76,7 @@ func NewService(clientID, clientSecret, redirectURI string, store storage.Store)
 		store:         store,
 		configured:    configured,
 		missingFields: missing,
+		authStates:    make(map[string]pendingAuthState),
 	}
 }
 
@@ -89,7 +102,12 @@ func (s *Service) AuthURL(orgID string) string {
 	if !s.IsConfigured() {
 		return ""
 	}
-	return s.cfg.AuthCodeURL(orgID, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
+	state, err := s.GenerateState(orgID)
+	if err != nil {
+		log.Printf("warn: failed to generate oauth state for org %s: %v", orgID, err)
+		return ""
+	}
+	return s.cfg.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
 }
 
 func (s *Service) Exchange(ctx context.Context, code, orgID string) error {
@@ -121,13 +139,34 @@ func (s *Service) Exchange(ctx context.Context, code, orgID string) error {
 		}
 	}
 
+	isPrimary := false
+	if existing, getErr := s.store.GetTokenByAccount(ctx, orgID, providerGoogleForms, accountID); getErr == nil && existing != nil && existing.IsPrimary {
+		isPrimary = true
+	} else {
+		tokens, listErr := s.store.ListTokens(ctx, orgID, providerGoogleForms)
+		if listErr == nil {
+			if len(tokens) == 0 {
+				isPrimary = true
+			} else {
+				hasPrimary := false
+				for _, token := range tokens {
+					if token.IsPrimary {
+						hasPrimary = true
+						break
+					}
+				}
+				isPrimary = !hasPrimary
+			}
+		}
+	}
+
 	m := &models.OAuthToken{
 		Provider:     providerGoogleForms,
 		OrgID:        orgID,
 		AccountID:    accountID,
 		AccountEmail: accountEmail,
 		AccountName:  accountName,
-		IsPrimary:    true,
+		IsPrimary:    isPrimary,
 		AccessToken:  tok.AccessToken,
 		RefreshToken: tok.RefreshToken,
 		TokenType:    tok.TokenType,
@@ -151,6 +190,9 @@ func (s *Service) GetClient(ctx context.Context, orgID string) (*http.Client, er
 	}
 	if stored == nil {
 		return nil, fmt.Errorf("no google connection for org %s", orgID)
+	}
+	if ok, missing := hasRequiredScopes(stored.Scopes, scopes); !ok {
+		return nil, fmt.Errorf("%w: missing scopes %s", ErrOAuthReconnectRequired, strings.Join(missing, ", "))
 	}
 
 	tok := &oauth2.Token{
@@ -238,7 +280,9 @@ func (s *Service) DisconnectAccount(ctx context.Context, orgID, accountID string
 		nextTokens, listErr := s.store.ListTokens(ctx, orgID, providerGoogleForms)
 		if listErr == nil && len(nextTokens) > 0 {
 			nextTokens[0].IsPrimary = true
-			_ = s.store.SaveToken(ctx, nextTokens[0])
+			if saveErr := s.store.SaveToken(ctx, nextTokens[0]); saveErr != nil {
+				log.Printf("warn: failed to persist replacement primary token for org %s account %s: %v", orgID, nextTokens[0].AccountID, saveErr)
+			}
 		}
 	}
 
@@ -262,7 +306,12 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 			writeError(w, http.StatusBadRequest, "org_id required")
 			return
 		}
-		http.Redirect(w, r, svc.AuthURL(orgID), http.StatusTemporaryRedirect)
+		authURL := svc.AuthURL(orgID)
+		if authURL == "" {
+			writeError(w, http.StatusInternalServerError, "failed to initialize oauth authorization")
+			return
+		}
+		http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
 	})
 
 	mux.HandleFunc("/auth/google/callback", func(w http.ResponseWriter, r *http.Request) {
@@ -277,9 +326,14 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 		}
 
 		code := r.URL.Query().Get("code")
-		orgID := r.URL.Query().Get("state")
-		if code == "" || orgID == "" {
+		stateToken := r.URL.Query().Get("state")
+		if code == "" || stateToken == "" {
 			writeError(w, http.StatusBadRequest, "missing code or state")
+			return
+		}
+		orgID, err := svc.ValidateAndConsumeState(stateToken)
+		if err != nil {
+			writeError(w, http.StatusForbidden, "invalid or expired oauth state")
 			return
 		}
 		if err := svc.Exchange(r.Context(), code, orgID); err != nil {
@@ -391,6 +445,79 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+func hasRequiredScopes(granted, required []string) (bool, []string) {
+	if len(required) == 0 {
+		return true, nil
+	}
+	grantedSet := make(map[string]struct{}, len(granted))
+	for _, scope := range granted {
+		trimmed := strings.TrimSpace(scope)
+		if trimmed == "" {
+			continue
+		}
+		grantedSet[trimmed] = struct{}{}
+	}
+	missing := make([]string, 0)
+	for _, scope := range required {
+		if _, ok := grantedSet[scope]; !ok {
+			missing = append(missing, scope)
+		}
+	}
+	return len(missing) == 0, missing
+}
+
+func (s *Service) GenerateState(orgID string) (string, error) {
+	if strings.TrimSpace(orgID) == "" {
+		return "", fmt.Errorf("org_id required")
+	}
+
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate state bytes: %w", err)
+	}
+	state := base64.RawURLEncoding.EncodeToString(raw)
+
+	now := time.Now()
+	s.stateMu.Lock()
+	for key, pending := range s.authStates {
+		if pending.ExpiresAt.Before(now) {
+			delete(s.authStates, key)
+		}
+	}
+	s.authStates[state] = pendingAuthState{OrgID: orgID, ExpiresAt: now.Add(authStateTTL)}
+	s.stateMu.Unlock()
+
+	return state, nil
+}
+
+func (s *Service) ValidateAndConsumeState(state string) (string, error) {
+	trimmed := strings.TrimSpace(state)
+	if trimmed == "" {
+		return "", fmt.Errorf("state is required")
+	}
+
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	pending, ok := s.authStates[trimmed]
+	if !ok {
+		return "", fmt.Errorf("state not found")
+	}
+	delete(s.authStates, trimmed)
+
+	if time.Now().After(pending.ExpiresAt) {
+		return "", fmt.Errorf("state expired")
+	}
+	if strings.TrimSpace(pending.OrgID) == "" {
+		return "", fmt.Errorf("state missing org")
+	}
+	return pending.OrgID, nil
+}
+
+// isRefreshReauthError uses string matching because golang.org/x/oauth2 does
+// not expose structured error types for Google OAuth token refresh responses.
+// It intentionally detects unauthorized_client, invalid_grant, and
+// invalid_client to trigger reconnect flows.
 func isRefreshReauthError(err error) bool {
 	if err == nil {
 		return false

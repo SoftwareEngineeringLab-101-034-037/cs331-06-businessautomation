@@ -148,7 +148,15 @@ func (s *MongoStore) ListTokens(ctx context.Context, orgID, provider string) ([]
 		return nil, err
 	}
 	for _, tok := range out {
-		s.normalizeTokenDefaults(ctx, tok)
+		if tok == nil {
+			continue
+		}
+		if tok.Provider == "" {
+			tok.Provider = "google_forms"
+		}
+		if tok.AccountID == "" {
+			tok.AccountID = "primary"
+		}
 	}
 	return out, nil
 }

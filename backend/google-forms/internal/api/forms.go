@@ -11,6 +11,23 @@ import (
 	"github.com/example/business-automation/backend/google-forms/internal/oauth"
 )
 
+func (s *Server) getOAuthClientOrFail(w http.ResponseWriter, r *http.Request, orgID string) (*http.Client, bool) {
+	client, err := s.oauthSvc.GetClient(r.Context(), orgID)
+	if err == nil {
+		return client, true
+	}
+	if oauth.IsNotConfiguredError(err) {
+		writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
+		return nil, false
+	}
+	if oauth.IsReconnectRequiredError(err) {
+		writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
+		return nil, false
+	}
+	writeError(w, http.StatusUnauthorized, err.Error())
+	return nil, false
+}
+
 func (s *Server) handleForms(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
@@ -63,17 +80,8 @@ func (s *Server) createForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, err := s.oauthSvc.GetClient(r.Context(), req.OrgID)
-	if err != nil {
-		if oauth.IsNotConfiguredError(err) {
-			writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
-			return
-		}
-		if oauth.IsReconnectRequiredError(err) {
-			writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
-			return
-		}
-		writeError(w, http.StatusUnauthorized, err.Error())
+	client, ok := s.getOAuthClientOrFail(w, r, req.OrgID)
+	if !ok {
 		return
 	}
 
@@ -111,17 +119,8 @@ func (s *Server) listForms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, err := s.oauthSvc.GetClient(r.Context(), orgID)
-	if err != nil {
-		if oauth.IsNotConfiguredError(err) {
-			writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
-			return
-		}
-		if oauth.IsReconnectRequiredError(err) {
-			writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
-			return
-		}
-		writeError(w, http.StatusUnauthorized, err.Error())
+	client, ok := s.getOAuthClientOrFail(w, r, orgID)
+	if !ok {
 		return
 	}
 
@@ -151,17 +150,8 @@ func (s *Server) getForm(w http.ResponseWriter, r *http.Request, formID string) 
 		writeError(w, http.StatusBadRequest, "org_id required")
 		return
 	}
-	client, err := s.oauthSvc.GetClient(r.Context(), orgID)
-	if err != nil {
-		if oauth.IsNotConfiguredError(err) {
-			writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
-			return
-		}
-		if oauth.IsReconnectRequiredError(err) {
-			writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
-			return
-		}
-		writeError(w, http.StatusUnauthorized, err.Error())
+	client, ok := s.getOAuthClientOrFail(w, r, orgID)
+	if !ok {
 		return
 	}
 	form, err := googleapi.GetForm(client, formID)
@@ -182,17 +172,8 @@ func (s *Server) listFormResponses(w http.ResponseWriter, r *http.Request, formI
 		writeError(w, http.StatusBadRequest, "org_id required")
 		return
 	}
-	client, err := s.oauthSvc.GetClient(r.Context(), orgID)
-	if err != nil {
-		if oauth.IsNotConfiguredError(err) {
-			writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
-			return
-		}
-		if oauth.IsReconnectRequiredError(err) {
-			writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
-			return
-		}
-		writeError(w, http.StatusUnauthorized, err.Error())
+	client, ok := s.getOAuthClientOrFail(w, r, orgID)
+	if !ok {
 		return
 	}
 	responses, err := googleapi.ListResponses(client, formID, r.URL.Query().Get("since"))
@@ -218,17 +199,8 @@ func (s *Server) listFormFields(w http.ResponseWriter, r *http.Request, formID s
 		return
 	}
 
-	client, err := s.oauthSvc.GetClient(r.Context(), orgID)
-	if err != nil {
-		if oauth.IsNotConfiguredError(err) {
-			writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
-			return
-		}
-		if oauth.IsReconnectRequiredError(err) {
-			writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
-			return
-		}
-		writeError(w, http.StatusUnauthorized, err.Error())
+	client, ok := s.getOAuthClientOrFail(w, r, orgID)
+	if !ok {
 		return
 	}
 
@@ -259,10 +231,7 @@ func (s *Server) listFormFields(w http.ResponseWriter, r *http.Request, formID s
 		if title == "" {
 			title = "Question " + strconv.Itoa(idx+1)
 		}
-		fieldType := "text"
-		if item.QuestionItem.Question.TextQuestion != nil && item.QuestionItem.Question.TextQuestion.Paragraph {
-			fieldType = "paragraph"
-		}
+		fieldType := detectFormFieldType(item.QuestionItem.Question)
 		fields = append(fields, formField{
 			QuestionID: qid,
 			ItemID:     item.ItemID,
@@ -278,4 +247,38 @@ func (s *Server) listFormFields(w http.ResponseWriter, r *http.Request, formID s
 		"count":   len(fields),
 		"fields":  fields,
 	})
+}
+
+func detectFormFieldType(question googleapi.Question) string {
+	if question.TextQuestion != nil {
+		if question.TextQuestion.Paragraph {
+			return "paragraph"
+		}
+		return "text"
+	}
+	if question.ChoiceQuestion != nil {
+		switch strings.ToUpper(strings.TrimSpace(question.ChoiceQuestion.Type)) {
+		case "RADIO":
+			return "choice"
+		case "CHECKBOX":
+			return "checkbox"
+		case "DROP_DOWN":
+			return "dropdown"
+		default:
+			return "choice"
+		}
+	}
+	if question.DateQuestion != nil {
+		return "date"
+	}
+	if question.TimeQuestion != nil {
+		return "time"
+	}
+	if question.ScaleQuestion != nil {
+		return "scale"
+	}
+	if question.FileUploadQuestion != nil {
+		return "file"
+	}
+	return "text"
 }

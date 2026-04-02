@@ -35,14 +35,31 @@ type QuestionItem struct {
 }
 
 type Question struct {
-	QuestionID   string        `json:"questionId,omitempty"`
-	Required     bool          `json:"required,omitempty"`
-	TextQuestion *TextQuestion `json:"textQuestion,omitempty"`
+	QuestionID         string              `json:"questionId,omitempty"`
+	Required           bool                `json:"required,omitempty"`
+	TextQuestion       *TextQuestion       `json:"textQuestion,omitempty"`
+	ChoiceQuestion     *ChoiceQuestion     `json:"choiceQuestion,omitempty"`
+	DateQuestion       *DateQuestion       `json:"dateQuestion,omitempty"`
+	TimeQuestion       *TimeQuestion       `json:"timeQuestion,omitempty"`
+	ScaleQuestion      *ScaleQuestion      `json:"scaleQuestion,omitempty"`
+	FileUploadQuestion *FileUploadQuestion `json:"fileUploadQuestion,omitempty"`
 }
 
 type TextQuestion struct {
 	Paragraph bool `json:"paragraph,omitempty"`
 }
+
+type ChoiceQuestion struct {
+	Type string `json:"type,omitempty"`
+}
+
+type DateQuestion struct{}
+
+type TimeQuestion struct{}
+
+type ScaleQuestion struct{}
+
+type FileUploadQuestion struct{}
 
 type ListedForm struct {
 	FormID       string `json:"form_id"`
@@ -59,6 +76,7 @@ type driveFilesReply struct {
 		WebViewLink  string `json:"webViewLink"`
 		ModifiedTime string `json:"modifiedTime"`
 	} `json:"files"`
+	NextPageToken string `json:"nextPageToken,omitempty"`
 }
 
 func CreateForm(client *http.Client, title string) (*Form, error) {
@@ -161,34 +179,43 @@ func ListForms(client *http.Client, pageSize int) ([]ListedForm, error) {
 
 	q := url.Values{}
 	q.Set("q", "mimeType='application/vnd.google-apps.form' and trashed=false")
-	q.Set("fields", "files(id,name,webViewLink,modifiedTime)")
+	q.Set("fields", "nextPageToken,files(id,name,webViewLink,modifiedTime)")
 	q.Set("orderBy", "modifiedTime desc")
 	q.Set("pageSize", fmt.Sprintf("%d", pageSize))
 
-	endpoint := fmt.Sprintf("%s?%s", driveFilesAPI, q.Encode())
-	resp, err := client.Get(endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("list forms: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("list forms: status %d", resp.StatusCode)
-	}
+	forms := make([]ListedForm, 0)
+	for {
+		endpoint := fmt.Sprintf("%s?%s", driveFilesAPI, q.Encode())
+		resp, err := client.Get(endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("list forms: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("list forms: status %d", resp.StatusCode)
+		}
 
-	var out driveFilesReply
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("list forms decode: %w", err)
-	}
+		var out driveFilesReply
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("list forms decode: %w", err)
+		}
+		resp.Body.Close()
 
-	forms := make([]ListedForm, 0, len(out.Files))
-	for _, f := range out.Files {
-		forms = append(forms, ListedForm{
-			FormID:       f.ID,
-			Title:        f.Name,
-			ResponderURI: fmt.Sprintf("https://docs.google.com/forms/d/%s/viewform", f.ID),
-			EditURI:      f.WebViewLink,
-			ModifiedTime: f.ModifiedTime,
-		})
+		for _, f := range out.Files {
+			forms = append(forms, ListedForm{
+				FormID:       f.ID,
+				Title:        f.Name,
+				ResponderURI: fmt.Sprintf("https://docs.google.com/forms/d/%s/viewform", f.ID),
+				EditURI:      f.WebViewLink,
+				ModifiedTime: f.ModifiedTime,
+			})
+		}
+
+		if out.NextPageToken == "" {
+			break
+		}
+		q.Set("pageToken", out.NextPageToken)
 	}
 	return forms, nil
 }
