@@ -111,10 +111,16 @@ func (s *Server) createForm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	publishWarning := ""
 
 	if len(req.Questions) > 0 {
 		if err := googleapi.AddQuestions(client, form.FormID, req.Questions); err != nil {
-			writeError(w, http.StatusBadGateway, err.Error())
+			log.Printf("forms.createForm add questions failed for form_id=%q: %v", form.FormID, err)
+			writeJSON(w, http.StatusBadGateway, map[string]interface{}{
+				"error":   "questions could not be added to created form",
+				"form_id": form.FormID,
+				"stage":   "add_questions",
+			})
 			return
 		}
 	}
@@ -122,12 +128,27 @@ func (s *Server) createForm(w http.ResponseWriter, r *http.Request) {
 	if req.Publish {
 		if err := googleapi.SetPublished(client, form.FormID, true); err != nil {
 			log.Printf("warn: set published for form %s: %v", form.FormID, err)
+			publishWarning = "form created but publish step failed"
 		}
 	}
 
 	updated, err := googleapi.GetForm(client, form.FormID)
 	if err != nil {
+		if publishWarning != "" {
+			writeJSON(w, http.StatusCreated, map[string]interface{}{
+				"form":    form,
+				"warning": publishWarning,
+			})
+			return
+		}
 		writeJSON(w, http.StatusCreated, form)
+		return
+	}
+	if publishWarning != "" {
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"form":    updated,
+			"warning": publishWarning,
+		})
 		return
 	}
 	writeJSON(w, http.StatusCreated, updated)

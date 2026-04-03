@@ -15,12 +15,14 @@ func (s *Server) handleIntegrationStatus(w http.ResponseWriter, r *http.Request)
 	}
 
 	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
-	if orgID != "" {
-		status, msg := s.authorizeOrgAccess(r, orgID)
-		if status != 0 {
-			writeError(w, status, msg)
-			return
-		}
+	if orgID == "" {
+		writeError(w, http.StatusBadRequest, "org_id required")
+		return
+	}
+	status, msg := s.authorizeOrgAccess(r, orgID)
+	if status != 0 {
+		writeError(w, status, msg)
+		return
 	}
 
 	workflowHealthy := false
@@ -52,7 +54,7 @@ func (s *Server) handleIntegrationStatus(w http.ResponseWriter, r *http.Request)
 		"workflow_engine_error":   workflowErr,
 	}
 
-	if orgID != "" && s.oauthSvc.IsConfigured() {
+	if s.oauthSvc.IsConfigured() {
 		accounts, listErr := s.oauthSvc.ListConnections(r.Context(), orgID)
 		if listErr != nil {
 			log.Printf("integration status list connections failed org_id=%q: %v", orgID, listErr)

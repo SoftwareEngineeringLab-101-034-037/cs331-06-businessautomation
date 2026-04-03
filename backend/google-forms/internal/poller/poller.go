@@ -201,6 +201,9 @@ func (p *Poller) isReconnectError(err error) bool {
 	if oauth.IsReconnectRequiredError(err) {
 		return true
 	}
+	if oauth.IsNotConfiguredError(err) {
+		return true
+	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "no google connection for org") || strings.Contains(msg, "unauthorized_client")
 }

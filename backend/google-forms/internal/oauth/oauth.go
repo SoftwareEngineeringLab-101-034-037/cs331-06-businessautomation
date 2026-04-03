@@ -308,6 +308,7 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 	}
 
 	mux.HandleFunc("/auth/google/connect-url", func(w http.ResponseWriter, r *http.Request) {
+		cookieSecure := r.TLS != nil
 		if !svc.IsConfigured() {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
 				"error":          ErrOAuthNotConfigured.Error(),
@@ -346,7 +347,7 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 			Value:    userID,
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   false,
+			Secure:   cookieSecure,
 			SameSite: http.SameSiteLaxMode,
 			MaxAge:   int(authStateTTL.Seconds()),
 		})
@@ -355,6 +356,7 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 	})
 
 	mux.HandleFunc("/auth/google/connect", func(w http.ResponseWriter, r *http.Request) {
+		cookieSecure := r.TLS != nil
 		if !svc.IsConfigured() {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
 				"error":          ErrOAuthNotConfigured.Error(),
@@ -393,7 +395,7 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 			Value:    userID,
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   false,
+			Secure:   cookieSecure,
 			SameSite: http.SameSiteLaxMode,
 			MaxAge:   int(authStateTTL.Seconds()),
 		})
@@ -401,6 +403,7 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 	})
 
 	mux.HandleFunc("/auth/google/callback", func(w http.ResponseWriter, r *http.Request) {
+		cookieSecure := r.TLS != nil
 		if !svc.IsConfigured() {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
 				"error":          ErrOAuthNotConfigured.Error(),
@@ -435,7 +438,7 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 			}
 		}
 
-		http.SetCookie(w, &http.Cookie{Name: oauthActorCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		http.SetCookie(w, &http.Cookie{Name: oauthActorCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: cookieSecure, SameSite: http.SameSiteLaxMode})
 		if err := svc.Exchange(r.Context(), code, orgID); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -448,10 +451,15 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		orgID := r.URL.Query().Get("org_id")
+		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 		accountID := r.URL.Query().Get("account_id")
 		if orgID == "" {
 			writeError(w, http.StatusBadRequest, "org_id required")
+			return
+		}
+		status, msg := authorizeOrg(r, orgID)
+		if status != 0 {
+			writeError(w, status, msg)
 			return
 		}
 		var err error
@@ -468,9 +476,14 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 	})
 
 	mux.HandleFunc("/auth/google/status", func(w http.ResponseWriter, r *http.Request) {
-		orgID := r.URL.Query().Get("org_id")
+		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 		if orgID == "" {
 			writeError(w, http.StatusBadRequest, "org_id required")
+			return
+		}
+		status, msg := authorizeOrg(r, orgID)
+		if status != 0 {
+			writeError(w, status, msg)
 			return
 		}
 		if !svc.IsConfigured() {
