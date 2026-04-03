@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	providergoogleforms "github.com/example/business-automation/backend/integrations/internal/providers/googleforms"
 )
 
 func (s *Server) handleIntegrationAccounts(w http.ResponseWriter, r *http.Request) {
@@ -21,14 +23,15 @@ func (s *Server) handleIntegrationAccounts(w http.ResponseWriter, r *http.Reques
 
 	service := strings.TrimSpace(r.URL.Query().Get("service"))
 	if service == "" {
-		service = "google_forms"
+		service = providergoogleforms.ProviderID
 	}
-	if service != "google_forms" {
+	provider, ok := s.providerByService(service)
+	if !ok {
 		writeError(w, http.StatusBadRequest, "unsupported service")
 		return
 	}
 
-	accounts, err := s.oauthSvc.ListConnections(r.Context(), orgID)
+	accounts, err := provider.ListConnections(r.Context(), orgID)
 	if err != nil {
 		log.Printf("integration accounts list failed for org_id=%q: %v", orgID, err)
 		writeError(w, http.StatusInternalServerError, "failed to list integration accounts")
@@ -66,7 +69,17 @@ func (s *Server) handleIntegrationAccountByID(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if err := s.oauthSvc.DisconnectAccount(r.Context(), orgID, accountID); err != nil {
+	service := strings.TrimSpace(r.URL.Query().Get("service"))
+	if service == "" {
+		service = providergoogleforms.ProviderID
+	}
+	provider, ok := s.providerByService(service)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unsupported service")
+		return
+	}
+
+	if err := provider.DisconnectAccount(r.Context(), orgID, accountID); err != nil {
 		log.Printf("integration account disconnect failed for org_id=%q account_id=%q: %v", orgID, accountID, err)
 		writeError(w, http.StatusInternalServerError, "failed to disconnect integration account")
 		return

@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	"github.com/example/business-automation/backend/google-forms/internal/models"
+	"github.com/example/business-automation/backend/integrations/internal/models"
 )
 
 type Store interface {
@@ -17,7 +17,9 @@ type Store interface {
 	SaveWatch(ctx context.Context, watch *models.FormWatch) error
 	GetWatch(ctx context.Context, id string) (*models.FormWatch, error)
 	ListWatches(ctx context.Context, orgID string) ([]*models.FormWatch, error)
+	ListWatchesByProvider(ctx context.Context, orgID, provider string) ([]*models.FormWatch, error)
 	ListActiveWatches(ctx context.Context) ([]*models.FormWatch, error)
+	ListActiveWatchesByProvider(ctx context.Context, provider string) ([]*models.FormWatch, error)
 	UpdateWatch(ctx context.Context, watch *models.FormWatch) error
 	DeleteWatch(ctx context.Context, id string) error
 

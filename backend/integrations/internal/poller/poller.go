@@ -12,16 +12,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/business-automation/backend/google-forms/internal/googleapi"
-	"github.com/example/business-automation/backend/google-forms/internal/models"
-	"github.com/example/business-automation/backend/google-forms/internal/oauth"
-	"github.com/example/business-automation/backend/google-forms/internal/storage"
+	"github.com/example/business-automation/backend/integrations/internal/googleapi"
+	"github.com/example/business-automation/backend/integrations/internal/models"
+	"github.com/example/business-automation/backend/integrations/internal/oauth"
+	providergoogleforms "github.com/example/business-automation/backend/integrations/internal/providers/googleforms"
+	"github.com/example/business-automation/backend/integrations/internal/storage"
 )
 
 type Poller struct {
 	store       storage.Store
 	oauthSvc    *oauth.Service
 	workflowURL string
+	triggerPath string
 	workflowKey string
 	interval    time.Duration
 	stopCh      chan struct{}
@@ -29,11 +31,16 @@ type Poller struct {
 	mu          sync.Mutex
 }
 
-func New(store storage.Store, oauthSvc *oauth.Service, workflowURL, workflowKey string, intervalSeconds int) *Poller {
+func New(store storage.Store, oauthSvc *oauth.Service, workflowURL, triggerPath, workflowKey string, intervalSeconds int) *Poller {
+	resolvedTriggerPath := strings.TrimSpace(triggerPath)
+	if resolvedTriggerPath == "" {
+		resolvedTriggerPath = providergoogleforms.TriggerEventPath
+	}
 	return &Poller{
 		store:       store,
 		oauthSvc:    oauthSvc,
 		workflowURL: workflowURL,
+		triggerPath: resolvedTriggerPath,
 		workflowKey: workflowKey,
 		interval:    time.Duration(intervalSeconds) * time.Second,
 		stopCh:      make(chan struct{}),
@@ -66,7 +73,7 @@ func (p *Poller) Stop() {
 }
 
 func (p *Poller) tick(ctx context.Context) {
-	watches, err := p.store.ListActiveWatches(ctx)
+	watches, err := p.store.ListActiveWatchesByProvider(ctx, providergoogleforms.ProviderID)
 	if err != nil {
 		log.Printf("poller: list watches: %v", err)
 		return
@@ -169,7 +176,7 @@ func (p *Poller) triggerWorkflow(orgID, workflowID string, data map[string]strin
 		return err
 	}
 
-	url := p.workflowURL + "/integrations/google-forms/events"
+	url := p.workflowURL + p.triggerPath
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)

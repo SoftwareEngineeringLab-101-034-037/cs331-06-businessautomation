@@ -1,4 +1,4 @@
-module github.com/example/business-automation/backend/google-forms
+module github.com/example/business-automation/backend/integrations
 
 go 1.21
 

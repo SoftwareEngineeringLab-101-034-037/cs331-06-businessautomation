@@ -24,6 +24,7 @@ type OAuthToken struct {
 
 type FormWatch struct {
 	ID             primitive.ObjectID `bson:"_id,omitempty"    json:"id"`
+	Provider       string             `bson:"provider,omitempty" json:"provider,omitempty"`
 	OrgID          string             `bson:"org_id"           json:"org_id"`
 	FormID         string             `bson:"form_id"          json:"form_id"`
 	WorkflowID     string             `bson:"workflow_id"      json:"workflow_id"`

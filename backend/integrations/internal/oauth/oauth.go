@@ -19,8 +19,8 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
-	"github.com/example/business-automation/backend/google-forms/internal/models"
-	"github.com/example/business-automation/backend/google-forms/internal/storage"
+	"github.com/example/business-automation/backend/integrations/internal/models"
+	"github.com/example/business-automation/backend/integrations/internal/storage"
 )
 
 var scopes = []string{

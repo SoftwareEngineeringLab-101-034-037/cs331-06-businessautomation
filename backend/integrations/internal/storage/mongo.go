@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -10,8 +11,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"github.com/example/business-automation/backend/google-forms/internal/models"
+	"github.com/example/business-automation/backend/integrations/internal/models"
 )
+
+const defaultWatchProvider = "google_forms"
 
 type MongoStore struct {
 	client  *mongo.Client
@@ -60,6 +63,9 @@ func (s *MongoStore) ensureIndexes(ctx context.Context) {
 	})
 	s.watches.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "active", Value: 1}},
+	})
+	s.watches.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "provider", Value: 1}},
 	})
 }
 
@@ -181,6 +187,9 @@ func (s *MongoStore) SaveWatch(ctx context.Context, watch *models.FormWatch) err
 	watch.ID = primitive.NewObjectID()
 	watch.CreatedAt = time.Now()
 	watch.Active = true
+	if strings.TrimSpace(watch.Provider) == "" {
+		watch.Provider = defaultWatchProvider
+	}
 	_, err := s.watches.InsertOne(ctx, watch)
 	return err
 }
@@ -195,30 +204,76 @@ func (s *MongoStore) GetWatch(ctx context.Context, id string) (*models.FormWatch
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil
 	}
+	if strings.TrimSpace(w.Provider) == "" {
+		w.Provider = defaultWatchProvider
+	}
 	return &w, err
 }
 
 func (s *MongoStore) ListWatches(ctx context.Context, orgID string) ([]*models.FormWatch, error) {
-	cur, err := s.watches.Find(ctx, bson.M{"org_id": orgID})
+	return s.ListWatchesByProvider(ctx, orgID, defaultWatchProvider)
+}
+
+func (s *MongoStore) ListWatchesByProvider(ctx context.Context, orgID, provider string) ([]*models.FormWatch, error) {
+	filter := bson.M{"org_id": orgID}
+	for key, value := range watchProviderFilter(provider) {
+		filter[key] = value
+	}
+
+	cur, err := s.watches.Find(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
 	defer cur.Close(ctx)
 	var out []*models.FormWatch
-	return out, cur.All(ctx, &out)
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	for _, watch := range out {
+		if watch == nil {
+			continue
+		}
+		if strings.TrimSpace(watch.Provider) == "" {
+			watch.Provider = defaultWatchProvider
+		}
+	}
+	return out, nil
 }
 
 func (s *MongoStore) ListActiveWatches(ctx context.Context) ([]*models.FormWatch, error) {
-	cur, err := s.watches.Find(ctx, bson.M{"active": true})
+	return s.ListActiveWatchesByProvider(ctx, defaultWatchProvider)
+}
+
+func (s *MongoStore) ListActiveWatchesByProvider(ctx context.Context, provider string) ([]*models.FormWatch, error) {
+	filter := bson.M{"active": true}
+	for key, value := range watchProviderFilter(provider) {
+		filter[key] = value
+	}
+
+	cur, err := s.watches.Find(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
 	defer cur.Close(ctx)
 	var out []*models.FormWatch
-	return out, cur.All(ctx, &out)
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	for _, watch := range out {
+		if watch == nil {
+			continue
+		}
+		if strings.TrimSpace(watch.Provider) == "" {
+			watch.Provider = defaultWatchProvider
+		}
+	}
+	return out, nil
 }
 
 func (s *MongoStore) UpdateWatch(ctx context.Context, watch *models.FormWatch) error {
+	if strings.TrimSpace(watch.Provider) == "" {
+		watch.Provider = defaultWatchProvider
+	}
 	_, err := s.watches.ReplaceOne(ctx, bson.M{"_id": watch.ID}, watch)
 	return err
 }
@@ -254,4 +309,20 @@ func (s *MongoStore) normalizeTokenDefaults(ctx context.Context, tok *models.OAu
 	if len(update) > 0 {
 		_, _ = s.tokens.UpdateByID(ctx, tok.ID, bson.M{"$set": update})
 	}
+}
+
+func watchProviderFilter(provider string) bson.M {
+	resolved := strings.TrimSpace(provider)
+	if resolved == "" {
+		resolved = defaultWatchProvider
+	}
+	if resolved == defaultWatchProvider {
+		return bson.M{
+			"$or": []bson.M{
+				{"provider": defaultWatchProvider},
+				{"provider": bson.M{"$exists": false}},
+			},
+		}
+	}
+	return bson.M{"provider": resolved}
 }
