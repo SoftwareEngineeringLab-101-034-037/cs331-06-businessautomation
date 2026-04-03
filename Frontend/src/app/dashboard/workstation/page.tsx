@@ -6,6 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 import { useToast, ToastContainer } from "@/components/Toast";
+import { formatInstanceLabel } from "@/lib/instance-label";
+import { computeHeightBasedProgress, type WorkflowProgressNode } from "@/lib/workflow-progress";
 
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
 
@@ -18,7 +20,7 @@ interface BackendWorkflow {
   version: number;
   status: "active" | "inactive" | "draft";
   trigger: { type: string; config?: Record<string, string> };
-  nodes: unknown[];
+  nodes: BackendWorkflowNode[];
   tags?: string[];
   raw_json?: string;
   created_by?: string;
@@ -26,13 +28,33 @@ interface BackendWorkflow {
   updated_at: string;
 }
 
+interface BackendWorkflowNode {
+  next?: string;
+  next_yes?: string;
+  next_no?: string;
+  next_branches?: string[];
+  next_actions?: Record<string, string>;
+  id?: string;
+  title?: string;
+  type?: string;
+  sla_days?: number;
+}
+
+interface BackendNodeState {
+  status?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+type InstanceDisplayStatus = BackendInstance["status"] | "delayed";
+
 interface BackendInstance {
   id: string;
   workflow_id: string;
   workflow_name?: string;
   status: "pending" | "running" | "waiting" | "completed" | "failed" | "cancelled";
   current_node?: string;
-  node_states?: Record<string, { status: string; started_at?: string; completed_at?: string }>;
+  node_states?: Record<string, BackendNodeState>;
   audit_log?: Array<{ timestamp: string; node_id?: string; action: string; details?: Record<string, unknown> }>;
   started_at: string;
   completed_at?: string;
@@ -111,10 +133,95 @@ function prettyActionName(action: string): string {
   }
 }
 
-function formatInstanceLabel(instanceID: string): string {
-  const trimmed = instanceID.trim();
-  if (!trimmed) return "i-unknown";
-  return `i-${trimmed.slice(0, 6)}`;
+function toTimeValue(value?: string): number | null {
+  if (!value) return null;
+  const t = new Date(value).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+function isSLABreached(startedAt?: string, slaDays?: number): boolean {
+  if (!startedAt || !slaDays || slaDays <= 0) return false;
+  const startTime = toTimeValue(startedAt);
+  if (startTime == null) return false;
+  const slaMs = slaDays * 24 * 60 * 60 * 1000;
+  return Date.now() - startTime > slaMs;
+}
+
+function isInstanceDelayed(instance: BackendInstance, workflow: BackendWorkflow | undefined): boolean {
+  if (!workflow) return false;
+  if (!(instance.status === "waiting" || instance.status === "running" || instance.status === "pending")) {
+    return false;
+  }
+
+  const nodeMap = new Map((workflow.nodes || [])
+    .filter((node) => node?.id)
+    .map((node) => [String(node.id), node]));
+
+  for (const [nodeID, nodeState] of Object.entries(instance.node_states || {})) {
+    if (!nodeState || nodeState.status !== "running") {
+      continue;
+    }
+    const node = nodeMap.get(nodeID);
+    if (isSLABreached(nodeState.started_at, node?.sla_days)) {
+      return true;
+    }
+  }
+
+  const currentNode = (instance.current_node || "").trim();
+  if (currentNode) {
+    const current = nodeMap.get(currentNode);
+    const startedAt = instance.node_states?.[currentNode]?.started_at || instance.started_at;
+    if (isSLABreached(startedAt, current?.sla_days)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function deriveInstanceStatus(instance: BackendInstance, workflow: BackendWorkflow | undefined): InstanceDisplayStatus {
+  if (isInstanceDelayed(instance, workflow)) {
+    return "delayed";
+  }
+  return instance.status;
+}
+
+function instanceStatusLabel(status: InstanceDisplayStatus): string {
+  switch (status) {
+    case "running":
+      return "Running";
+    case "waiting":
+      return "Waiting";
+    case "delayed":
+      return "Delayed";
+    default:
+      return status.charAt(0).toUpperCase() + status.slice(1);
+  }
+}
+
+function instanceStatusDotClass(status: InstanceDisplayStatus): string {
+  if (status === "completed") return "active";
+  if (status === "failed" || status === "cancelled") return "inactive";
+  if (status === "delayed") return "delayed";
+  return "draft";
+}
+
+function computeInstanceProgress(instance: BackendInstance, workflow: BackendWorkflow | undefined): { completed: number; total: number; percent: number } {
+  const progress = computeHeightBasedProgress(
+    workflow?.nodes as WorkflowProgressNode[] | undefined,
+    instance.node_states,
+    instance.current_node,
+    instance.status,
+  );
+
+  if (progress.totalCheckpoints <= 0) {
+    return { completed: 0, total: 0, percent: 0 };
+  }
+
+  const completed = progress.completedCheckpoints;
+  const total = progress.totalCheckpoints;
+  const percent = progress.percentComplete;
+  return { completed, total, percent };
 }
 
 function formatEmployeeName(employee?: BackendEmployee): string {
@@ -478,6 +585,46 @@ export default function WorkstationPage() {
     });
   }, [workflows, filterDept, filterStatus, filterTag]);
 
+  const workflowByID = useMemo(() => {
+    return new Map(workflows.map((workflow) => [workflow.id, workflow]));
+  }, [workflows]);
+
+  const [instanceStatusFilter, setInstanceStatusFilter] = useState<"all" | InstanceDisplayStatus>("all");
+  const [instanceTimeFilter, setInstanceTimeFilter] = useState<"all" | "24h" | "7d" | "30d">("all");
+
+  const filteredInstances = useMemo(() => {
+    const now = Date.now();
+    const cutoffMs = instanceTimeFilter === "24h"
+      ? 24 * 60 * 60 * 1000
+      : instanceTimeFilter === "7d"
+        ? 7 * 24 * 60 * 60 * 1000
+        : instanceTimeFilter === "30d"
+          ? 30 * 24 * 60 * 60 * 1000
+          : 0;
+
+    return instances
+      .filter((instance) => {
+        const workflow = workflowByID.get(instance.workflow_id);
+        const displayStatus = deriveInstanceStatus(instance, workflow);
+
+        if (instanceStatusFilter !== "all" && displayStatus !== instanceStatusFilter) {
+          return false;
+        }
+
+        if (cutoffMs > 0) {
+          const startedAtMs = toTimeValue(instance.started_at);
+          if (startedAtMs == null || now - startedAtMs > cutoffMs) {
+            return false;
+          }
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        return (toTimeValue(b.started_at) || 0) - (toTimeValue(a.started_at) || 0);
+      });
+  }, [instances, workflowByID, instanceStatusFilter, instanceTimeFilter]);
+
   return (
     <>
     <RoleGate
@@ -494,7 +641,7 @@ export default function WorkstationPage() {
         </div>
       }
     >
-      <div className="dashboard-page">
+      <div className="dashboard-page workstation-page">
         {/* Workflows section */}
         <section className="dashboard-section">
           <div className="section-header" style={{ flexWrap: "wrap", gap: 10 }}>
@@ -596,8 +743,30 @@ export default function WorkstationPage() {
         </section>
 
         <section className="dashboard-section" style={{ marginTop: 20 }}>
-          <div className="section-header" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div className="section-header" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <h3 className="section-title">Workflow Instances</h3>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginLeft: "auto" }}>
+              <select className="filter-select" value={instanceStatusFilter} onChange={(e) => setInstanceStatusFilter(e.target.value as "all" | InstanceDisplayStatus)}>
+                <option value="all">All Statuses</option>
+                <option value="running">Running</option>
+                <option value="waiting">Waiting</option>
+                <option value="delayed">Delayed</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <select className="filter-select" value={instanceTimeFilter} onChange={(e) => setInstanceTimeFilter(e.target.value as "all" | "24h" | "7d" | "30d") }>
+                <option value="all">All Time</option>
+                <option value="24h">Last 24 hours</option>
+                <option value="7d">Last week</option>
+                <option value="30d">Last 30 days</option>
+              </select>
+              {(instanceStatusFilter !== "all" || instanceTimeFilter !== "all") && (
+                <button className="action-btn action-btn-outline action-btn-sm" onClick={() => { setInstanceStatusFilter("all"); setInstanceTimeFilter("all"); }}>
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           {!loading && !error && instances.length === 0 && (
@@ -606,34 +775,48 @@ export default function WorkstationPage() {
             </div>
           )}
 
-          {!loading && !error && instances.length > 0 && (
+          {!loading && !error && instances.length > 0 && filteredInstances.length === 0 && (
+            <div className="empty-state" style={{ padding: "28px 0" }}>
+              <p className="table-muted">No instances match the selected filters.</p>
+            </div>
+          )}
+
+          {!loading && !error && filteredInstances.length > 0 && (
             <div className="table-container" style={{ maxHeight: `${10 * 48 + 72}px`, overflowY: "auto" }}>
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Instance</th><th>Workflow</th><th>Status</th><th>Current Node</th><th>Started</th><th>Completed</th>
+                    <th>Instance</th><th>Workflow</th><th>Status</th><th>Progress</th><th>Current Node</th><th>Started</th><th>Completed</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {instances.map((inst) => (
-                    <tr key={inst.id}>
-                      <td className="font-medium">
-                        <button
-                          type="button"
-                          onClick={() => openInstanceDrawer(inst)}
-                          aria-label={`Open workflow instance ${formatInstanceLabel(inst.id)}`}
-                          style={{ background: "none", border: "none", padding: 0, color: "var(--accent)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
-                        >
-                          {formatInstanceLabel(inst.id)}
-                        </button>
-                      </td>
-                      <td>{inst.workflow_name || inst.workflow_id}</td>
-                      <td><span className={`status-dot ${inst.status === "completed" ? "active" : inst.status === "failed" ? "inactive" : "draft"}`}>{inst.status}</span></td>
-                      <td>{inst.current_node || <span className="table-muted">&mdash;</span>}</td>
-                      <td className="table-muted">{timeAgo(inst.started_at)}</td>
-                      <td className="table-muted">{inst.completed_at ? timeAgo(inst.completed_at) : "—"}</td>
-                    </tr>
-                  ))}
+                  {filteredInstances.map((inst) => {
+                    const workflow = workflowByID.get(inst.workflow_id);
+                    const displayStatus = deriveInstanceStatus(inst, workflow);
+                    const progress = computeInstanceProgress(inst, workflow);
+                    return (
+                      <tr key={inst.id}>
+                        <td className="font-medium">
+                          <button
+                            type="button"
+                            onClick={() => openInstanceDrawer(inst)}
+                            aria-label={`Open workflow instance ${formatInstanceLabel(inst.id)}`}
+                            style={{ background: "none", border: "none", padding: 0, color: "var(--accent)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
+                          >
+                            {formatInstanceLabel(inst.id)}
+                          </button>
+                        </td>
+                        <td>{inst.workflow_name || inst.workflow_id}</td>
+                        <td><span className={`status-dot ${instanceStatusDotClass(displayStatus)}`}>{instanceStatusLabel(displayStatus)}</span></td>
+                        <td className="table-muted">
+                          {progress.total > 0 ? `${progress.completed}/${progress.total} (${progress.percent}%)` : "-"}
+                        </td>
+                        <td>{inst.current_node || <span className="table-muted">&mdash;</span>}</td>
+                        <td className="table-muted">{timeAgo(inst.started_at)}</td>
+                        <td className="table-muted">{inst.completed_at ? timeAgo(inst.completed_at) : "—"}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -653,12 +836,20 @@ export default function WorkstationPage() {
                 <p className="table-muted">Loading instance timeline...</p>
               ) : (
                 <>
+                  {(() => {
+                    const instanceWorkflow = workflowByID.get(selectedInstance.workflow_id);
+                    const status = deriveInstanceStatus(selectedInstance, instanceWorkflow);
+                    const progress = computeInstanceProgress(selectedInstance, instanceWorkflow);
+                    return (
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 18 }}>
-                    <div className="overview-stat-card"><span className="overview-stat-label">Status</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.status}</span></div>
+                    <div className="overview-stat-card"><span className="overview-stat-label">Status</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{instanceStatusLabel(status)}</span></div>
                     <div className="overview-stat-card"><span className="overview-stat-label">Current Step</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.current_node || "-"}</span></div>
+                    <div className="overview-stat-card"><span className="overview-stat-label">Progress</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{progress.total > 0 ? `${progress.completed}/${progress.total} = ${progress.percent}%` : "-"}</span></div>
                     <div className="overview-stat-card"><span className="overview-stat-label">Started</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{timeAgo(selectedInstance.started_at)}</span></div>
                     <div className="overview-stat-card"><span className="overview-stat-label">Completed</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.completed_at ? timeAgo(selectedInstance.completed_at) : "-"}</span></div>
                   </div>
+                    );
+                  })()}
 
                   <h4 className="section-title" style={{ marginBottom: 8 }}>Task Decisions</h4>
                   <div className="table-container" style={{ marginBottom: 16 }}>
@@ -756,6 +947,7 @@ export default function WorkstationPage() {
         const openMenuWf = workflows.find((w) => w.id === openMenuId);
         const isDraft = openMenuWf?.status === "draft";
         const isInactive = openMenuWf?.status !== "active";
+        const canTriggerManually = openMenuWf?.status === "active" && openMenuWf?.trigger?.type === "manual";
         return (
           <div ref={dropdownRef} className="wf-row-dropdown" style={{ position: "fixed", top: menuPos.top, left: menuPos.left, zIndex: 9999 }}>
             <button className="wf-row-dropdown-item" onClick={() => { setOpenMenuId(null); router.push(`/workflow-builder?id=${openMenuId}`); }}>
@@ -764,7 +956,7 @@ export default function WorkstationPage() {
               </svg>
               Modify
             </button>
-            {openMenuWf?.status === "active" && (
+            {canTriggerManually && (
               <button className="wf-row-dropdown-item" style={{ color: "#06b6d4" }} onClick={() => { if (openMenuWf) openTriggerDialog(openMenuWf); }}>
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />

@@ -5,6 +5,7 @@ import { useAuth, useOrganization } from "@clerk/nextjs";
 import { ToastContainer, useToast } from "@/components/Toast";
 import TaskDetailDrawer from "@/components/dashboard/TaskDetailDrawer";
 import { MOCK_TASKS } from "@/lib/mock-data";
+import { computeHeightBasedProgress, type WorkflowProgressNode } from "@/lib/workflow-progress";
 import type { Task, TaskStatus, TaskPriority } from "@/types/dashboard";
 import { PRIORITY_CONFIG } from "@/types/dashboard";
 
@@ -39,6 +40,19 @@ type BackendWorkflow = {
   id: string;
   name: string;
   department?: string;
+  nodes?: WorkflowProgressNode[];
+};
+
+type BackendNodeState = {
+  status?: string;
+};
+
+type BackendInstance = {
+  id: string;
+  workflow_id: string;
+  node_states?: Record<string, BackendNodeState>;
+  current_node?: string;
+  status?: string;
 };
 
 type BackendRoleMember = {
@@ -85,13 +99,27 @@ function priorityFromSLA(slaDays?: number): TaskPriority {
   return "low";
 }
 
-function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined): Task {
+function computeInstanceProgress(instance: BackendInstance | undefined, workflow: BackendWorkflow | undefined): { stepNumber: number; totalSteps: number } {
+  const progress = computeHeightBasedProgress(
+    workflow?.nodes,
+    instance?.node_states,
+    instance?.current_node,
+    instance?.status,
+  );
+  return {
+    stepNumber: progress.checkpointNumber,
+    totalSteps: progress.totalCheckpoints,
+  };
+}
+
+function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined, instance: BackendInstance | undefined): Task {
   const status = mapBackendStatus(task.status);
   const priority = priorityFromSLA(task.sla_days);
   const createdAt = task.created_at || new Date().toISOString();
   const dueDate = task.sla_days && task.sla_days > 0
     ? new Date(new Date(createdAt).getTime() + task.sla_days * 24 * 60 * 60 * 1000).toISOString()
     : new Date(new Date(createdAt).getTime() + 2 * 24 * 60 * 60 * 1000).toISOString();
+  const progress = computeInstanceProgress(instance, workflow);
 
   return {
     id: task.id,
@@ -112,8 +140,8 @@ function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined): Tas
     dueDate,
     completedAt: task.completed_at,
     tags: [task.assigned_role || "workflow"].filter(Boolean),
-    stepNumber: 1,
-    totalSteps: 1,
+    stepNumber: progress.stepNumber,
+    totalSteps: progress.totalSteps,
     allowedActions: task.allowed_actions,
     visibleData: task.visible_data,
     nodeId: task.node_id,
@@ -184,7 +212,7 @@ function TaskCard({
           />
         </div>
         <span className="kanban-card-progress-text">
-          {task.stepNumber}/{task.totalSteps}
+          {task.stepNumber}/{task.totalSteps} ({Math.round((task.stepNumber / task.totalSteps) * 100)}%)
         </span>
       </div>
       <div className="kanban-card-footer">
@@ -289,13 +317,17 @@ export default function TasksPage() {
         authFetch(`${WF_API}/api/orgs/${organization.id}/workflows`),
       ]);
 
-      if (!taskRes.ok || !workflowRes.ok) {
-        throw new Error(`Failed to load tasks (${taskRes.status}/${workflowRes.status})`);
+      const instanceRes = await authFetch(`${WF_API}/api/orgs/${organization.id}/instances`);
+
+      if (!taskRes.ok || !workflowRes.ok || !instanceRes.ok) {
+        throw new Error(`Failed to load tasks (${taskRes.status}/${workflowRes.status}/${instanceRes.status})`);
       }
 
       const backendTasks = (await taskRes.json()) as BackendTask[];
       const workflows = (await workflowRes.json()) as BackendWorkflow[];
+      const instances = (await instanceRes.json()) as BackendInstance[];
       const wfMap = new Map(workflows.map((w) => [w.id, w]));
+      const instanceMap = new Map(instances.map((inst) => [inst.id, inst]));
       const taskMap = new Map<string, BackendTask>();
 
       for (const task of backendTasks || []) {
@@ -346,7 +378,7 @@ export default function TasksPage() {
         console.warn("Failed to load role-based tasks", roleErr);
       }
 
-      const mapped = Array.from(taskMap.values()).map((t) => toUITask(t, wfMap.get(t.workflow_id)));
+      const mapped = Array.from(taskMap.values()).map((t) => toUITask(t, wfMap.get(t.workflow_id), instanceMap.get(t.instance_id)));
       if (requestVersion === requestVersionRef.current) {
         setTasks(mapped.length > 0 ? mapped : []);
       }
@@ -364,6 +396,15 @@ export default function TasksPage() {
 
   useEffect(() => {
     loadTasks();
+  }, [loadTasks]);
+
+  useEffect(() => {
+    const intervalID = window.setInterval(() => {
+      void loadTasks();
+    }, 15000);
+    return () => {
+      window.clearInterval(intervalID);
+    };
   }, [loadTasks]);
 
   const handleSelectTask = useCallback((task: Task) => setSelectedTask(task), []);

@@ -3,6 +3,7 @@
 import { Fragment, useEffect } from "react";
 import type { Task } from "@/types/dashboard";
 import { TASK_STATUS_CONFIG, PRIORITY_CONFIG } from "@/types/dashboard";
+import { formatInstanceLabel } from "@/lib/instance-label";
 import TaskActions from "./TaskActions";
 
 interface TaskDetailDrawerProps {
@@ -33,6 +34,8 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
   const statusCfg = TASK_STATUS_CONFIG[task.status];
   const priorityCfg = PRIORITY_CONFIG[task.priority];
   const progress = (task.stepNumber / task.totalSteps) * 100;
+  const completedSteps = Math.min(task.totalSteps, Math.max(0, task.stepNumber));
+  const remainingSteps = Math.max(0, task.totalSteps - completedSteps);
 
   function handleAction(action: string, data?: Record<string, string>) {
     if (onAction) {
@@ -52,9 +55,16 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
         {/* Drawer header */}
         <div className="drawer-header">
           <div className="drawer-header-left">
-            <span className="task-card-id" style={{ fontSize: "0.85rem" }}>
-              {task.id}
-            </span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="task-card-id" style={{ fontSize: "0.85rem" }}>
+                {task.id}
+              </span>
+              {task.instanceId && (
+                <span className="role-badge" style={{ fontSize: "0.75rem" }}>
+                  Instance: {formatInstanceLabel(task.instanceId)}
+                </span>
+              )}
+            </div>
             <div className="task-card-badges">
               <span
                 className="task-badge"
@@ -133,7 +143,8 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
               </div>
               <div className="detail-progress-info">
                 <span>Step {task.stepNumber} of {task.totalSteps}</span>
-                <span>{Math.round(progress)}% complete</span>
+                <span>{completedSteps}/{task.totalSteps} = {progress.toFixed(1)}% complete</span>
+                <span>{remainingSteps} step{remainingSteps === 1 ? "" : "s"} remaining</span>
               </div>
             </div>
             <div className="step-indicators">
@@ -156,6 +167,12 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
                 <dt>Workflow</dt>
                 <dd>{task.workflowName}</dd>
               </div>
+              {task.instanceId && (
+                <div className="detail-info-item">
+                  <dt>Instance</dt>
+                  <dd>{formatInstanceLabel(task.instanceId)}</dd>
+                </div>
+              )}
               <div className="detail-info-item">
                 <dt>Department</dt>
                 <dd>{task.departmentOrigin}</dd>
