@@ -34,3 +34,14 @@ type FormWatch struct {
 	LastResponseTS string             `bson:"last_response_ts" json:"last_response_ts"`
 	CreatedAt      time.Time          `bson:"created_at"       json:"created_at"`
 }
+
+type GmailWatch struct {
+	ID                    primitive.ObjectID `bson:"_id,omitempty"             json:"id"`
+	OrgID                 string             `bson:"org_id"                    json:"org_id"`
+	WorkflowID            string             `bson:"workflow_id"               json:"workflow_id"`
+	Query                 string             `bson:"query"                     json:"query"`
+	Active                bool               `bson:"active"                    json:"active"`
+	LastMessageInternalTS int64              `bson:"last_message_internal_ts"  json:"last_message_internal_ts"`
+	LastPolledAt          time.Time          `bson:"last_polled_at"            json:"last_polled_at"`
+	CreatedAt             time.Time          `bson:"created_at"                json:"created_at"`
+}

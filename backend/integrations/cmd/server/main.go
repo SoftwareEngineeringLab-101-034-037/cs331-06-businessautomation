@@ -15,6 +15,7 @@ import (
 	"github.com/example/business-automation/backend/integrations/internal/integrations"
 	"github.com/example/business-automation/backend/integrations/internal/oauth"
 	"github.com/example/business-automation/backend/integrations/internal/poller"
+	providergmail "github.com/example/business-automation/backend/integrations/internal/providers/gmail"
 	providergoogleforms "github.com/example/business-automation/backend/integrations/internal/providers/googleforms"
 	"github.com/example/business-automation/backend/integrations/internal/storage"
 )
@@ -25,30 +26,56 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	store, err := storage.NewMongo(cfg.MongoURI, cfg.MongoDB)
-	if err != nil {
-		log.Fatalf("connect mongo: %v", err)
+	var store storage.Store
+	var lastMongoErr error
+	for attempt := 1; attempt <= 6; attempt++ {
+		store, err = storage.NewMongo(cfg.MongoURI, cfg.MongoDB)
+		if err == nil {
+			lastMongoErr = nil
+			break
+		}
+		lastMongoErr = err
+		log.Printf("connect mongo attempt %d/6 failed: %v", attempt, err)
+		if attempt < 6 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+	}
+	if lastMongoErr != nil {
+		log.Fatalf("connect mongo after retries: %v", lastMongoErr)
 	}
 	defer store.Close()
 
 	oauthSvc := oauth.NewService(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURI, store)
 	providers := integrations.NewRegistry()
 	gfProvider := providergoogleforms.NewProvider(oauthSvc)
+	gmailProvider := providergmail.NewProvider(oauthSvc)
 	providers.Register(gfProvider)
+	providers.Register(gmailProvider)
 	handler := api.NewServer(cfg, store, oauthSvc, providers, providergoogleforms.ProviderID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if oauthSvc.IsConfigured() {
-		triggerPath := providergoogleforms.TriggerEventPath
+		formsTriggerPath := providergoogleforms.TriggerEventPath
 		if triggerSource, ok := gfProvider.(integrations.TriggerSource); ok {
 			candidate := strings.TrimSpace(triggerSource.TriggerEventPath())
 			if candidate != "" {
-				triggerPath = candidate
+				formsTriggerPath = candidate
 			}
 		}
-		formPoller := poller.New(store, oauthSvc, strings.TrimRight(cfg.WorkflowEngineURL, "/"), triggerPath, cfg.WorkflowServiceKey, cfg.PollIntervalSeconds)
+
+		gmailTriggerPath := providergmail.TriggerEventPath
+		if triggerSource, ok := gmailProvider.(integrations.TriggerSource); ok {
+			candidate := strings.TrimSpace(triggerSource.TriggerEventPath())
+			if candidate != "" {
+				gmailTriggerPath = candidate
+			}
+		}
+
+		formPoller := poller.New(store, oauthSvc, strings.TrimRight(cfg.WorkflowEngineURL, "/"), formsTriggerPath, cfg.WorkflowServiceKey, cfg.PollIntervalSeconds)
+		gmailPoller := poller.NewGmail(store, oauthSvc, strings.TrimRight(cfg.WorkflowEngineURL, "/"), gmailTriggerPath, cfg.WorkflowServiceKey, cfg.PollIntervalSeconds)
 		go formPoller.Start(ctx)
+		go gmailPoller.Start(ctx)
 	} else {
 		log.Printf("Google OAuth is not configured yet. Set %v and restart to enable Forms integration.", oauthSvc.MissingFields())
 	}

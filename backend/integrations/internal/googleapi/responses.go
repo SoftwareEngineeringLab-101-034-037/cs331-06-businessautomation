@@ -9,6 +9,7 @@ import (
 
 type FormResponse struct {
 	ResponseID        string            `json:"responseId"`
+	RespondentEmail   string            `json:"respondentEmail,omitempty"`
 	CreateTime        string            `json:"createTime"`
 	LastSubmittedTime string            `json:"lastSubmittedTime"`
 	Answers           map[string]Answer `json:"answers"`

@@ -9,6 +9,8 @@ import (
 	"github.com/example/business-automation/backend/integrations/internal/config"
 	"github.com/example/business-automation/backend/integrations/internal/integrations"
 	"github.com/example/business-automation/backend/integrations/internal/oauth"
+	providergmail "github.com/example/business-automation/backend/integrations/internal/providers/gmail"
+	gmailhttp "github.com/example/business-automation/backend/integrations/internal/providers/gmail/httpapi"
 	providergoogleforms "github.com/example/business-automation/backend/integrations/internal/providers/googleforms"
 	googleformshttp "github.com/example/business-automation/backend/integrations/internal/providers/googleforms/httpapi"
 	"github.com/example/business-automation/backend/integrations/internal/storage"
@@ -21,6 +23,7 @@ type Server struct {
 	providers  *integrations.Registry
 	defaultID  string
 	gfHTTP     *googleformshttp.Handler
+	gmailHTTP  *gmailhttp.Handler
 	mux        *http.ServeMux
 	httpClient *http.Client
 }
@@ -40,6 +43,9 @@ func NewServer(cfg *config.Config, store storage.Store, oauthSvc *oauth.Service,
 	}
 	if provider, ok := s.providerByService(providergoogleforms.ProviderID); ok {
 		s.gfHTTP = googleformshttp.NewHandler(store, provider, authorizedOrgIDFromContext)
+	}
+	if provider, ok := s.providerByService(providergmail.ProviderID); ok {
+		s.gmailHTTP = gmailhttp.NewHandler(store, provider, authorizedOrgIDFromContext)
 	}
 	s.registerRoutes()
 	return s.mux
@@ -70,6 +76,18 @@ func (s *Server) googleFormsHandler() *googleformshttp.Handler {
 	}
 	s.gfHTTP = googleformshttp.NewHandler(s.store, provider, authorizedOrgIDFromContext)
 	return s.gfHTTP
+}
+
+func (s *Server) gmailHandler() *gmailhttp.Handler {
+	if s.gmailHTTP != nil {
+		return s.gmailHTTP
+	}
+	provider, ok := s.providerByService(providergmail.ProviderID)
+	if !ok {
+		return nil
+	}
+	s.gmailHTTP = gmailhttp.NewHandler(s.store, provider, authorizedOrgIDFromContext)
+	return s.gmailHTTP
 }
 
 func (s *Server) registerRoutes() {

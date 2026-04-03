@@ -23,5 +23,12 @@ type Store interface {
 	UpdateWatch(ctx context.Context, watch *models.FormWatch) error
 	DeleteWatch(ctx context.Context, id string) error
 
+	SaveGmailWatch(ctx context.Context, watch *models.GmailWatch) error
+	GetGmailWatch(ctx context.Context, id string) (*models.GmailWatch, error)
+	ListGmailWatches(ctx context.Context, orgID string) ([]*models.GmailWatch, error)
+	ListActiveGmailWatches(ctx context.Context) ([]*models.GmailWatch, error)
+	UpdateGmailWatch(ctx context.Context, watch *models.GmailWatch) error
+	DeleteGmailWatch(ctx context.Context, id string) error
+
 	Close() error
 }

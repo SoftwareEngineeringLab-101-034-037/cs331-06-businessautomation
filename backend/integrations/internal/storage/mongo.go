@@ -17,9 +17,10 @@ import (
 const defaultWatchProvider = "google_forms"
 
 type MongoStore struct {
-	client  *mongo.Client
-	tokens  *mongo.Collection
-	watches *mongo.Collection
+	client       *mongo.Client
+	tokens       *mongo.Collection
+	watches      *mongo.Collection
+	gmailWatches *mongo.Collection
 }
 
 func NewMongo(uri, dbName string) (*MongoStore, error) {
@@ -36,9 +37,10 @@ func NewMongo(uri, dbName string) (*MongoStore, error) {
 
 	db := client.Database(dbName)
 	s := &MongoStore{
-		client:  client,
-		tokens:  db.Collection("oauth_tokens"),
-		watches: db.Collection("form_watches"),
+		client:       client,
+		tokens:       db.Collection("oauth_tokens"),
+		watches:      db.Collection("form_watches"),
+		gmailWatches: db.Collection("gmail_watches"),
 	}
 	s.ensureIndexes(ctx)
 	return s, nil
@@ -66,6 +68,15 @@ func (s *MongoStore) ensureIndexes(ctx context.Context) {
 	})
 	s.watches.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "provider", Value: 1}},
+	})
+	s.gmailWatches.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "org_id", Value: 1}},
+	})
+	s.gmailWatches.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "active", Value: 1}},
+	})
+	s.gmailWatches.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "workflow_id", Value: 1}},
 	})
 }
 
@@ -284,6 +295,66 @@ func (s *MongoStore) DeleteWatch(ctx context.Context, id string) error {
 		return err
 	}
 	_, err = s.watches.DeleteOne(ctx, bson.M{"_id": oid})
+	return err
+}
+
+func (s *MongoStore) SaveGmailWatch(ctx context.Context, watch *models.GmailWatch) error {
+	watch.ID = primitive.NewObjectID()
+	watch.CreatedAt = time.Now()
+	_, err := s.gmailWatches.InsertOne(ctx, watch)
+	return err
+}
+
+func (s *MongoStore) GetGmailWatch(ctx context.Context, id string) (*models.GmailWatch, error) {
+	oid, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return nil, err
+	}
+	var watch models.GmailWatch
+	err = s.gmailWatches.FindOne(ctx, bson.M{"_id": oid}).Decode(&watch)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, nil
+	}
+	return &watch, err
+}
+
+func (s *MongoStore) ListGmailWatches(ctx context.Context, orgID string) ([]*models.GmailWatch, error) {
+	cur, err := s.gmailWatches.Find(ctx, bson.M{"org_id": orgID})
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	var out []*models.GmailWatch
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *MongoStore) ListActiveGmailWatches(ctx context.Context) ([]*models.GmailWatch, error) {
+	cur, err := s.gmailWatches.Find(ctx, bson.M{"active": true})
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	var out []*models.GmailWatch
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *MongoStore) UpdateGmailWatch(ctx context.Context, watch *models.GmailWatch) error {
+	_, err := s.gmailWatches.ReplaceOne(ctx, bson.M{"_id": watch.ID}, watch)
+	return err
+}
+
+func (s *MongoStore) DeleteGmailWatch(ctx context.Context, id string) error {
+	oid, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return err
+	}
+	_, err = s.gmailWatches.DeleteOne(ctx, bson.M{"_id": oid})
 	return err
 }
 

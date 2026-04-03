@@ -153,7 +153,7 @@ func (p *Poller) processWatch(ctx context.Context, watch *models.FormWatch) erro
 }
 
 func (p *Poller) mapFields(resp googleapi.FormResponse, mapping map[string]string) map[string]string {
-	data := make(map[string]string, len(resp.Answers))
+	data := make(map[string]string, len(resp.Answers)+1)
 	for questionID, answer := range resp.Answers {
 		key := questionID
 		if mapped, ok := mapping[questionID]; ok {
@@ -162,6 +162,14 @@ func (p *Poller) mapFields(resp googleapi.FormResponse, mapping map[string]strin
 		if answer.TextAnswers != nil && len(answer.TextAnswers.Answers) > 0 {
 			data[key] = answer.TextAnswers.Answers[0].Value
 		}
+	}
+
+	if email := strings.TrimSpace(resp.RespondentEmail); email != "" {
+		key := "respondent_email"
+		if mapped, ok := mapping["_respondent_email"]; ok && strings.TrimSpace(mapped) != "" {
+			key = strings.TrimSpace(mapped)
+		}
+		data[key] = email
 	}
 	return data
 }

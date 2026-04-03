@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -29,6 +30,45 @@ func (s *Server) withOrgAuthorization(next http.HandlerFunc) http.HandlerFunc {
 		ctx := context.WithValue(r.Context(), authorizedOrgIDKey, orgID)
 		next(w, r.WithContext(ctx))
 	}
+}
+
+func (s *Server) withOrgAuthorizationOrIntegrationKey(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+		if orgID == "" {
+			writeError(w, http.StatusBadRequest, "org_id required")
+			return
+		}
+
+		providedKey := strings.TrimSpace(r.Header.Get("X-Integration-Key"))
+		if providedKey != "" && !s.hasValidIntegrationKey(r) {
+			writeError(w, http.StatusUnauthorized, "invalid integration key")
+			return
+		}
+
+		if providedKey == "" {
+			status, msg := s.authorizeOrgAccess(r, orgID)
+			if status != 0 {
+				writeError(w, status, msg)
+				return
+			}
+		}
+
+		ctx := context.WithValue(r.Context(), authorizedOrgIDKey, orgID)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+func (s *Server) hasValidIntegrationKey(r *http.Request) bool {
+	expected := strings.TrimSpace(s.cfg.WorkflowServiceKey)
+	provided := strings.TrimSpace(r.Header.Get("X-Integration-Key"))
+	if expected == "" || provided == "" {
+		return false
+	}
+	if len(expected) != len(provided) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
 }
 
 func (s *Server) authorizeOrgAccess(r *http.Request, orgID string) (int, string) {

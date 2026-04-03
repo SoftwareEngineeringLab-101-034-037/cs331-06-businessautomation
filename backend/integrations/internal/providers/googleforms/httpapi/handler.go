@@ -299,6 +299,12 @@ func (h *Handler) listFormFields(w http.ResponseWriter, r *http.Request, formID 
 	}
 
 	fields := make([]formField, 0)
+	fields = append(fields, formField{
+		QuestionID: "_respondent_email",
+		Title:      "Respondent Email",
+		Required:   false,
+		FieldType:  "email",
+	})
 	for idx, item := range form.Items {
 		if item.QuestionItem == nil {
 			continue

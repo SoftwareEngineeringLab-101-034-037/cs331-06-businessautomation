@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	providergmail "github.com/example/business-automation/backend/integrations/internal/providers/gmail"
 )
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +82,35 @@ func (s *Server) handleIntegrationProviderRoutes(w http.ResponseWriter, r *http.
 			u.Path = "/integration/accounts/" + parts[2]
 			r2.URL = &u
 			s.withOrgAuthorization(s.handleIntegrationAccountByID)(w, r2)
+			return
+		}
+		writeError(w, http.StatusNotFound, "route not found")
+		return
+	case "send":
+		if service != providergmail.ProviderID || len(parts) != 2 {
+			writeError(w, http.StatusNotFound, "route not found")
+			return
+		}
+		s.withOrgAuthorizationOrIntegrationKey(s.handleGmailSend)(w, r)
+		return
+	case "messages":
+		if service != providergmail.ProviderID || len(parts) != 2 {
+			writeError(w, http.StatusNotFound, "route not found")
+			return
+		}
+		s.withOrgAuthorization(s.handleGmailMessages)(w, r)
+		return
+	case "watches":
+		if service != providergmail.ProviderID {
+			writeError(w, http.StatusNotFound, "route not found")
+			return
+		}
+		if len(parts) == 2 {
+			s.withOrgAuthorization(s.handleGmailWatches)(w, r)
+			return
+		}
+		if len(parts) == 3 {
+			s.withOrgAuthorization(s.handleGmailWatchByID)(w, r)
 			return
 		}
 		writeError(w, http.StatusNotFound, "route not found")
