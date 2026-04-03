@@ -195,7 +195,7 @@ export default function WorkflowBuilderPage() {
     try {
       const [statusRes, formsRes] = await Promise.all([
         fetch(`${GF_API}/auth/google/status?org_id=${encodeURIComponent(organization.id)}`),
-        fetch(`${GF_API}/forms?org_id=${encodeURIComponent(organization.id)}`),
+        authFetch(`${GF_API}/forms?org_id=${encodeURIComponent(organization.id)}`),
       ]);
 
       if (statusRes.ok) {
@@ -242,7 +242,7 @@ export default function WorkflowBuilderPage() {
     } finally {
       setGoogleFormsLoading(false);
     }
-  }, [organization?.id]);
+  }, [authFetch, organization?.id]);
 
   const loadGoogleFormFields = useCallback(async (formID: string, options?: { applySuggestedMapping?: boolean }) => {
     const trimmedFormID = formID.trim();
@@ -257,7 +257,7 @@ export default function WorkflowBuilderPage() {
     setTriggerFormFieldsError(null);
 
     try {
-      const res = await fetch(`${GF_API}/forms/${encodeURIComponent(trimmedFormID)}/fields?org_id=${encodeURIComponent(organization.id)}`);
+      const res = await authFetch(`${GF_API}/forms/${encodeURIComponent(trimmedFormID)}/fields?org_id=${encodeURIComponent(organization.id)}`);
       if (!res.ok) {
         const body = await res.text();
         throw new Error(`${res.status} ${body}`.trim());
@@ -295,7 +295,7 @@ export default function WorkflowBuilderPage() {
     } finally {
       setTriggerFormFieldsLoading(false);
     }
-  }, [organization?.id, extractGoogleFormID, parseFieldMapping, buildSuggestedFieldMapping, serializeFieldMapping, buildFieldSchemaJSON]);
+  }, [authFetch, organization?.id, extractGoogleFormID, parseFieldMapping, buildSuggestedFieldMapping, serializeFieldMapping, buildFieldSchemaJSON]);
 
   const syncGoogleFormsWatch = useCallback(async (
     workflowID: string,

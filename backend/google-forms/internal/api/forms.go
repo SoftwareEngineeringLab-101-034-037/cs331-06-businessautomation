@@ -11,6 +11,22 @@ import (
 	"github.com/example/business-automation/backend/google-forms/internal/oauth"
 )
 
+func (s *Server) requireAuthorizedOrgID(w http.ResponseWriter, r *http.Request, rawOrgID string) (string, bool) {
+	orgID := strings.TrimSpace(rawOrgID)
+	if orgID == "" {
+		writeError(w, http.StatusBadRequest, "org_id required")
+		return "", false
+	}
+
+	status, msg := s.authorizeOrgAccess(r, orgID)
+	if status != 0 {
+		writeError(w, status, msg)
+		return "", false
+	}
+
+	return orgID, true
+}
+
 func (s *Server) getOAuthClientOrFail(w http.ResponseWriter, r *http.Request, orgID string) (*http.Client, bool) {
 	client, err := s.oauthSvc.GetClient(r.Context(), orgID)
 	if err == nil {
@@ -75,12 +91,17 @@ func (s *Server) createForm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.OrgID == "" || req.Title == "" {
+	if req.Title == "" {
 		writeError(w, http.StatusBadRequest, "org_id and title are required")
 		return
 	}
 
-	client, ok := s.getOAuthClientOrFail(w, r, req.OrgID)
+	orgID, ok := s.requireAuthorizedOrgID(w, r, req.OrgID)
+	if !ok {
+		return
+	}
+
+	client, ok := s.getOAuthClientOrFail(w, r, orgID)
 	if !ok {
 		return
 	}
@@ -113,9 +134,8 @@ func (s *Server) createForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listForms(w http.ResponseWriter, r *http.Request) {
-	orgID := r.URL.Query().Get("org_id")
-	if orgID == "" {
-		writeError(w, http.StatusBadRequest, "org_id required")
+	orgID, ok := s.requireAuthorizedOrgID(w, r, r.URL.Query().Get("org_id"))
+	if !ok {
 		return
 	}
 
@@ -145,9 +165,8 @@ func (s *Server) getForm(w http.ResponseWriter, r *http.Request, formID string) 
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	orgID := r.URL.Query().Get("org_id")
-	if orgID == "" {
-		writeError(w, http.StatusBadRequest, "org_id required")
+	orgID, ok := s.requireAuthorizedOrgID(w, r, r.URL.Query().Get("org_id"))
+	if !ok {
 		return
 	}
 	client, ok := s.getOAuthClientOrFail(w, r, orgID)
@@ -167,9 +186,8 @@ func (s *Server) listFormResponses(w http.ResponseWriter, r *http.Request, formI
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	orgID := r.URL.Query().Get("org_id")
-	if orgID == "" {
-		writeError(w, http.StatusBadRequest, "org_id required")
+	orgID, ok := s.requireAuthorizedOrgID(w, r, r.URL.Query().Get("org_id"))
+	if !ok {
 		return
 	}
 	client, ok := s.getOAuthClientOrFail(w, r, orgID)
@@ -193,9 +211,8 @@ func (s *Server) listFormFields(w http.ResponseWriter, r *http.Request, formID s
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	orgID := r.URL.Query().Get("org_id")
-	if orgID == "" {
-		writeError(w, http.StatusBadRequest, "org_id required")
+	orgID, ok := s.requireAuthorizedOrgID(w, r, r.URL.Query().Get("org_id"))
+	if !ok {
 		return
 	}
 

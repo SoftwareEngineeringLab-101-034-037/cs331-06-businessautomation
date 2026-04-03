@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,7 +30,8 @@ func (s *Server) handleIntegrationAccounts(w http.ResponseWriter, r *http.Reques
 
 	accounts, err := s.oauthSvc.ListConnections(r.Context(), orgID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("integration accounts list failed for org_id=%q: %v", orgID, err)
+		writeError(w, http.StatusInternalServerError, "failed to list integration accounts")
 		return
 	}
 
@@ -65,7 +67,8 @@ func (s *Server) handleIntegrationAccountByID(w http.ResponseWriter, r *http.Req
 	}
 
 	if err := s.oauthSvc.DisconnectAccount(r.Context(), orgID, accountID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("integration account disconnect failed for org_id=%q account_id=%q: %v", orgID, accountID, err)
+		writeError(w, http.StatusInternalServerError, "failed to disconnect integration account")
 		return
 	}
 

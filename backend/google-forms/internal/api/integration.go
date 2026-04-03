@@ -14,6 +14,13 @@ func (s *Server) handleIntegrationStatus(w http.ResponseWriter, r *http.Request)
 	}
 
 	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+	if orgID != "" {
+		status, msg := s.authorizeOrgAccess(r, orgID)
+		if status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+	}
 
 	workflowHealthy := false
 	workflowErr := ""
