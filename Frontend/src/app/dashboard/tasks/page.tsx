@@ -45,6 +45,12 @@ type BackendWorkflow = {
 
 type BackendNodeState = {
   status?: string;
+  output?: string;
+};
+
+type BackendAuditEntry = {
+  action?: string;
+  details?: Record<string, unknown>;
 };
 
 type BackendInstance = {
@@ -53,6 +59,7 @@ type BackendInstance = {
   node_states?: Record<string, BackendNodeState>;
   current_node?: string;
   status?: string;
+  audit_log?: BackendAuditEntry[];
 };
 
 type BackendRoleMember = {
@@ -112,6 +119,64 @@ function computeInstanceProgress(instance: BackendInstance | undefined, workflow
   };
 }
 
+function unknownToErrorString(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value && typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function extractInstanceError(instance: BackendInstance | undefined): string | undefined {
+  if (!instance) {
+    return undefined;
+  }
+
+  const auditLog = Array.isArray(instance.audit_log) ? instance.audit_log : [];
+  for (let idx = auditLog.length - 1; idx >= 0; idx -= 1) {
+    const entry = auditLog[idx];
+    if (!entry) {
+      continue;
+    }
+    const details = entry.details || {};
+    if (entry.action === "instance_failed") {
+      const reason = unknownToErrorString(details.reason);
+      if (reason) {
+        return reason;
+      }
+    }
+    if (entry.action === "action_failed") {
+      const reason = unknownToErrorString(details.error) || unknownToErrorString(details.reason);
+      if (reason) {
+        return reason;
+      }
+    }
+  }
+
+  const nodeStates = Object.values(instance.node_states || {});
+  for (let idx = nodeStates.length - 1; idx >= 0; idx -= 1) {
+    const nodeState = nodeStates[idx];
+    if (nodeState?.status !== "failed") {
+      continue;
+    }
+    const output = unknownToErrorString(nodeState.output);
+    if (output) {
+      return output;
+    }
+  }
+
+  return undefined;
+}
+
 function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined, instance: BackendInstance | undefined): Task {
   const status = mapBackendStatus(task.status);
   const priority = priorityFromSLA(task.sla_days);
@@ -147,6 +212,8 @@ function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined, inst
     nodeId: task.node_id,
     orgId: task.org_id,
     instanceId: task.instance_id,
+    instanceStatus: instance?.status,
+    instanceError: extractInstanceError(instance),
   };
 }
 

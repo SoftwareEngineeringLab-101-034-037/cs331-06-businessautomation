@@ -133,6 +133,28 @@ function prettyActionName(action: string): string {
   }
 }
 
+function formatAuditError(value: unknown): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  const bodyIdx = raw.indexOf(" body=");
+  if (bodyIdx >= 0) {
+    const prefix = raw.slice(0, bodyIdx).trim();
+    const bodyRaw = raw.slice(bodyIdx + " body=".length).trim();
+    try {
+      const parsed = JSON.parse(bodyRaw) as { error?: string };
+      const nested = String(parsed?.error || "").trim();
+      if (nested) {
+        return `${prefix} - ${nested}`;
+      }
+    } catch {
+      // Keep raw fallback when body is not valid JSON.
+    }
+  }
+
+  return raw;
+}
+
 function toTimeValue(value?: string): number | null {
   if (!value) return null;
   const t = new Date(value).getTime();
@@ -898,6 +920,7 @@ export default function WorkstationPage() {
                         if (details.action) pieces.push(`Decision: ${String(details.action)}`);
                         if (details.comment) pieces.push(`Comment: ${String(details.comment)}`);
                         if (details.reason) pieces.push(`Reason: ${String(details.reason)}`);
+                        if (details.error) pieces.push(`Error: ${formatAuditError(details.error)}`);
                         return (
                           <div key={`${entry.timestamp}-${idx}`} style={{ border: "1px solid var(--border-color)", borderRadius: 10, padding: 10, background: "var(--surface-alt)" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>

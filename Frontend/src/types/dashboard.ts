@@ -48,6 +48,8 @@ export interface Task {
   nodeId?: string;
   orgId?: string;
   instanceId?: string;
+  instanceStatus?: string;
+  instanceError?: string;
 }
 
 export const TASK_STATUS_CONFIG: Record<
