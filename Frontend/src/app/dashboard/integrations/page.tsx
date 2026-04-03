@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 
-const GF_API = process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
+const GF_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
 
 type IntegrationStatus = {
 	service?: string;

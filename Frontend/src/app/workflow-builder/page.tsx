@@ -26,8 +26,8 @@ import { createBlankStep, generateStepId, NODE_TYPE_CONFIG } from "@/types/workf
 
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
-const GF_API = (process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "").trim();
-const GF_API_MISSING_ERROR = "NEXT_PUBLIC_GOOGLE_FORMS_API is not configured.";
+const GF_API = (process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086").trim();
+const GF_API_MISSING_ERROR = "NEXT_PUBLIC_INTEGRATIONS_API (or NEXT_PUBLIC_GOOGLE_FORMS_API) is not configured.";
 
 interface BackendDepartment {
   id: string;
@@ -257,7 +257,7 @@ export default function WorkflowBuilderPage() {
       setGoogleAuthConfigured(true);
       setGoogleConnected(false);
       setGoogleForms([]);
-      setGoogleFormsError("Google Forms service is unreachable.");
+      setGoogleFormsError("Integrations service is unreachable.");
     } finally {
       if (isLatest()) {
         setGoogleFormsLoading(false);

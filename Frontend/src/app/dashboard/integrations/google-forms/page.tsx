@@ -5,8 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 
-const GF_API = process.env.NEXT_PUBLIC_GOOGLE_FORMS_API;
-const GF_API_MISSING_ERROR = "NEXT_PUBLIC_GOOGLE_FORMS_API is not configured.";
+const GF_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
+const GF_API_MISSING_ERROR = "NEXT_PUBLIC_INTEGRATIONS_API (or NEXT_PUBLIC_GOOGLE_FORMS_API) is not configured.";
 
 type IntegrationStatus = {
   configured?: boolean;
@@ -228,6 +228,14 @@ export default function GoogleFormsIntegrationPage() {
                   if (!payload.auth_url) {
                     throw new Error("missing auth_url in connect response");
                   }
+
+                  const pollID = window.setInterval(() => {
+                    if (popup.closed) {
+                      window.clearInterval(pollID);
+                      void loadData();
+                    }
+                  }, 1000);
+
                   popup.location.href = payload.auth_url;
                 } catch (err: any) {
                   popup.close();

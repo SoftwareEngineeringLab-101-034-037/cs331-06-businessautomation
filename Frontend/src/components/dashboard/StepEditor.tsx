@@ -236,7 +236,7 @@ export function TriggerEditor({
               </span>
               {!googleAuthConfigured && (
                 <span className="wf-field-hint">
-                  Google Forms integration is not configured yet. A platform admin needs to set OAuth credentials in the Google Forms service.
+                  Google Forms integration is not configured yet. A platform admin needs to set OAuth credentials in the Integrations service.
                 </span>
               )}
               {googleAuthConfigured && !googleConnected && (googleConnectURL || onGoogleConnect) && (
