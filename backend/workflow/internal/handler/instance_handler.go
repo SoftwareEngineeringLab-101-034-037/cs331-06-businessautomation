@@ -2,6 +2,7 @@ package handler
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -73,9 +74,21 @@ func (h *InstanceHandler) StartFromGoogleForms(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow trigger is not form_submit"})
 		return
 	}
+	if wf.Trigger.Config == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow trigger config is required"})
+		return
+	}
 
 	normalizedData := normalizeGoogleFormsData(wf.Trigger.Config, req.Data)
-	instID, err := h.Exec.StartInstance(wf, normalizedData, "")
+	if configuredFormID := strings.TrimSpace(wf.Trigger.Config["form_id"]); configuredFormID != "" {
+		incomingFormID := strings.TrimSpace(fmt.Sprint(normalizedData["form_id"]))
+		if incomingFormID == "" || incomingFormID != configuredFormID {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "form submission does not match configured form_id"})
+			return
+		}
+	}
+
+	instID, err := h.Exec.StartInstance(wf, normalizedData, middleware.GetAuthorizationHeader(c))
 	if err != nil {
 		log.Printf("instance_handler.StartFromGoogleForms failed workflow_id=%q org_id=%q: %v", wf.ID, wf.OrgID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "start failed"})

@@ -11,22 +11,6 @@ import (
 	"github.com/example/business-automation/backend/google-forms/internal/oauth"
 )
 
-func (s *Server) requireAuthorizedOrgID(w http.ResponseWriter, r *http.Request, rawOrgID string) (string, bool) {
-	orgID := strings.TrimSpace(rawOrgID)
-	if orgID == "" {
-		writeError(w, http.StatusBadRequest, "org_id required")
-		return "", false
-	}
-
-	status, msg := s.authorizeOrgAccess(r, orgID)
-	if status != 0 {
-		writeError(w, status, msg)
-		return "", false
-	}
-
-	return orgID, true
-}
-
 func (s *Server) getOAuthClientOrFail(w http.ResponseWriter, r *http.Request, orgID string) (*http.Client, bool) {
 	client, err := s.oauthSvc.GetClient(r.Context(), orgID)
 	if err == nil {
@@ -36,11 +20,16 @@ func (s *Server) getOAuthClientOrFail(w http.ResponseWriter, r *http.Request, or
 		writeError(w, http.StatusServiceUnavailable, "Google Forms integration is not configured yet. Ask a platform admin to set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.")
 		return nil, false
 	}
+	if oauth.IsNotConnectedError(err) {
+		writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
+		return nil, false
+	}
 	if oauth.IsReconnectRequiredError(err) {
 		writeError(w, http.StatusUnauthorized, "Google connection expired or became invalid. Please reconnect Google Forms from the Integrations page.")
 		return nil, false
 	}
-	writeError(w, http.StatusUnauthorized, err.Error())
+	log.Printf("forms.getOAuthClientOrFail failed org_id=%q: %v", orgID, err)
+	writeError(w, http.StatusInternalServerError, "internal error fetching Google OAuth client")
 	return nil, false
 }
 
@@ -61,19 +50,30 @@ func (s *Server) handleForms(w http.ResponseWriter, r *http.Request) {
 //	GET /forms/{formId}/responses    → listFormResponses
 //	GET /forms/{formId}/fields       → listFormFields
 func (s *Server) handleFormByPath(w http.ResponseWriter, r *http.Request) {
-	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/forms/"), "/", 2)
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/forms/"), "/"), "/")
+	if len(parts) == 0 {
+		writeError(w, http.StatusBadRequest, "form_id required")
+		return
+	}
 	formID := parts[0]
 	if formID == "" {
 		writeError(w, http.StatusBadRequest, "form_id required")
 		return
 	}
 	if len(parts) > 1 {
+		if len(parts) > 2 {
+			writeError(w, http.StatusNotFound, "route not found")
+			return
+		}
 		switch parts[1] {
 		case "responses":
 			s.listFormResponses(w, r, formID)
 			return
 		case "fields":
 			s.listFormFields(w, r, formID)
+			return
+		default:
+			writeError(w, http.StatusNotFound, "route not found")
 			return
 		}
 	}
@@ -82,7 +82,6 @@ func (s *Server) handleFormByPath(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createForm(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		OrgID     string               `json:"org_id"`
 		Title     string               `json:"title"`
 		Questions []googleapi.FormItem `json:"questions"`
 		Publish   bool                 `json:"publish"`
@@ -92,12 +91,13 @@ func (s *Server) createForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Title == "" {
-		writeError(w, http.StatusBadRequest, "org_id and title are required")
+		writeError(w, http.StatusBadRequest, "title is required")
 		return
 	}
 
-	orgID, ok := s.requireAuthorizedOrgID(w, r, req.OrgID)
-	if !ok {
+	orgID := authorizedOrgIDFromContext(r.Context())
+	if orgID == "" {
+		writeError(w, http.StatusUnauthorized, "org authorization required")
 		return
 	}
 
@@ -134,8 +134,9 @@ func (s *Server) createForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listForms(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.requireAuthorizedOrgID(w, r, r.URL.Query().Get("org_id"))
-	if !ok {
+	orgID := authorizedOrgIDFromContext(r.Context())
+	if orgID == "" {
+		writeError(w, http.StatusUnauthorized, "org authorization required")
 		return
 	}
 
@@ -165,10 +166,12 @@ func (s *Server) getForm(w http.ResponseWriter, r *http.Request, formID string) 
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	orgID, ok := s.requireAuthorizedOrgID(w, r, r.URL.Query().Get("org_id"))
-	if !ok {
+	orgID := authorizedOrgIDFromContext(r.Context())
+	if orgID == "" {
+		writeError(w, http.StatusUnauthorized, "org authorization required")
 		return
 	}
+
 	client, ok := s.getOAuthClientOrFail(w, r, orgID)
 	if !ok {
 		return
@@ -186,10 +189,12 @@ func (s *Server) listFormResponses(w http.ResponseWriter, r *http.Request, formI
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	orgID, ok := s.requireAuthorizedOrgID(w, r, r.URL.Query().Get("org_id"))
-	if !ok {
+	orgID := authorizedOrgIDFromContext(r.Context())
+	if orgID == "" {
+		writeError(w, http.StatusUnauthorized, "org authorization required")
 		return
 	}
+
 	client, ok := s.getOAuthClientOrFail(w, r, orgID)
 	if !ok {
 		return
@@ -211,8 +216,9 @@ func (s *Server) listFormFields(w http.ResponseWriter, r *http.Request, formID s
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	orgID, ok := s.requireAuthorizedOrgID(w, r, r.URL.Query().Get("org_id"))
-	if !ok {
+	orgID := authorizedOrgIDFromContext(r.Context())
+	if orgID == "" {
+		writeError(w, http.StatusUnauthorized, "org authorization required")
 		return
 	}
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -44,6 +45,20 @@ func Load() (*Config, error) {
 		WorkflowEngineURL:   getenv("WORKFLOW_ENGINE_URL", "http://localhost:8085"),
 		WorkflowServiceKey:  strings.TrimSpace(os.Getenv("WORKFLOW_INTEGRATION_KEY")),
 		PollIntervalSeconds: interval,
+	}
+
+	missing := make([]string, 0, 3)
+	if cfg.GoogleClientID == "" {
+		missing = append(missing, "GOOGLE_CLIENT_ID")
+	}
+	if cfg.GoogleClientSecret == "" {
+		missing = append(missing, "GOOGLE_CLIENT_SECRET")
+	}
+	if cfg.WorkflowServiceKey == "" {
+		missing = append(missing, "WORKFLOW_INTEGRATION_KEY")
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("missing required configuration: %s", strings.Join(missing, ", "))
 	}
 
 	return cfg, nil

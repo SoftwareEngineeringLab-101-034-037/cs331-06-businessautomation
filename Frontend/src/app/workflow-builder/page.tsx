@@ -184,12 +184,17 @@ export default function WorkflowBuilderPage() {
   }, []);
 
   const extractGoogleFormID = useCallback((formURL: string): string => {
-    const m = formURL.match(/\/forms\/d\/([^/]+)/i);
+    const m = formURL.match(/\/forms\/d\/(?:e\/)?([^/]+)/i);
     return m?.[1] || "";
   }, []);
 
+  const loadGoogleFormsRequestIDRef = useRef(0);
+  const loadGoogleFormFieldsRequestIDRef = useRef(0);
+
   const loadGoogleForms = useCallback(async () => {
     if (!organization?.id) return;
+    const requestID = ++loadGoogleFormsRequestIDRef.current;
+    const isLatest = () => loadGoogleFormsRequestIDRef.current === requestID;
     setGoogleFormsLoading(true);
     setGoogleFormsError(null);
     try {
@@ -198,8 +203,11 @@ export default function WorkflowBuilderPage() {
         authFetch(`${GF_API}/forms?org_id=${encodeURIComponent(organization.id)}`),
       ]);
 
+      if (!isLatest()) return;
+
       if (statusRes.ok) {
         const statusData = await statusRes.json();
+        if (!isLatest()) return;
         const configured = statusData?.configured !== false;
         setGoogleAuthConfigured(configured);
         setGoogleConnected(Boolean(statusData?.connected));
@@ -221,6 +229,7 @@ export default function WorkflowBuilderPage() {
 
       if (formsRes.ok) {
         const formsData = await formsRes.json();
+        if (!isLatest()) return;
         setGoogleForms(Array.isArray(formsData?.forms) ? formsData.forms : []);
       } else if (formsRes.status === 401) {
         setGoogleForms([]);
@@ -235,17 +244,22 @@ export default function WorkflowBuilderPage() {
         setGoogleFormsError(`Could not load forms (${formsRes.status}). ${body || ""}`.trim());
       }
     } catch {
+      if (!isLatest()) return;
       setGoogleAuthConfigured(true);
       setGoogleConnected(false);
       setGoogleForms([]);
       setGoogleFormsError("Google Forms service is unreachable.");
     } finally {
-      setGoogleFormsLoading(false);
+      if (isLatest()) {
+        setGoogleFormsLoading(false);
+      }
     }
   }, [authFetch, organization?.id]);
 
   const loadGoogleFormFields = useCallback(async (formID: string, options?: { applySuggestedMapping?: boolean }) => {
     const trimmedFormID = formID.trim();
+    const requestID = ++loadGoogleFormFieldsRequestIDRef.current;
+    const isLatest = () => loadGoogleFormFieldsRequestIDRef.current === requestID;
     if (!organization?.id || !trimmedFormID) {
       setTriggerFormFields([]);
       setTriggerFormFieldsError(null);
@@ -264,6 +278,7 @@ export default function WorkflowBuilderPage() {
       }
 
       const data = await res.json();
+      if (!isLatest()) return;
       const fields: GoogleFormField[] = Array.isArray(data?.fields) ? data.fields : [];
       setTriggerFormFields(fields);
       triggerFieldsFormIDRef.current = trimmedFormID;
@@ -290,10 +305,13 @@ export default function WorkflowBuilderPage() {
         };
       });
     } catch (err: any) {
+      if (!isLatest()) return;
       setTriggerFormFields([]);
       setTriggerFormFieldsError(err?.message || "Failed to load form fields.");
     } finally {
-      setTriggerFormFieldsLoading(false);
+      if (isLatest()) {
+        setTriggerFormFieldsLoading(false);
+      }
     }
   }, [authFetch, organization?.id, extractGoogleFormID, parseFieldMapping, buildSuggestedFieldMapping, serializeFieldMapping, buildFieldSchemaJSON]);
 
@@ -309,7 +327,7 @@ export default function WorkflowBuilderPage() {
     const formID = (triggerConfig.form_id || extractGoogleFormID(triggerConfig.form_url || "")).trim();
     const fieldMapping = parseFieldMapping(triggerConfig.field_mapping || "");
 
-    const watchesRes = await fetch(`${GF_API}/watches?org_id=${encodeURIComponent(organization.id)}`);
+    const watchesRes = await authFetch(`${GF_API}/watches?org_id=${encodeURIComponent(organization.id)}`);
     if (!watchesRes.ok) {
       const txt = await watchesRes.text();
       throw new Error(`watch lookup failed (${watchesRes.status}): ${txt}`);
@@ -321,17 +339,21 @@ export default function WorkflowBuilderPage() {
 
     if (!triggerIsForm || !formID) {
       if (existing && existing.active) {
-        await fetch(`${GF_API}/watches/${existing.id}`, {
+        const disableRes = await authFetch(`${GF_API}/watches/${existing.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ active: false }),
         });
+        if (!disableRes.ok) {
+          const txt = await disableRes.text();
+          throw new Error(`watch disable failed (${disableRes.status}): ${txt}`);
+        }
       }
       return;
     }
 
     if (!existing) {
-      const createRes = await fetch(`${GF_API}/watches`, {
+      const createRes = await authFetch(`${GF_API}/watches`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -350,12 +372,12 @@ export default function WorkflowBuilderPage() {
     }
 
     if (existing.form_id !== formID) {
-    const deleteRes = await fetch(`${GF_API}/watches/${existing.id}`, { method: "DELETE" });
+    const deleteRes = await authFetch(`${GF_API}/watches/${existing.id}`, { method: "DELETE" });
     if (!deleteRes.ok) {
       const txt = await deleteRes.text();
       throw new Error(`watch delete failed (${deleteRes.status}): ${txt}`);
     }
-      const recreateRes = await fetch(`${GF_API}/watches`, {
+      const recreateRes = await authFetch(`${GF_API}/watches`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -373,7 +395,7 @@ export default function WorkflowBuilderPage() {
       return;
     }
 
-    const updateRes = await fetch(`${GF_API}/watches/${existing.id}`, {
+    const updateRes = await authFetch(`${GF_API}/watches/${existing.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -386,7 +408,7 @@ export default function WorkflowBuilderPage() {
       const txt = await updateRes.text();
       throw new Error(`watch update failed (${updateRes.status}): ${txt}`);
     }
-  }, [organization?.id, parseFieldMapping, extractGoogleFormID]);
+  }, [authFetch, organization?.id, parseFieldMapping, extractGoogleFormID]);
 
   /* ── State ── */
   const [draft, setDraft] = useState<WorkflowDraft>(INITIAL_DRAFT);
@@ -1251,7 +1273,7 @@ export default function WorkflowBuilderPage() {
       const hasBody = res.status !== 204 && res.headers.get("content-length") !== "0" && res.headers.get("content-type")?.includes("json");
       const resBody = hasBody ? await res.json() : null;
 
-      const savedWorkflowID = editingId || resBody?.id || resBody?.workflow?.id || resBody?.id;
+      const savedWorkflowID = editingId || resBody?.id || resBody?.workflow?.id;
       if (savedWorkflowID) {
         try {
           await syncGoogleFormsWatch(savedWorkflowID, false, draft.trigger.type, normalizedTriggerConfig);

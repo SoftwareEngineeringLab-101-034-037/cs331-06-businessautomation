@@ -183,14 +183,15 @@ export function TriggerEditor({
                   className="wf-select"
                   value={trigger.config.form_id || ""}
                   onChange={(e) => {
-                    const selected = availableForms.find((f) => f.form_id === e.target.value);
+                    const selectedFormID = e.target.value;
+                    const selected = availableForms.find((f) => f.form_id === selectedFormID);
                     onChange({
                       ...trigger,
                       config: {
                         ...trigger.config,
-                        form_id: e.target.value,
-                        form_url: selected?.responder_uri || trigger.config.form_url || "",
-                        formName: selected?.title || trigger.config.formName || "",
+                        form_id: selectedFormID,
+                        form_url: selectedFormID ? (selected?.responder_uri || "") : "",
+                        formName: selectedFormID ? (selected?.title || "") : "",
                         field_mapping: "",
                         field_schema: "",
                       },

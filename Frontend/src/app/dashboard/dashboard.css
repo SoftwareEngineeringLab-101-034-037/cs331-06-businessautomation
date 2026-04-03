@@ -513,7 +513,7 @@
 
 .integration-accounts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -3029,7 +3029,7 @@
 .workflow-data-codekey {
   font-size: 0.68rem;
   color: var(--text-muted);
-  font-family: "Consolas", "Courier New", monospace;
+  font-family: Consolas, Courier New, monospace;
   word-break: break-all;
 }
 
@@ -3041,7 +3041,8 @@
   font-size: 0.84rem;
   color: var(--text-secondary);
   line-height: 1.5;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .workflow-data-empty {

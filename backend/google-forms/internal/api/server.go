@@ -33,8 +33,8 @@ func NewServer(cfg *config.Config, store storage.Store, oauthSvc *oauth.Service)
 func (s *Server) registerRoutes() {
 	oauth.RegisterHandlers(s.mux, s.oauthSvc, s.store)
 
-	s.mux.HandleFunc("/forms", s.handleForms)
-	s.mux.HandleFunc("/forms/", s.handleFormByPath)
+	s.mux.HandleFunc("/forms", s.withOrgAuthorization(s.handleForms))
+	s.mux.HandleFunc("/forms/", s.withOrgAuthorization(s.handleFormByPath))
 	s.mux.HandleFunc("/watches", s.handleWatches)
 	s.mux.HandleFunc("/watches/", s.handleWatchByID)
 	s.mux.HandleFunc("/integration/status", s.handleIntegrationStatus)

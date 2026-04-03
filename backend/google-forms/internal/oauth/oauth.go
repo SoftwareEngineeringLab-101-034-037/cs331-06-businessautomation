@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -43,13 +44,16 @@ type Service struct {
 
 type pendingAuthState struct {
 	OrgID     string
+	UserID    string
 	ExpiresAt time.Time
 }
 
 const authStateTTL = 10 * time.Minute
+const oauthActorCookieName = "gf_oauth_actor"
 
 var ErrOAuthNotConfigured = errors.New("google oauth is not configured on server")
 var ErrOAuthReconnectRequired = errors.New("google oauth reconnect required")
+var ErrOAuthNotConnected = errors.New("google oauth not connected")
 
 func NewService(clientID, clientSecret, redirectURI string, store storage.Store) *Service {
 	missing := make([]string, 0, 3)
@@ -98,11 +102,15 @@ func IsReconnectRequiredError(err error) bool {
 	return errors.Is(err, ErrOAuthReconnectRequired)
 }
 
-func (s *Service) AuthURL(orgID string) string {
+func IsNotConnectedError(err error) bool {
+	return errors.Is(err, ErrOAuthNotConnected)
+}
+
+func (s *Service) AuthURL(orgID, userID string) string {
 	if !s.IsConfigured() {
 		return ""
 	}
-	state, err := s.GenerateState(orgID)
+	state, err := s.GenerateState(orgID, userID)
 	if err != nil {
 		log.Printf("warn: failed to generate oauth state for org %s: %v", orgID, err)
 		return ""
@@ -117,6 +125,11 @@ func (s *Service) Exchange(ctx context.Context, code, orgID string) error {
 	tok, err := s.cfg.Exchange(ctx, code)
 	if err != nil {
 		return fmt.Errorf("exchange code: %w", err)
+	}
+
+	grantedScopes := parseTokenScopes(tok)
+	if ok, missing := hasRequiredScopes(grantedScopes, scopes); !ok {
+		return fmt.Errorf("missing required granted scopes %s", strings.Join(missing, ", "))
 	}
 
 	client := s.cfg.Client(ctx, tok)
@@ -171,7 +184,7 @@ func (s *Service) Exchange(ctx context.Context, code, orgID string) error {
 		RefreshToken: tok.RefreshToken,
 		TokenType:    tok.TokenType,
 		Expiry:       tok.Expiry,
-		Scopes:       scopes,
+		Scopes:       grantedScopes,
 		ConnectedAt:  time.Now(),
 	}
 	return s.store.SaveToken(ctx, m)
@@ -189,7 +202,7 @@ func (s *Service) GetClient(ctx context.Context, orgID string) (*http.Client, er
 		return nil, err
 	}
 	if stored == nil {
-		return nil, fmt.Errorf("no google connection for org %s", orgID)
+		return nil, ErrOAuthNotConnected
 	}
 	if ok, missing := hasRequiredScopes(stored.Scopes, scopes); !ok {
 		return nil, fmt.Errorf("%w: missing scopes %s", ErrOAuthReconnectRequired, strings.Join(missing, ", "))
@@ -290,6 +303,57 @@ func (s *Service) DisconnectAccount(ctx context.Context, orgID, accountID string
 }
 
 func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
+	authorizeOrg := func(r *http.Request, orgID string) (int, string) {
+		return authorizeOrgAccess(r, orgID)
+	}
+
+	mux.HandleFunc("/auth/google/connect-url", func(w http.ResponseWriter, r *http.Request) {
+		if !svc.IsConfigured() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+				"error":          ErrOAuthNotConfigured.Error(),
+				"configured":     false,
+				"missing_fields": svc.MissingFields(),
+				"action":         "Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI in service environment, then restart.",
+			})
+			return
+		}
+
+		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+		if orgID == "" {
+			writeError(w, http.StatusBadRequest, "org_id required")
+			return
+		}
+		status, msg := authorizeOrg(r, orgID)
+		if status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+
+		userID, err := extractBearerUserID(r.Header.Get("Authorization"))
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid authorization token")
+			return
+		}
+
+		authURL := svc.AuthURL(orgID, userID)
+		if authURL == "" {
+			writeError(w, http.StatusInternalServerError, "failed to initialize oauth authorization")
+			return
+		}
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     oauthActorCookieName,
+			Value:    userID,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   false,
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   int(authStateTTL.Seconds()),
+		})
+
+		writeJSON(w, http.StatusOK, map[string]string{"auth_url": authURL})
+	})
+
 	mux.HandleFunc("/auth/google/connect", func(w http.ResponseWriter, r *http.Request) {
 		if !svc.IsConfigured() {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
@@ -301,16 +365,38 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 			return
 		}
 
-		orgID := r.URL.Query().Get("org_id")
+		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 		if orgID == "" {
 			writeError(w, http.StatusBadRequest, "org_id required")
 			return
 		}
-		authURL := svc.AuthURL(orgID)
+		status, msg := authorizeOrg(r, orgID)
+		if status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+
+		userID, err := extractBearerUserID(r.Header.Get("Authorization"))
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid authorization token")
+			return
+		}
+
+		authURL := svc.AuthURL(orgID, userID)
 		if authURL == "" {
 			writeError(w, http.StatusInternalServerError, "failed to initialize oauth authorization")
 			return
 		}
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     oauthActorCookieName,
+			Value:    userID,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   false,
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   int(authStateTTL.Seconds()),
+		})
 		http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
 	})
 
@@ -331,11 +417,25 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 			writeError(w, http.StatusBadRequest, "missing code or state")
 			return
 		}
-		orgID, err := svc.ValidateAndConsumeState(stateToken)
+		orgID, stateUserID, err := svc.ValidateAndConsumeState(stateToken)
 		if err != nil {
 			writeError(w, http.StatusForbidden, "invalid or expired oauth state")
 			return
 		}
+		actorCookie, cookieErr := r.Cookie(oauthActorCookieName)
+		if cookieErr != nil || strings.TrimSpace(actorCookie.Value) == "" || strings.TrimSpace(actorCookie.Value) != stateUserID {
+			writeError(w, http.StatusForbidden, "oauth callback actor mismatch")
+			return
+		}
+		if authHeader := strings.TrimSpace(r.Header.Get("Authorization")); authHeader != "" {
+			currentUserID, userErr := extractBearerUserID(authHeader)
+			if userErr != nil || currentUserID != stateUserID {
+				writeError(w, http.StatusForbidden, "oauth callback actor mismatch")
+				return
+			}
+		}
+
+		http.SetCookie(w, &http.Cookie{Name: oauthActorCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 		if err := svc.Exchange(r.Context(), code, orgID); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -466,9 +566,12 @@ func hasRequiredScopes(granted, required []string) (bool, []string) {
 	return len(missing) == 0, missing
 }
 
-func (s *Service) GenerateState(orgID string) (string, error) {
+func (s *Service) GenerateState(orgID, userID string) (string, error) {
 	if strings.TrimSpace(orgID) == "" {
 		return "", fmt.Errorf("org_id required")
+	}
+	if strings.TrimSpace(userID) == "" {
+		return "", fmt.Errorf("user_id required")
 	}
 
 	raw := make([]byte, 24)
@@ -484,16 +587,16 @@ func (s *Service) GenerateState(orgID string) (string, error) {
 			delete(s.authStates, key)
 		}
 	}
-	s.authStates[state] = pendingAuthState{OrgID: orgID, ExpiresAt: now.Add(authStateTTL)}
+	s.authStates[state] = pendingAuthState{OrgID: orgID, UserID: userID, ExpiresAt: now.Add(authStateTTL)}
 	s.stateMu.Unlock()
 
 	return state, nil
 }
 
-func (s *Service) ValidateAndConsumeState(state string) (string, error) {
+func (s *Service) ValidateAndConsumeState(state string) (string, string, error) {
 	trimmed := strings.TrimSpace(state)
 	if trimmed == "" {
-		return "", fmt.Errorf("state is required")
+		return "", "", fmt.Errorf("state is required")
 	}
 
 	s.stateMu.Lock()
@@ -501,17 +604,125 @@ func (s *Service) ValidateAndConsumeState(state string) (string, error) {
 
 	pending, ok := s.authStates[trimmed]
 	if !ok {
-		return "", fmt.Errorf("state not found")
+		return "", "", fmt.Errorf("state not found")
 	}
 	delete(s.authStates, trimmed)
 
 	if time.Now().After(pending.ExpiresAt) {
-		return "", fmt.Errorf("state expired")
+		return "", "", fmt.Errorf("state expired")
 	}
 	if strings.TrimSpace(pending.OrgID) == "" {
-		return "", fmt.Errorf("state missing org")
+		return "", "", fmt.Errorf("state missing org")
 	}
-	return pending.OrgID, nil
+	if strings.TrimSpace(pending.UserID) == "" {
+		return "", "", fmt.Errorf("state missing user")
+	}
+	return pending.OrgID, pending.UserID, nil
+}
+
+func parseTokenScopes(tok *oauth2.Token) []string {
+	raw := tok.Extra("scope")
+	out := make([]string, 0)
+	seen := make(map[string]struct{})
+	appendScope := func(v string) {
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+
+	switch v := raw.(type) {
+	case string:
+		for _, part := range strings.Fields(v) {
+			appendScope(part)
+		}
+	case []string:
+		for _, part := range v {
+			appendScope(part)
+		}
+	case []interface{}:
+		for _, part := range v {
+			appendScope(fmt.Sprint(part))
+		}
+	}
+	return out
+}
+
+func authorizeOrgAccess(r *http.Request, orgID string) (int, string) {
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authHeader == "" || !strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		return http.StatusUnauthorized, "missing or invalid authorization header"
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_SERVICE_URL")), "/")
+	if baseURL == "" {
+		baseURL = "http://localhost:8080"
+	}
+
+	verifyURL := fmt.Sprintf("%s/api/orgs/%s/roles", baseURL, url.PathEscape(orgID))
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, verifyURL, nil)
+	if err != nil {
+		return http.StatusInternalServerError, "failed to build auth verification request"
+	}
+	req.Header.Set("Authorization", authHeader)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return http.StatusBadGateway, "failed to verify org access"
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return 0, ""
+	case http.StatusUnauthorized:
+		return http.StatusUnauthorized, "invalid or expired authorization token"
+	case http.StatusForbidden, http.StatusNotFound:
+		return http.StatusForbidden, "forbidden for org"
+	default:
+		return http.StatusBadGateway, "auth service verification failed"
+	}
+}
+
+func extractBearerUserID(authHeader string) (string, error) {
+	header := strings.TrimSpace(authHeader)
+	if header == "" {
+		return "", fmt.Errorf("missing authorization header")
+	}
+	if !strings.HasPrefix(strings.ToLower(header), "bearer ") {
+		return "", fmt.Errorf("invalid authorization header")
+	}
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid authorization header")
+	}
+	token := strings.TrimSpace(parts[1])
+	if token == "" {
+		return "", fmt.Errorf("missing bearer token")
+	}
+	jwtParts := strings.Split(token, ".")
+	if len(jwtParts) != 3 {
+		return "", fmt.Errorf("invalid jwt format")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(jwtParts[1])
+	if err != nil {
+		return "", fmt.Errorf("decode jwt payload: %w", err)
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return "", fmt.Errorf("parse jwt payload: %w", err)
+	}
+	sub, _ := claims["sub"].(string)
+	if strings.TrimSpace(sub) == "" {
+		return "", fmt.Errorf("missing sub claim")
+	}
+	return strings.TrimSpace(sub), nil
 }
 
 // isRefreshReauthError uses string matching because golang.org/x/oauth2 does

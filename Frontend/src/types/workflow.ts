@@ -351,7 +351,11 @@ export function createBlankStep(
   order: number,
   position?: { x: number; y: number },
 ): WorkflowStep {
-  const normalizedOrder = Math.max(1, Math.floor(order));
+  let rawOrder = Number(order);
+  if (!Number.isFinite(rawOrder)) {
+    rawOrder = 1;
+  }
+  const normalizedOrder = Math.max(1, Math.floor(rawOrder));
   return {
     id: generateStepId(normalizedOrder),
     type: "task",

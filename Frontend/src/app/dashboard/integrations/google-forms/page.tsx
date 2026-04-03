@@ -45,7 +45,7 @@ export default function GoogleFormsIntegrationPage() {
 
   const connectUrl = useMemo(() => {
     if (!organization?.id) return "";
-    return `${GF_API}/auth/google/connect?org_id=${encodeURIComponent(organization.id)}`;
+    return `${GF_API}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}`;
   }, [organization?.id]);
 
   const authFetch = useCallback(async (input: string, init: RequestInit = {}) => {
@@ -168,9 +168,22 @@ export default function GoogleFormsIntegrationPage() {
               className="action-btn action-btn-primary"
               type="button"
               disabled={!connectUrl || !status?.configured}
-              onClick={() => {
+              onClick={async () => {
                 if (!connectUrl || !status?.configured) return;
-                window.open(connectUrl, "_blank", "noopener,noreferrer");
+                try {
+                  const res = await authFetch(connectUrl);
+                  if (!res.ok) {
+                    const body = await res.text();
+                    throw new Error(`${res.status} ${body}`);
+                  }
+                  const payload = await res.json() as { auth_url?: string };
+                  if (!payload.auth_url) {
+                    throw new Error("missing auth_url in connect response");
+                  }
+                  window.open(payload.auth_url, "_blank", "noopener,noreferrer");
+                } catch (err: any) {
+                  setError(err?.message || "Failed to start Google OAuth connect flow");
+                }
               }}
             >
               Connect New Account
