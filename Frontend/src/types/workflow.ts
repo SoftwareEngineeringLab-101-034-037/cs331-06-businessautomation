@@ -113,7 +113,7 @@ export const CONNECTOR_CONFIG: Record<
   { label: string; icon: string; color: string; paramFields: ConnectorParamField[] }
 > = {
   email: {
-    label: "Send Email",
+    label: "Gmail Send Email",
     icon: "email",
     color: "#3b82f6",
     paramFields: [
@@ -121,6 +121,7 @@ export const CONNECTOR_CONFIG: Record<
       { key: "cc", label: "CC", placeholder: "cc@company.com (optional)" },
       { key: "subject", label: "Subject", placeholder: "Expense Request: {{data.title}}", required: true },
       { key: "body_template", label: "Body", placeholder: "Please review the expense of {{data.amount}}...", multiline: true, required: true },
+      { key: "from_account_id", label: "Send From Account", placeholder: "primary or connected Gmail account email" },
       { key: "from_name", label: "From Name", placeholder: "Workflow System" },
     ],
   },

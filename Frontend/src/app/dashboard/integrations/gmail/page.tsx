@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 
-const GF_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
-const GF_API_MISSING_ERROR = "NEXT_PUBLIC_INTEGRATIONS_API (or NEXT_PUBLIC_GOOGLE_FORMS_API) is not configured.";
+const INTEGRATIONS_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
+const INTEGRATIONS_API_MISSING_ERROR = "NEXT_PUBLIC_INTEGRATIONS_API (or NEXT_PUBLIC_GOOGLE_FORMS_API) is not configured.";
 
 type IntegrationStatus = {
   configured?: boolean;
@@ -36,20 +36,28 @@ type ConnectedAccount = {
   is_primary: boolean;
 };
 
-export default function GoogleFormsIntegrationPage() {
+export default function GmailIntegrationPage() {
   const { getToken } = useAuth();
   const { organization } = useOrganization();
+
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  const [sendTo, setSendTo] = useState("");
+  const [sendSubject, setSendSubject] = useState("Workflow test email");
+  const [sendBody, setSendBody] = useState("This is a test email from the workflow Gmail integration page.");
+  const [sendResult, setSendResult] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+
   const loadDataRequestIdRef = useRef(0);
-  const gfApiBase = (GF_API || "").trim();
+  const apiBase = (INTEGRATIONS_API || "").trim();
 
   const connectUrl = useMemo(() => {
-    if (!organization?.id || !gfApiBase) return "";
-    return `${gfApiBase}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}&service=google_forms`;
-  }, [gfApiBase, organization?.id]);
+    if (!organization?.id || !apiBase) return "";
+    return `${apiBase}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}&service=gmail`;
+  }, [apiBase, organization?.id]);
 
   const authFetch = useCallback(async (input: string, init: RequestInit = {}) => {
     const token = await getToken();
@@ -72,18 +80,18 @@ export default function GoogleFormsIntegrationPage() {
     setAccounts([]);
     setError(null);
 
-    if (!gfApiBase) {
+    if (!apiBase) {
       if (isLatest()) {
-        setError(GF_API_MISSING_ERROR);
+        setError(INTEGRATIONS_API_MISSING_ERROR);
       }
       return;
     }
-    setLoading(true);
 
+    setLoading(true);
     try {
       const [statusRes, accountsRes] = await Promise.all([
-        authFetch(`${gfApiBase}/integrations/google_forms/status?org_id=${encodeURIComponent(organization.id)}`),
-        authFetch(`${gfApiBase}/integration/accounts?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
+        authFetch(`${apiBase}/integrations/gmail/status?org_id=${encodeURIComponent(organization.id)}`),
+        authFetch(`${apiBase}/integrations/gmail/accounts?org_id=${encodeURIComponent(organization.id)}`),
       ]);
 
       if (!isLatest()) return;
@@ -108,13 +116,13 @@ export default function GoogleFormsIntegrationPage() {
       if (!isLatest()) return;
       setStatus(null);
       setAccounts([]);
-      setError(err?.message || "Failed to load Google Forms integration details");
+      setError(err?.message || "Failed to load Gmail integration details");
     } finally {
       if (isLatest()) {
         setLoading(false);
       }
     }
-  }, [gfApiBase, organization?.id, authFetch]);
+  }, [apiBase, organization?.id, authFetch]);
 
   useEffect(() => {
     return () => {
@@ -123,10 +131,10 @@ export default function GoogleFormsIntegrationPage() {
   }, []);
 
   useEffect(() => {
-    if (!gfApiBase) {
-      setError(GF_API_MISSING_ERROR);
+    if (!apiBase) {
+      setError(INTEGRATIONS_API_MISSING_ERROR);
     }
-  }, [gfApiBase]);
+  }, [apiBase]);
 
   useEffect(() => {
     loadData();
@@ -135,15 +143,17 @@ export default function GoogleFormsIntegrationPage() {
   const disconnectAccount = useCallback(
     async (accountID: string) => {
       if (!organization?.id) return;
-      if (!gfApiBase) {
-        setError(GF_API_MISSING_ERROR);
+      if (!apiBase) {
+        setError(INTEGRATIONS_API_MISSING_ERROR);
         return;
       }
+
       setLoading(true);
       setError(null);
+
       try {
         const res = await authFetch(
-          `${gfApiBase}/integration/accounts/${encodeURIComponent(accountID)}?org_id=${encodeURIComponent(organization.id)}&service=google_forms`,
+          `${apiBase}/integrations/gmail/accounts/${encodeURIComponent(accountID)}?org_id=${encodeURIComponent(organization.id)}`,
           { method: "DELETE" },
         );
         if (!res.ok) {
@@ -156,19 +166,21 @@ export default function GoogleFormsIntegrationPage() {
         setLoading(false);
       }
     },
-    [gfApiBase, organization?.id, loadData, authFetch],
+    [apiBase, organization?.id, loadData, authFetch],
   );
 
   const disconnectAll = useCallback(async () => {
     if (!organization?.id) return;
-    if (!gfApiBase) {
-      setError(GF_API_MISSING_ERROR);
+    if (!apiBase) {
+      setError(INTEGRATIONS_API_MISSING_ERROR);
       return;
     }
+
     setLoading(true);
     setError(null);
+
     try {
-      const res = await authFetch(`${gfApiBase}/auth/google/disconnect?org_id=${encodeURIComponent(organization.id)}&service=google_forms`, {
+      const res = await authFetch(`${apiBase}/auth/google/disconnect?org_id=${encodeURIComponent(organization.id)}&service=gmail`, {
         method: "DELETE",
       });
       if (!res.ok) {
@@ -180,7 +192,57 @@ export default function GoogleFormsIntegrationPage() {
       setError(err?.message || "Failed to disconnect accounts");
       setLoading(false);
     }
-  }, [gfApiBase, organization?.id, loadData, authFetch]);
+  }, [apiBase, organization?.id, loadData, authFetch]);
+
+  const sendTestEmail = useCallback(async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setSendResult(null);
+
+    if (!organization?.id) {
+      setError("Select an organization first.");
+      return;
+    }
+    if (!apiBase) {
+      setError(INTEGRATIONS_API_MISSING_ERROR);
+      return;
+    }
+    if (!sendTo.trim()) {
+      setError("Recipient is required.");
+      return;
+    }
+
+    setSending(true);
+    setError(null);
+
+    try {
+      const recipients = sendTo
+        .split(/[;,]/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+
+      const res = await authFetch(`${apiBase}/integrations/gmail/send?org_id=${encodeURIComponent(organization.id)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: recipients,
+          subject: sendSubject,
+          body_text: sendBody,
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`${res.status} ${body}`);
+      }
+
+      const payload = await res.json() as { message_id?: string };
+      setSendResult(`Email sent successfully${payload.message_id ? ` (message: ${payload.message_id})` : ""}.`);
+    } catch (err: any) {
+      setError(err?.message || "Failed to send test email");
+    } finally {
+      setSending(false);
+    }
+  }, [apiBase, organization?.id, sendTo, sendSubject, sendBody, authFetch]);
 
   const missingFields = (status?.missing_fields || []).join(", ");
 
@@ -190,7 +252,7 @@ export default function GoogleFormsIntegrationPage() {
       fallback={
         <div className="dashboard-page">
           <div className="wf-page-card">
-            <h2 className="page-title">Google Forms</h2>
+            <h2 className="page-title">Gmail</h2>
             <p className="page-subtitle">Only admins can manage integrations.</p>
           </div>
         </div>
@@ -200,8 +262,8 @@ export default function GoogleFormsIntegrationPage() {
         <div className="page-header">
           <div>
             <Link href="/dashboard/integrations" className="section-link">&larr; Back to Integrations</Link>
-            <h1 className="page-title">Google Forms</h1>
-            <p className="page-subtitle">Manage setup, account connections, and runtime health.</p>
+            <h1 className="page-title">Gmail</h1>
+            <p className="page-subtitle">Use a dedicated Gmail connection separate from Google Forms.</p>
           </div>
           <div className="integration-actions">
             <button className="action-btn action-btn-outline" onClick={loadData} disabled={loading || !organization?.id}>
@@ -218,12 +280,14 @@ export default function GoogleFormsIntegrationPage() {
                   setError("Popup was blocked by the browser. Please allow popups and try again.");
                   return;
                 }
+
                 try {
                   const res = await authFetch(connectUrl, { credentials: "include" });
                   if (!res.ok) {
                     const body = await res.text();
                     throw new Error(`${res.status} ${body}`);
                   }
+
                   const payload = await res.json() as { auth_url?: string };
                   if (!payload.auth_url) {
                     throw new Error("missing auth_url in connect response");
@@ -239,11 +303,11 @@ export default function GoogleFormsIntegrationPage() {
                   popup.location.href = payload.auth_url;
                 } catch (err: any) {
                   popup.close();
-                  setError(err?.message || "Failed to start Google OAuth connect flow");
+                  setError(err?.message || "Failed to start Gmail OAuth connect flow");
                 }
               }}
             >
-              Connect New Account
+              Connect New Gmail Account
             </button>
           </div>
         </div>
@@ -257,6 +321,12 @@ export default function GoogleFormsIntegrationPage() {
         {error && (
           <div className="wf-page-card" style={{ borderColor: "#ef4444" }}>
             <p className="page-subtitle" style={{ color: "#ef4444" }}>{error}</p>
+          </div>
+        )}
+
+        {sendResult && (
+          <div className="wf-page-card" style={{ borderColor: "#22c55e" }}>
+            <p className="page-subtitle" style={{ color: "#15803d" }}>{sendResult}</p>
           </div>
         )}
 
@@ -329,6 +399,39 @@ export default function GoogleFormsIntegrationPage() {
               </button>
             </div>
           </article>
+
+          <article className="integration-card">
+            <div className="integration-card-head">
+              <h3 className="section-title">Send Test Email</h3>
+            </div>
+            <form onSubmit={sendTestEmail} style={{ display: "grid", gap: 10 }}>
+              <input
+                className="wf-input"
+                placeholder="recipient@example.com"
+                value={sendTo}
+                onChange={(event) => setSendTo(event.target.value)}
+              />
+              <input
+                className="wf-input"
+                placeholder="Subject"
+                value={sendSubject}
+                onChange={(event) => setSendSubject(event.target.value)}
+              />
+              <textarea
+                className="wf-textarea"
+                rows={4}
+                placeholder="Email body"
+                value={sendBody}
+                onChange={(event) => setSendBody(event.target.value)}
+              />
+              <button className="action-btn action-btn-primary" type="submit" disabled={sending || !status?.connected}>
+                {sending ? "Sending..." : "Send Test Email"}
+              </button>
+              {!status?.connected && (
+                <span className="wf-field-hint">Connect a Gmail account first to send emails.</span>
+              )}
+            </form>
+          </article>
         </section>
 
         <section className="integration-accounts-section">
@@ -338,7 +441,7 @@ export default function GoogleFormsIntegrationPage() {
 
           {accounts.length === 0 ? (
             <div className="wf-page-card">
-              <p className="page-subtitle">No Google accounts connected yet.</p>
+              <p className="page-subtitle">No Gmail accounts connected yet.</p>
             </div>
           ) : (
             <div className="integration-accounts-grid">

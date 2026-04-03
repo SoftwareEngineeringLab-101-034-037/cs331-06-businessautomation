@@ -356,6 +356,9 @@ export function TriggerEditor({
               <span className="wf-field-hint">
                 Mapped values become global workflow data keys and are available as template tokens like {"{{data.your_field}}"}.
               </span>
+              <span className="wf-field-hint">
+                If your Google Form collects emails, map the "Respondent Email" field to expose it as a workflow variable.
+              </span>
             </div>
           </>
         )}
@@ -381,6 +384,14 @@ interface StepEditorProps {
   }>;
   formsLoading?: boolean;
   onRefreshForms?: () => void;
+  availableGmailAccounts?: Array<{
+    account_id: string;
+    account_email: string;
+    account_name?: string;
+    is_primary?: boolean;
+  }>;
+  gmailAccountsLoading?: boolean;
+  onRefreshGmailAccounts?: () => void;
 }
 
 export function StepEditor({
@@ -393,6 +404,9 @@ export function StepEditor({
   availableForms = [],
   formsLoading = false,
   onRefreshForms,
+  availableGmailAccounts = [],
+  gmailAccountsLoading = false,
+  onRefreshGmailAccounts,
 }: StepEditorProps) {
   const [roleSearch, setRoleSearch] = useState("");
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
@@ -804,6 +818,11 @@ export function StepEditor({
                 <div className="wf-section-label">
                   {CONNECTOR_CONFIG[step.connector.type].label} Parameters
                 </div>
+                {step.connector.type === "email" && (
+                  <span className="wf-field-hint">
+                    This action sends via the Gmail integration. Use Send From Account to target a specific connected Gmail account (email or account id), or leave it blank to use primary.
+                  </span>
+                )}
                 {step.connector.type === "form_submit" && (
                   <div className="wf-field">
                     <label className="wf-field-label">Use Existing Form</label>
@@ -850,7 +869,45 @@ export function StepEditor({
                       {field.label}
                       {field.required && <span className="wf-required-star">*</span>}
                     </label>
-                    {field.options ? (
+                    {step.connector?.type === "email" && field.key === "from_account_id" ? (
+                      <>
+                        <select
+                          className="wf-select"
+                          value={step.connector?.params[field.key] || ""}
+                          onChange={(e) =>
+                            onChange({
+                              ...step,
+                              connector: {
+                                ...step.connector!,
+                                params: { ...step.connector!.params, [field.key]: e.target.value },
+                              },
+                            })
+                          }
+                        >
+                          <option value="">Primary connected account</option>
+                          {availableGmailAccounts.map((account) => {
+                            const fallback = account.account_email || account.account_id;
+                            const label = account.account_name
+                              ? `${account.account_name} (${fallback})`
+                              : fallback;
+                            return (
+                              <option key={account.account_id || account.account_email} value={account.account_id || account.account_email}>
+                                {account.is_primary ? `Primary - ${label}` : label}
+                              </option>
+                            );
+                          })}
+                        </select>
+                        <button
+                          className="action-btn action-btn-outline"
+                          type="button"
+                          style={{ marginTop: 8 }}
+                          onClick={() => onRefreshGmailAccounts?.()}
+                          disabled={gmailAccountsLoading}
+                        >
+                          {gmailAccountsLoading ? "Refreshing accounts..." : "Refresh sender accounts"}
+                        </button>
+                      </>
+                    ) : field.options ? (
                       <select
                         className="wf-select"
                         value={step.connector?.params[field.key] || ""}

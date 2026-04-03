@@ -66,6 +66,13 @@ interface GoogleFormField {
   field_type?: string;
 }
 
+interface GmailAccountOption {
+  account_id: string;
+  account_email: string;
+  account_name?: string;
+  is_primary?: boolean;
+}
+
 /* ── Initial draft ── */
 const INITIAL_STEPS: WorkflowStep[] = [
   {
@@ -191,6 +198,7 @@ export default function WorkflowBuilderPage() {
 
   const loadGoogleFormsRequestIDRef = useRef(0);
   const loadGoogleFormFieldsRequestIDRef = useRef(0);
+  const loadGmailAccountsRequestIDRef = useRef(0);
 
   const loadGoogleForms = useCallback(async () => {
     if (!organization?.id) return;
@@ -208,7 +216,7 @@ export default function WorkflowBuilderPage() {
     setGoogleFormsError(null);
     try {
       const [statusRes, formsRes] = await Promise.all([
-        authFetch(`${GF_API}/auth/google/status?org_id=${encodeURIComponent(organization.id)}`),
+        authFetch(`${GF_API}/auth/google/status?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
         authFetch(`${GF_API}/forms?org_id=${encodeURIComponent(organization.id)}`),
       ]);
 
@@ -261,6 +269,41 @@ export default function WorkflowBuilderPage() {
     } finally {
       if (isLatest()) {
         setGoogleFormsLoading(false);
+      }
+    }
+  }, [authFetch, organization?.id]);
+
+  const loadGmailAccounts = useCallback(async () => {
+    if (!organization?.id) return;
+    if (!GF_API) {
+      setGmailAccounts([]);
+      setGmailAccountsLoading(false);
+      return;
+    }
+
+    const requestID = ++loadGmailAccountsRequestIDRef.current;
+    const isLatest = () => loadGmailAccountsRequestIDRef.current === requestID;
+
+    setGmailAccountsLoading(true);
+
+    try {
+      const response = await authFetch(`${GF_API}/integrations/gmail/accounts?org_id=${encodeURIComponent(organization.id)}`);
+      if (!isLatest()) return;
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Could not load Gmail accounts (${response.status}): ${body}`);
+      }
+
+      const payload = await response.json() as { items?: GmailAccountOption[] };
+      if (!isLatest()) return;
+      setGmailAccounts(Array.isArray(payload?.items) ? payload.items : []);
+    } catch (err: any) {
+      if (!isLatest()) return;
+      setGmailAccounts([]);
+    } finally {
+      if (isLatest()) {
+        setGmailAccountsLoading(false);
       }
     }
   }, [authFetch, organization?.id]);
@@ -341,7 +384,7 @@ export default function WorkflowBuilderPage() {
       return;
     }
     try {
-      const res = await authFetch(`${GF_API}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}`, {
+      const res = await authFetch(`${GF_API}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}&service=google_forms`, {
         credentials: "include",
       });
       if (!res.ok) {
@@ -471,6 +514,8 @@ export default function WorkflowBuilderPage() {
   const [googleFormsError, setGoogleFormsError] = useState<string | null>(null);
   const [googleAuthConfigured, setGoogleAuthConfigured] = useState(true);
   const [googleConnected, setGoogleConnected] = useState(false);
+  const [gmailAccounts, setGmailAccounts] = useState<GmailAccountOption[]>([]);
+  const [gmailAccountsLoading, setGmailAccountsLoading] = useState(false);
   const [triggerFormFields, setTriggerFormFields] = useState<GoogleFormField[]>([]);
   const [triggerFormFieldsLoading, setTriggerFormFieldsLoading] = useState(false);
   const [triggerFormFieldsError, setTriggerFormFieldsError] = useState<string | null>(null);
@@ -632,6 +677,11 @@ export default function WorkflowBuilderPage() {
     if (!organization?.id) return;
     loadGoogleForms();
   }, [organization?.id, loadGoogleForms]);
+
+  useEffect(() => {
+    if (!organization?.id) return;
+    loadGmailAccounts();
+  }, [organization?.id, loadGmailAccounts]);
 
   useEffect(() => {
     const isFormTrigger = draft.trigger.type === "form_submission";
@@ -1747,6 +1797,9 @@ export default function WorkflowBuilderPage() {
                   availableForms={googleForms}
                   formsLoading={googleFormsLoading}
                   onRefreshForms={loadGoogleForms}
+                  availableGmailAccounts={gmailAccounts}
+                  gmailAccountsLoading={gmailAccountsLoading}
+                  onRefreshGmailAccounts={loadGmailAccounts}
                   onChange={handleStepChange}
                   onClose={handleCloseEditor}
                 />
