@@ -44,6 +44,7 @@ export default function GoogleFormsIntegrationPage() {
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [error, setError] = useState<string | null>(null);
   const loadDataRequestIdRef = useRef(0);
+  const oauthPollRef = useRef<number | null>(null);
   const gfApiBase = (GF_API || "").trim();
 
   const connectUrl = useMemo(() => {
@@ -118,6 +119,10 @@ export default function GoogleFormsIntegrationPage() {
 
   useEffect(() => {
     return () => {
+      if (oauthPollRef.current !== null) {
+        window.clearInterval(oauthPollRef.current);
+        oauthPollRef.current = null;
+      }
       loadDataRequestIdRef.current += 1;
     };
   }, []);
@@ -213,6 +218,12 @@ export default function GoogleFormsIntegrationPage() {
               disabled={!connectUrl || !status?.configured}
               onClick={async () => {
                 if (!connectUrl || !status?.configured) return;
+
+                if (oauthPollRef.current !== null) {
+                  window.clearInterval(oauthPollRef.current);
+                  oauthPollRef.current = null;
+                }
+
                 const popup = window.open("", "_blank");
                 if (!popup) {
                   setError("Popup was blocked by the browser. Please allow popups and try again.");
@@ -231,13 +242,21 @@ export default function GoogleFormsIntegrationPage() {
 
                   const pollID = window.setInterval(() => {
                     if (popup.closed) {
-                      window.clearInterval(pollID);
+                      if (oauthPollRef.current !== null) {
+                        window.clearInterval(oauthPollRef.current);
+                        oauthPollRef.current = null;
+                      }
                       void loadData();
                     }
                   }, 1000);
+                  oauthPollRef.current = pollID;
 
                   popup.location.href = payload.auth_url;
                 } catch (err: any) {
+                  if (oauthPollRef.current !== null) {
+                    window.clearInterval(oauthPollRef.current);
+                    oauthPollRef.current = null;
+                  }
                   popup.close();
                   setError(err?.message || "Failed to start Google OAuth connect flow");
                 }

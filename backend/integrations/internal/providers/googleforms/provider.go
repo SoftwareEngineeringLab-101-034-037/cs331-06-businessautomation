@@ -34,7 +34,7 @@ func (p *Provider) IsConfigured() bool {
 
 func (p *Provider) MissingFields() []string {
 	if p.oauthSvc == nil {
-		return nil
+		return []string{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI"}
 	}
 	return p.oauthSvc.MissingFields()
 }

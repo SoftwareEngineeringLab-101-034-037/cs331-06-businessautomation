@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
-	providergoogleforms "github.com/example/business-automation/backend/integrations/internal/providers/googleforms"
 )
 
 func (s *Server) handleIntegrationAccounts(w http.ResponseWriter, r *http.Request) {
@@ -23,7 +21,8 @@ func (s *Server) handleIntegrationAccounts(w http.ResponseWriter, r *http.Reques
 
 	service := strings.TrimSpace(r.URL.Query().Get("service"))
 	if service == "" {
-		service = providergoogleforms.ProviderID
+		writeError(w, http.StatusBadRequest, "service required")
+		return
 	}
 	provider, ok := s.providerByService(service)
 	if !ok {
@@ -71,7 +70,8 @@ func (s *Server) handleIntegrationAccountByID(w http.ResponseWriter, r *http.Req
 
 	service := strings.TrimSpace(r.URL.Query().Get("service"))
 	if service == "" {
-		service = providergoogleforms.ProviderID
+		writeError(w, http.StatusBadRequest, "service required")
+		return
 	}
 	provider, ok := s.providerByService(service)
 	if !ok {

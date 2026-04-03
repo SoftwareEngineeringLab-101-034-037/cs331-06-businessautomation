@@ -67,6 +67,7 @@ var ErrOAuthNotConfigured = errors.New("google oauth is not configured on server
 var ErrOAuthReconnectRequired = errors.New("google oauth reconnect required")
 var ErrOAuthNotConnected = errors.New("google oauth not connected")
 var ErrOAuthAccountNotFound = errors.New("google oauth account not found")
+var ErrOAuthInvalidProvider = errors.New("invalid oauth provider")
 
 func NewService(clientID, clientSecret, redirectURI string, store storage.Store) *Service {
 	missing := make([]string, 0, 3)
@@ -137,12 +138,12 @@ func normalizeProviderID(provider string) string {
 	resolved := strings.TrimSpace(strings.ToLower(provider))
 	resolved = strings.ReplaceAll(resolved, "-", "_")
 	switch resolved {
-	case providerGoogleForms, "googleforms", "forms", "":
+	case providerGoogleForms, "googleforms", "forms":
 		return providerGoogleForms
 	case providerGmail:
 		return providerGmail
 	default:
-		return providerGoogleForms
+		return ""
 	}
 }
 
@@ -155,6 +156,9 @@ func (s *Service) AuthURLForProvider(orgID, userID, provider string) string {
 		return ""
 	}
 	provider = normalizeProviderID(provider)
+	if provider == "" {
+		return ""
+	}
 	state, err := s.GenerateState(orgID, userID, provider)
 	if err != nil {
 		log.Printf("warn: failed to generate oauth state for org %s: %v", orgID, err)
@@ -175,6 +179,9 @@ func (s *Service) ExchangeForProvider(ctx context.Context, code, orgID, provider
 		return ErrOAuthNotConfigured
 	}
 	provider = normalizeProviderID(provider)
+	if provider == "" {
+		return ErrOAuthInvalidProvider
+	}
 	tok, err := s.cfg.Exchange(ctx, code)
 	if err != nil {
 		return fmt.Errorf("exchange code: %w", err)
@@ -259,6 +266,9 @@ func (s *Service) GetClientForProviderAndAccount(ctx context.Context, orgID, pro
 		return nil, ErrOAuthNotConfigured
 	}
 	provider = normalizeProviderID(provider)
+	if provider == "" {
+		return nil, ErrOAuthInvalidProvider
+	}
 
 	stored, err := s.selectStoredToken(ctx, orgID, provider, accountHint)
 	if err != nil {
@@ -347,6 +357,9 @@ func (s *Service) DisconnectForProvider(ctx context.Context, orgID, provider str
 		return nil
 	}
 	provider = normalizeProviderID(provider)
+	if provider == "" {
+		return ErrOAuthInvalidProvider
+	}
 
 	tokens, err := s.store.ListTokens(ctx, orgID, provider)
 	if err != nil {
@@ -363,9 +376,6 @@ func (s *Service) DisconnectForProvider(ctx context.Context, orgID, provider str
 		}
 	}
 
-	if provider == providerGoogleForms {
-		return s.store.DeleteToken(ctx, orgID)
-	}
 	for _, stored := range tokens {
 		if stored == nil {
 			continue
@@ -385,7 +395,11 @@ func (s *Service) ListConnectionsForProvider(ctx context.Context, orgID, provide
 	if !s.IsConfigured() {
 		return []*models.OAuthToken{}, nil
 	}
-	return s.store.ListTokens(ctx, orgID, normalizeProviderID(provider))
+	provider = normalizeProviderID(provider)
+	if provider == "" {
+		return nil, ErrOAuthInvalidProvider
+	}
+	return s.store.ListTokens(ctx, orgID, provider)
 }
 
 func (s *Service) DisconnectAccount(ctx context.Context, orgID, accountID string) error {
@@ -397,6 +411,9 @@ func (s *Service) DisconnectAccountForProvider(ctx context.Context, orgID, provi
 		return nil
 	}
 	provider = normalizeProviderID(provider)
+	if provider == "" {
+		return ErrOAuthInvalidProvider
+	}
 	if strings.TrimSpace(accountID) == "" {
 		return fmt.Errorf("account_id required")
 	}
@@ -454,6 +471,10 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 
 		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 		provider := normalizeProviderID(r.URL.Query().Get("service"))
+		if provider == "" {
+			writeError(w, http.StatusBadRequest, "unsupported service")
+			return
+		}
 		if orgID == "" {
 			writeError(w, http.StatusBadRequest, "org_id required")
 			return
@@ -503,6 +524,10 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 
 		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 		provider := normalizeProviderID(r.URL.Query().Get("service"))
+		if provider == "" {
+			writeError(w, http.StatusBadRequest, "unsupported service")
+			return
+		}
 		if orgID == "" {
 			writeError(w, http.StatusBadRequest, "org_id required")
 			return
@@ -589,6 +614,10 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 		accountID := r.URL.Query().Get("account_id")
 		provider := normalizeProviderID(r.URL.Query().Get("service"))
+		if provider == "" {
+			writeError(w, http.StatusBadRequest, "unsupported service")
+			return
+		}
 		if orgID == "" {
 			writeError(w, http.StatusBadRequest, "org_id required")
 			return
@@ -614,6 +643,10 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 	mux.HandleFunc("/auth/google/status", func(w http.ResponseWriter, r *http.Request) {
 		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 		provider := normalizeProviderID(r.URL.Query().Get("service"))
+		if provider == "" {
+			writeError(w, http.StatusBadRequest, "unsupported service")
+			return
+		}
 		if orgID == "" {
 			writeError(w, http.StatusBadRequest, "org_id required")
 			return
@@ -743,6 +776,9 @@ func (s *Service) GenerateState(orgID, userID string, provider ...string) (strin
 	resolvedProvider := providerGoogleForms
 	if len(provider) > 0 {
 		resolvedProvider = normalizeProviderID(provider[0])
+		if resolvedProvider == "" {
+			return "", ErrOAuthInvalidProvider
+		}
 	}
 
 	raw := make([]byte, 24)
@@ -798,7 +834,11 @@ func (s *Service) ValidateAndConsumeState(state string) (string, string, string,
 	if strings.TrimSpace(pending.UserID) == "" {
 		return "", "", "", fmt.Errorf("state missing user")
 	}
-	return pending.OrgID, pending.UserID, normalizeProviderID(pending.Provider), nil
+	provider := normalizeProviderID(pending.Provider)
+	if provider == "" {
+		return "", "", "", ErrOAuthInvalidProvider
+	}
+	return pending.OrgID, pending.UserID, provider, nil
 }
 
 func buildStateSigningKey(clientSecret string) []byte {

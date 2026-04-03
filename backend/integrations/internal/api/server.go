@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/example/business-automation/backend/integrations/internal/config"
@@ -24,6 +25,7 @@ type Server struct {
 	defaultID  string
 	gfHTTP     *googleformshttp.Handler
 	gmailHTTP  *gmailhttp.Handler
+	handlerMu  sync.Mutex
 	mux        *http.ServeMux
 	httpClient *http.Client
 }
@@ -67,6 +69,9 @@ func normalizeServiceID(input string) string {
 }
 
 func (s *Server) googleFormsHandler() *googleformshttp.Handler {
+	s.handlerMu.Lock()
+	defer s.handlerMu.Unlock()
+
 	if s.gfHTTP != nil {
 		return s.gfHTTP
 	}
@@ -79,6 +84,9 @@ func (s *Server) googleFormsHandler() *googleformshttp.Handler {
 }
 
 func (s *Server) gmailHandler() *gmailhttp.Handler {
+	s.handlerMu.Lock()
+	defer s.handlerMu.Unlock()
+
 	if s.gmailHTTP != nil {
 		return s.gmailHTTP
 	}
@@ -95,8 +103,8 @@ func (s *Server) registerRoutes() {
 
 	s.mux.HandleFunc("/forms", s.withOrgAuthorization(s.handleForms))
 	s.mux.HandleFunc("/forms/", s.withOrgAuthorization(s.handleFormByPath))
-	s.mux.HandleFunc("/watches", s.handleWatches)
-	s.mux.HandleFunc("/watches/", s.handleWatchByID)
+	s.mux.HandleFunc("/watches", s.withOrgAuthorization(s.handleWatches))
+	s.mux.HandleFunc("/watches/", s.withOrgAuthorization(s.handleWatchByID))
 	s.mux.HandleFunc("/integration/status", s.handleIntegrationStatus)
 	s.mux.HandleFunc("/integration/accounts", s.withOrgAuthorization(s.handleIntegrationAccounts))
 	s.mux.HandleFunc("/integration/accounts/", s.withOrgAuthorization(s.handleIntegrationAccountByID))

@@ -31,6 +31,22 @@ type IntegrationDescriptor = {
   tags: string[];
 };
 
+function settledReasonToMessage(reason: unknown): string {
+  if (reason instanceof Error) {
+    return reason.message || "status check failed";
+  }
+  if (typeof reason === "string") {
+    return reason;
+  }
+  if (reason && typeof reason === "object") {
+    const payload = reason as Record<string, unknown>;
+    if (typeof payload.message === "string") {
+      return payload.message;
+    }
+  }
+  return "status check failed";
+}
+
 const INTEGRATIONS: IntegrationDescriptor[] = [
   {
     id: "google_forms",
@@ -92,7 +108,11 @@ export default function IntegrationsPage() {
         if (result.status === "fulfilled") {
           return result.value;
         }
-        return [integration.id, { service: integration.id, oauth_error: "status check failed" } as IntegrationStatus] as const;
+        return [integration.id, {
+          service: integration.id,
+          connected: false,
+          oauth_error: settledReasonToMessage(result.reason),
+        } as IntegrationStatus] as const;
       });
 
       setStatuses(Object.fromEntries(responses));

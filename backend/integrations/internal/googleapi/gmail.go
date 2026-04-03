@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -76,6 +77,24 @@ func SendEmail(client *http.Client, req SendMailRequest) (*SendMailResult, error
 	}
 	if strings.TrimSpace(req.BodyText) == "" && strings.TrimSpace(req.BodyHTML) == "" {
 		return nil, fmt.Errorf("body_text or body_html is required")
+	}
+	if hasHeaderInjection(req.Subject) {
+		return nil, fmt.Errorf("subject contains invalid newline characters")
+	}
+	for _, addr := range to {
+		if hasHeaderInjection(addr) {
+			return nil, fmt.Errorf("to contains invalid newline characters")
+		}
+	}
+	for _, addr := range cc {
+		if hasHeaderInjection(addr) {
+			return nil, fmt.Errorf("cc contains invalid newline characters")
+		}
+	}
+	for _, addr := range bcc {
+		if hasHeaderInjection(addr) {
+			return nil, fmt.Errorf("bcc contains invalid newline characters")
+		}
 	}
 
 	rawMime := buildMimeMessage(to, cc, bcc, req.Subject, req.BodyText, req.BodyHTML)
@@ -150,7 +169,8 @@ func ListMessages(client *http.Client, query string, afterInternalTS int64, maxR
 	for _, item := range listResp.Messages {
 		msg, err := GetMessageMetadata(client, item.ID)
 		if err != nil {
-			return nil, err
+			log.Printf("gmail ListMessages: skip message id=%q metadata error: %v", item.ID, err)
+			continue
 		}
 		if msg.InternalDate <= afterInternalTS {
 			continue
@@ -185,7 +205,10 @@ func GetMessageMetadata(client *http.Client, messageID string) (*GmailMessage, e
 		return nil, fmt.Errorf("decode gmail metadata response: %w", err)
 	}
 
-	internalTS, _ := strconv.ParseInt(strings.TrimSpace(payload.InternalDate), 10, 64)
+	internalTS, err := strconv.ParseInt(strings.TrimSpace(payload.InternalDate), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("parse gmail metadata internalDate: %w", err)
+	}
 	message := &GmailMessage{
 		ID:           payload.ID,
 		ThreadID:     payload.ThreadID,
@@ -263,6 +286,10 @@ func compactEmails(values []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func hasHeaderInjection(value string) bool {
+	return strings.Contains(value, "\r") || strings.Contains(value, "\n")
 }
 
 func urlEncode(input string) string {

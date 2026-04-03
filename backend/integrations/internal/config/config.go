@@ -19,6 +19,7 @@ type Config struct {
 	AuthServiceURL      string
 	WorkflowEngineURL   string
 	WorkflowServiceKey  string
+	CORSAllowedOrigins  []string
 	PollIntervalSeconds int
 }
 
@@ -44,6 +45,7 @@ func Load() (*Config, error) {
 		AuthServiceURL:      getenv("AUTH_SERVICE_URL", "http://localhost:8080"),
 		WorkflowEngineURL:   getenv("WORKFLOW_ENGINE_URL", "http://localhost:8085"),
 		WorkflowServiceKey:  strings.TrimSpace(os.Getenv("WORKFLOW_INTEGRATION_KEY")),
+		CORSAllowedOrigins:  parseCSVEnv("CORS_ALLOWED_ORIGINS"),
 		PollIntervalSeconds: interval,
 	}
 
@@ -69,4 +71,21 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func parseCSVEnv(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
 }

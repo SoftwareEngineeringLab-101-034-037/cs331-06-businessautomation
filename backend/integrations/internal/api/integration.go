@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/example/business-automation/backend/integrations/internal/models"
 	providergoogleforms "github.com/example/business-automation/backend/integrations/internal/providers/googleforms"
@@ -40,7 +41,7 @@ func (s *Server) handleIntegrationStatus(w http.ResponseWriter, r *http.Request)
 	workflowURL := strings.TrimRight(s.cfg.WorkflowEngineURL, "/") + "/health"
 	client := s.httpClient
 	if client == nil {
-		client = &http.Client{}
+		client = &http.Client{Timeout: 5 * time.Second}
 	}
 	resp, err := client.Get(workflowURL)
 	if err != nil {

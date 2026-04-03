@@ -41,6 +41,35 @@ This service now follows an integrations-platform structure while keeping Google
 - Shared platform concerns (org auth checks, route orchestration, storage patterns) stay centralized.
 - Provider-specific auth and polling logic are isolated to avoid cross-provider regressions.
 
+### Org auth controls (auditable)
+
+- Middleware: `withOrgAuthorization` and `withOrgAuthorizationOrIntegrationKey` in `internal/api/authz.go`.
+- Required identity data:
+  - Bearer JWT org context (validated by auth service call to `GET /api/orgs/{orgId}/roles`).
+  - Route/query `org_id` (must match authorized org).
+  - Integration key for trusted service-to-service flows (`X-Integration-Key`) where enabled.
+- Verification steps performed:
+  - Validate auth header shape (`Bearer ...`).
+  - Validate org access by calling auth service with the same token.
+  - Reject org mismatch / missing org (`400`/`403`/`401` as appropriate).
+
+### Verification tests and CI
+
+- Unit test: `withOrgAuthorization` rejects missing `org_id` and invalid auth headers.
+- Integration test: watch endpoints reject cross-org access and only return watches scoped to authorized org.
+- CI step recommendation:
+  - `go test ./...`
+  - security/lint gate for auth middleware callsites.
+
+### Manual verification example
+
+- Request with valid org token:
+  - `curl -H "Authorization: Bearer <jwt>" "http://localhost:8086/watches?org_id=<org-id>"`
+- Expected: success only when `<org-id>` is authorized for `<jwt>`.
+- Request with mismatched org:
+  - `curl -H "Authorization: Bearer <jwt>" "http://localhost:8086/watches?org_id=<other-org>"`
+- Expected: `403 forbidden for org`.
+
 ### Phase 4: Provider-local HTTP handlers
 
 - Google Forms HTTP handlers now live in `internal/providers/googleforms/httpapi/handler.go`.

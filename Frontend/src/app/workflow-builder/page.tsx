@@ -274,7 +274,11 @@ export default function WorkflowBuilderPage() {
   }, [authFetch, organization?.id]);
 
   const loadGmailAccounts = useCallback(async () => {
-    if (!organization?.id) return;
+    if (!organization?.id) {
+      setGmailAccounts([]);
+      setGmailAccountsLoading(false);
+      return;
+    }
     if (!GF_API) {
       setGmailAccounts([]);
       setGmailAccountsLoading(false);
@@ -679,7 +683,6 @@ export default function WorkflowBuilderPage() {
   }, [organization?.id, loadGoogleForms]);
 
   useEffect(() => {
-    if (!organization?.id) return;
     loadGmailAccounts();
   }, [organization?.id, loadGmailAccounts]);
 

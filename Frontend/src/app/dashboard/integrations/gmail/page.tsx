@@ -52,6 +52,8 @@ export default function GmailIntegrationPage() {
   const [sending, setSending] = useState(false);
 
   const loadDataRequestIdRef = useRef(0);
+  const oauthPollRef = useRef<number | null>(null);
+  const oauthPopupRef = useRef<Window | null>(null);
   const apiBase = (INTEGRATIONS_API || "").trim();
 
   const connectUrl = useMemo(() => {
@@ -70,7 +72,7 @@ export default function GmailIntegrationPage() {
     });
   }, [getToken]);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (signal?: AbortSignal) => {
     const requestId = ++loadDataRequestIdRef.current;
     const isLatest = () => loadDataRequestIdRef.current === requestId;
 
@@ -90,8 +92,8 @@ export default function GmailIntegrationPage() {
     setLoading(true);
     try {
       const [statusRes, accountsRes] = await Promise.all([
-        authFetch(`${apiBase}/integrations/gmail/status?org_id=${encodeURIComponent(organization.id)}`),
-        authFetch(`${apiBase}/integrations/gmail/accounts?org_id=${encodeURIComponent(organization.id)}`),
+        authFetch(`${apiBase}/integrations/gmail/status?org_id=${encodeURIComponent(organization.id)}`, { signal }),
+        authFetch(`${apiBase}/integrations/gmail/accounts?org_id=${encodeURIComponent(organization.id)}`, { signal }),
       ]);
 
       if (!isLatest()) return;
@@ -113,6 +115,9 @@ export default function GmailIntegrationPage() {
       setStatus(statusData);
       setAccounts(accountsData.items || []);
     } catch (err: any) {
+      if (err?.name === "AbortError") {
+        return;
+      }
       if (!isLatest()) return;
       setStatus(null);
       setAccounts([]);
@@ -125,7 +130,19 @@ export default function GmailIntegrationPage() {
   }, [apiBase, organization?.id, authFetch]);
 
   useEffect(() => {
+    const clearOAuthPoll = () => {
+      if (oauthPollRef.current !== null) {
+        window.clearInterval(oauthPollRef.current);
+        oauthPollRef.current = null;
+      }
+    };
+
     return () => {
+      clearOAuthPoll();
+      if (oauthPopupRef.current && !oauthPopupRef.current.closed) {
+        oauthPopupRef.current.close();
+      }
+      oauthPopupRef.current = null;
       loadDataRequestIdRef.current += 1;
     };
   }, []);
@@ -137,7 +154,11 @@ export default function GmailIntegrationPage() {
   }, [apiBase]);
 
   useEffect(() => {
-    loadData();
+    const controller = new AbortController();
+    void loadData(controller.signal);
+    return () => {
+      controller.abort();
+    };
   }, [loadData]);
 
   const disconnectAccount = useCallback(
@@ -266,7 +287,7 @@ export default function GmailIntegrationPage() {
             <p className="page-subtitle">Use a dedicated Gmail connection separate from Google Forms.</p>
           </div>
           <div className="integration-actions">
-            <button className="action-btn action-btn-outline" onClick={loadData} disabled={loading || !organization?.id}>
+            <button className="action-btn action-btn-outline" onClick={() => { void loadData(); }} disabled={loading || !organization?.id}>
               {loading ? "Refreshing..." : "Refresh"}
             </button>
             <button
@@ -275,11 +296,18 @@ export default function GmailIntegrationPage() {
               disabled={!connectUrl || !status?.configured}
               onClick={async () => {
                 if (!connectUrl || !status?.configured) return;
+
+                if (oauthPollRef.current !== null) {
+                  window.clearInterval(oauthPollRef.current);
+                  oauthPollRef.current = null;
+                }
+
                 const popup = window.open("", "_blank");
                 if (!popup) {
                   setError("Popup was blocked by the browser. Please allow popups and try again.");
                   return;
                 }
+                oauthPopupRef.current = popup;
 
                 try {
                   const res = await authFetch(connectUrl, { credentials: "include" });
@@ -295,14 +323,30 @@ export default function GmailIntegrationPage() {
 
                   const pollID = window.setInterval(() => {
                     if (popup.closed) {
-                      window.clearInterval(pollID);
+                      if (oauthPollRef.current !== null) {
+                        window.clearInterval(oauthPollRef.current);
+                        oauthPollRef.current = null;
+                      }
+                      if (oauthPopupRef.current === popup) {
+                        oauthPopupRef.current = null;
+                      }
                       void loadData();
                     }
                   }, 1000);
+                  oauthPollRef.current = pollID;
 
                   popup.location.href = payload.auth_url;
                 } catch (err: any) {
-                  popup.close();
+                  if (oauthPollRef.current !== null) {
+                    window.clearInterval(oauthPollRef.current);
+                    oauthPollRef.current = null;
+                  }
+                  if (!popup.closed) {
+                    popup.close();
+                  }
+                  if (oauthPopupRef.current === popup) {
+                    oauthPopupRef.current = null;
+                  }
                   setError(err?.message || "Failed to start Gmail OAuth connect flow");
                 }
               }}

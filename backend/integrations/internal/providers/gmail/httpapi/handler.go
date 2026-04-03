@@ -187,7 +187,8 @@ func (h *Handler) createWatch(w http.ResponseWriter, r *http.Request) {
 		watch.Active = *req.Active
 	}
 	if err := h.store.SaveGmailWatch(r.Context(), watch); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("gmail.createWatch failed org_id=%q workflow_id=%q: %v", orgID, watch.WorkflowID, err)
+		writeError(w, http.StatusInternalServerError, "failed to save gmail watch")
 		return
 	}
 
@@ -203,7 +204,8 @@ func (h *Handler) listWatches(w http.ResponseWriter, r *http.Request) {
 
 	watches, err := h.store.ListGmailWatches(r.Context(), orgID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("gmail.listWatches failed org_id=%q: %v", orgID, err)
+		writeError(w, http.StatusInternalServerError, "unable to retrieve watches")
 		return
 	}
 	if watches == nil {
@@ -221,7 +223,8 @@ func (h *Handler) getWatch(w http.ResponseWriter, r *http.Request, id string) {
 
 	watch, err := h.store.GetGmailWatch(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("gmail.getWatch failed org_id=%q watch_id=%q: %v", orgID, id, err)
+		writeError(w, http.StatusInternalServerError, "unable to retrieve watch")
 		return
 	}
 	if watch == nil || strings.TrimSpace(watch.OrgID) != orgID {
@@ -240,7 +243,8 @@ func (h *Handler) updateWatch(w http.ResponseWriter, r *http.Request, id string)
 
 	watch, err := h.store.GetGmailWatch(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("gmail.updateWatch load failed org_id=%q watch_id=%q: %v", orgID, id, err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	if watch == nil || strings.TrimSpace(watch.OrgID) != orgID {
@@ -268,7 +272,8 @@ func (h *Handler) updateWatch(w http.ResponseWriter, r *http.Request, id string)
 	}
 
 	if err := h.store.UpdateGmailWatch(r.Context(), watch); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("gmail.updateWatch save failed org_id=%q watch_id=%q: %v", orgID, id, err)
+		writeError(w, http.StatusInternalServerError, "failed to update watch")
 		return
 	}
 	writeJSON(w, http.StatusOK, watch)
@@ -282,7 +287,8 @@ func (h *Handler) deleteWatch(w http.ResponseWriter, r *http.Request, id string)
 	}
 	watch, err := h.store.GetGmailWatch(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("gmail.deleteWatch load failed org_id=%q watch_id=%q: %v", orgID, id, err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	if watch == nil || strings.TrimSpace(watch.OrgID) != orgID {
@@ -290,7 +296,8 @@ func (h *Handler) deleteWatch(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	if err := h.store.DeleteGmailWatch(r.Context(), id); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("gmail.deleteWatch failed org_id=%q watch_id=%q: %v", orgID, id, err)
+		writeError(w, http.StatusInternalServerError, "failed to delete watch")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

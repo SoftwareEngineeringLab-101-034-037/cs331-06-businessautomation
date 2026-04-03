@@ -214,9 +214,9 @@ func (h *InstanceHandler) StartFromGmail(c *gin.Context) {
 	}
 
 	if wf.Trigger.Config != nil {
-		incomingFrom := strings.ToLower(strings.TrimSpace(fmt.Sprint(req.Data["_from"])))
-		incomingSubject := strings.ToLower(strings.TrimSpace(fmt.Sprint(req.Data["_subject"])))
-		incomingSnippet := strings.ToLower(strings.TrimSpace(fmt.Sprint(req.Data["_snippet"])))
+		incomingFrom := strings.ToLower(strings.TrimSpace(payloadStringValue(req.Data, "_from")))
+		incomingSubject := strings.ToLower(strings.TrimSpace(payloadStringValue(req.Data, "_subject")))
+		incomingSnippet := strings.ToLower(strings.TrimSpace(payloadStringValue(req.Data, "_snippet")))
 
 		if expectedFrom := strings.ToLower(strings.TrimSpace(wf.Trigger.Config["from_contains"])); expectedFrom != "" {
 			if !strings.Contains(incomingFrom, expectedFrom) {
@@ -247,6 +247,20 @@ func (h *InstanceHandler) StartFromGmail(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"instance_id": instID})
+}
+
+func payloadStringValue(payload map[string]interface{}, key string) string {
+	if payload == nil {
+		return ""
+	}
+	raw, ok := payload[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	if value, ok := raw.(string); ok {
+		return value
+	}
+	return fmt.Sprintf("%v", raw)
 }
 
 func normalizeGmailData(triggerConfig map[string]string, payload map[string]interface{}) map[string]interface{} {

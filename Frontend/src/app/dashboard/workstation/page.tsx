@@ -134,7 +134,33 @@ function prettyActionName(action: string): string {
 }
 
 function formatAuditError(value: unknown): string {
-  const raw = String(value || "").trim();
+  let raw = "";
+
+  if (value instanceof Error) {
+    raw = String(value.message || "").trim();
+  } else if (typeof value === "object" && value !== null) {
+    const payload = value as Record<string, unknown>;
+    if (typeof payload.error === "string") {
+      raw = payload.error.trim();
+    } else if (typeof payload.message === "string") {
+      raw = payload.message.trim();
+    } else if (payload.body != null) {
+      if (typeof payload.body === "string") {
+        raw = payload.body.trim();
+      } else if (typeof payload.body === "object") {
+        const bodyPayload = payload.body as Record<string, unknown>;
+        if (typeof bodyPayload.error === "string") {
+          raw = bodyPayload.error.trim();
+        } else if (typeof bodyPayload.message === "string") {
+          raw = bodyPayload.message.trim();
+        }
+      }
+    }
+  }
+
+  if (!raw) {
+    raw = String(value || "").trim();
+  }
   if (!raw) return "";
 
   const bodyIdx = raw.indexOf(" body=");

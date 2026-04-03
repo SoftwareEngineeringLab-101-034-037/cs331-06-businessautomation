@@ -84,6 +84,9 @@ func (c *IntegrationsGmailConnector) SendForOrg(orgID, to, cc, subject, body, _,
 		}
 		return fmt.Errorf("integrations gmail send failed status=%d body=%s", resp.StatusCode, trimmed)
 	}
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return fmt.Errorf("read integrations gmail send response: %w", err)
+	}
 	return nil
 }
 

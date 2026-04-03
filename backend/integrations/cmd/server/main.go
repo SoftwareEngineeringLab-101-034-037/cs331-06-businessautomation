@@ -82,7 +82,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           withRequestLogging(withCORS(handler)),
+		Handler:           withRequestLogging(withCORS(handler, cfg.CORSAllowedOrigins)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -108,15 +108,13 @@ func main() {
 	}
 }
 
-func withCORS(next http.Handler) http.Handler {
+func withCORS(next http.Handler, allowedOrigins []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
-		if origin != "" {
+		if origin != "" && isAllowedOrigin(origin, allowedOrigins) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Integration-Key")
@@ -126,6 +124,18 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isAllowedOrigin(origin string, allowlist []string) bool {
+	if strings.TrimSpace(origin) == "" || len(allowlist) == 0 {
+		return false
+	}
+	for _, allowed := range allowlist {
+		if strings.EqualFold(strings.TrimSpace(allowed), origin) {
+			return true
+		}
+	}
+	return false
 }
 
 type loggingResponseWriter struct {

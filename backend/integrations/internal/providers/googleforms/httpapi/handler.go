@@ -340,6 +340,7 @@ func (h *Handler) createWatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "integration provider unavailable")
 		return
 	}
+	authorizedOrgID := h.orgID(r.Context())
 
 	var watch models.FormWatch
 	if err := json.NewDecoder(r.Body).Decode(&watch); err != nil {
@@ -352,6 +353,13 @@ func (h *Handler) createWatch(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(watch.Provider) != h.provider.ID() {
 		writeError(w, http.StatusBadRequest, "provider mismatch")
 		return
+	}
+	if authorizedOrgID != "" {
+		if strings.TrimSpace(watch.OrgID) != "" && strings.TrimSpace(watch.OrgID) != authorizedOrgID {
+			writeError(w, http.StatusForbidden, "forbidden for org")
+			return
+		}
+		watch.OrgID = authorizedOrgID
 	}
 	if watch.OrgID == "" || watch.FormID == "" || watch.WorkflowID == "" {
 		writeError(w, http.StatusBadRequest, "org_id, form_id, and workflow_id are required")
@@ -370,7 +378,15 @@ func (h *Handler) listWatches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	orgID := r.URL.Query().Get("org_id")
+	authorizedOrgID := h.orgID(r.Context())
+	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+	if authorizedOrgID != "" {
+		if orgID != "" && orgID != authorizedOrgID {
+			writeError(w, http.StatusForbidden, "forbidden for org")
+			return
+		}
+		orgID = authorizedOrgID
+	}
 	if orgID == "" {
 		writeError(w, http.StatusBadRequest, "org_id required")
 		return
@@ -388,6 +404,7 @@ func (h *Handler) listWatches(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getWatch(w http.ResponseWriter, r *http.Request, id string) {
+	authorizedOrgID := h.orgID(r.Context())
 	watch, err := h.store.GetWatch(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -401,10 +418,15 @@ func (h *Handler) getWatch(w http.ResponseWriter, r *http.Request, id string) {
 		writeError(w, http.StatusNotFound, "watch not found")
 		return
 	}
+	if authorizedOrgID != "" && strings.TrimSpace(watch.OrgID) != authorizedOrgID {
+		writeError(w, http.StatusForbidden, "forbidden for org")
+		return
+	}
 	writeJSON(w, http.StatusOK, watch)
 }
 
 func (h *Handler) updateWatch(w http.ResponseWriter, r *http.Request, id string) {
+	authorizedOrgID := h.orgID(r.Context())
 	existing, err := h.store.GetWatch(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -416,6 +438,10 @@ func (h *Handler) updateWatch(w http.ResponseWriter, r *http.Request, id string)
 	}
 	if h.provider != nil && strings.TrimSpace(existing.Provider) != h.provider.ID() {
 		writeError(w, http.StatusNotFound, "watch not found")
+		return
+	}
+	if authorizedOrgID != "" && strings.TrimSpace(existing.OrgID) != authorizedOrgID {
+		writeError(w, http.StatusForbidden, "forbidden for org")
 		return
 	}
 
@@ -447,6 +473,7 @@ func (h *Handler) updateWatch(w http.ResponseWriter, r *http.Request, id string)
 }
 
 func (h *Handler) deleteWatch(w http.ResponseWriter, r *http.Request, id string) {
+	authorizedOrgID := h.orgID(r.Context())
 	existing, err := h.store.GetWatch(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -458,6 +485,10 @@ func (h *Handler) deleteWatch(w http.ResponseWriter, r *http.Request, id string)
 	}
 	if h.provider != nil && strings.TrimSpace(existing.Provider) != h.provider.ID() {
 		writeError(w, http.StatusNotFound, "watch not found")
+		return
+	}
+	if authorizedOrgID != "" && strings.TrimSpace(existing.OrgID) != authorizedOrgID {
+		writeError(w, http.StatusForbidden, "forbidden for org")
 		return
 	}
 	if err := h.store.DeleteWatch(r.Context(), id); err != nil {

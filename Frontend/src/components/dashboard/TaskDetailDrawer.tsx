@@ -29,6 +29,12 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
     };
   }, [isOpen, onClose]);
 
+  useEffect(() => {
+    if (task?.instanceError) {
+      console.error("Workflow instance error detail:", task.instanceError);
+    }
+  }, [task?.id, task?.instanceError]);
+
   if (!isOpen || !task) return null;
 
   const statusCfg = TASK_STATUS_CONFIG[task.status];
@@ -141,7 +147,7 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
               </svg>
               <div>
                 <strong>Workflow Instance Error</strong>
-                <p>{task.instanceError}</p>
+                <p>{toUserSafeInstanceError(task.instanceError)}</p>
               </div>
             </div>
           )}
@@ -310,6 +316,10 @@ function prettifyDataKey(key: string): string {
   return key
     .replaceAll("_", " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function toUserSafeInstanceError(_rawError: string): string {
+  return "Workflow execution failed. Please contact your administrator.";
 }
 
 function ValueRenderer({ value }: { value: unknown }) {

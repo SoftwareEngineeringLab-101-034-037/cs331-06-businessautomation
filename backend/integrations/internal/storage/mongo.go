@@ -299,6 +299,7 @@ func (s *MongoStore) DeleteWatch(ctx context.Context, id string) error {
 }
 
 func (s *MongoStore) SaveGmailWatch(ctx context.Context, watch *models.GmailWatch) error {
+	watch.Active = true
 	watch.ID = primitive.NewObjectID()
 	watch.CreatedAt = time.Now()
 	_, err := s.gmailWatches.InsertOne(ctx, watch)
