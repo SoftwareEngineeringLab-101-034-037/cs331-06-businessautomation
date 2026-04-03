@@ -79,7 +79,10 @@ func (h *InstanceHandler) StartFromGoogleForms(c *gin.Context) {
 		return
 	}
 	if configuredFormID := strings.TrimSpace(wf.Trigger.Config["form_id"]); configuredFormID != "" {
-		rawIncomingFormID := strings.TrimSpace(fmt.Sprint(req.Data["_form_id"]))
+		rawIncomingFormID := ""
+		if formIDVal, ok := req.Data["_form_id"]; ok && formIDVal != nil {
+			rawIncomingFormID = strings.TrimSpace(fmt.Sprint(formIDVal))
+		}
 		if rawIncomingFormID == "" || rawIncomingFormID != configuredFormID {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "form submission does not match configured form_id"})
 			return
@@ -87,9 +90,14 @@ func (h *InstanceHandler) StartFromGoogleForms(c *gin.Context) {
 	}
 
 	normalizedData := normalizeGoogleFormsData(wf.Trigger.Config, req.Data)
-	responseID := strings.TrimSpace(fmt.Sprint(normalizedData["_response_id"]))
+	responseID := ""
+	if responseVal, ok := normalizedData["_response_id"]; ok && responseVal != nil {
+		responseID = strings.TrimSpace(fmt.Sprint(responseVal))
+	}
 	if responseID == "" {
-		responseID = strings.TrimSpace(fmt.Sprint(normalizedData["form_response_id"]))
+		if responseVal, ok := normalizedData["form_response_id"]; ok && responseVal != nil {
+			responseID = strings.TrimSpace(fmt.Sprint(responseVal))
+		}
 	}
 
 	instID, deduped, err := h.Exec.FindOrStartInstanceByFormResponse(wf, normalizedData, responseID, middleware.GetAuthorizationHeader(c))

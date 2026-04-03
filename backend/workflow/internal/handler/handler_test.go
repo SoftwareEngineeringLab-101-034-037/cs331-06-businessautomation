@@ -130,6 +130,24 @@ func (s *handlerStore) GetInstance(id string) (models.Instance, bool) {
 	return inst, ok
 }
 
+func (s *handlerStore) FindInstanceByWorkflowAndFormResponse(workflowID, formResponseID string) (models.Instance, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, inst := range s.instances {
+		if inst.WorkflowID != workflowID || inst.Data == nil {
+			continue
+		}
+		value, ok := inst.Data["form_response_id"]
+		if !ok || value == nil {
+			continue
+		}
+		if fmt.Sprint(value) == formResponseID {
+			return inst, true, nil
+		}
+	}
+	return models.Instance{}, false, nil
+}
+
 func (s *handlerStore) ListInstancesByWorkflow(workflowID string) ([]models.Instance, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

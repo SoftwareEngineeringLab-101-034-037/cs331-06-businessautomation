@@ -146,6 +146,24 @@ func AddQuestions(client *http.Client, formID string, items []FormItem) error {
 	return nil
 }
 
+func DeleteForm(client *http.Client, formID string) error {
+	req, err := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/%s", driveFilesAPI, url.PathEscape(formID)), nil)
+	if err != nil {
+		return fmt.Errorf("delete form: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete form: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("delete form: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func SetPublished(client *http.Client, formID string, published bool) error {
 	body, _ := json.Marshal(map[string]interface{}{
 		"publishSettings": map[string]interface{}{

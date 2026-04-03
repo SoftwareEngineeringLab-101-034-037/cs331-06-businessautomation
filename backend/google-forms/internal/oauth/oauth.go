@@ -2,7 +2,9 @@ package oauth
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -34,18 +35,18 @@ var scopes = []string{
 const providerGoogleForms = "google_forms"
 
 type Service struct {
-	cfg           *oauth2.Config
-	store         storage.Store
-	configured    bool
-	missingFields []string
-	stateMu       sync.Mutex
-	authStates    map[string]pendingAuthState
+	cfg             *oauth2.Config
+	store           storage.Store
+	configured      bool
+	missingFields   []string
+	stateSigningKey []byte
 }
 
-type pendingAuthState struct {
-	OrgID     string
-	UserID    string
-	ExpiresAt time.Time
+type signedAuthState struct {
+	OrgID     string `json:"org_id"`
+	UserID    string `json:"user_id"`
+	ExpiresAt int64  `json:"exp"`
+	Nonce     string `json:"nonce"`
 }
 
 const authStateTTL = 10 * time.Minute
@@ -77,10 +78,10 @@ func NewService(clientID, clientSecret, redirectURI string, store storage.Store)
 			Scopes:       scopes,
 			Endpoint:     google.Endpoint,
 		},
-		store:         store,
-		configured:    configured,
-		missingFields: missing,
-		authStates:    make(map[string]pendingAuthState),
+		store:           store,
+		configured:      configured,
+		missingFields:   missing,
+		stateSigningKey: buildStateSigningKey(clientSecret),
 	}
 }
 
@@ -138,7 +139,8 @@ func (s *Service) Exchange(ctx context.Context, code, orgID string) error {
 		if accountEmail != "" {
 			accountID = strings.ToLower(accountEmail)
 		} else {
-			accountID = fmt.Sprintf("account-%d", time.Now().UnixNano())
+			log.Printf("oauth.exchange missing stable account identifier org_id=%q: google user info returned empty sub and email", orgID)
+			return fmt.Errorf("missing stable account identifier from google user info")
 		}
 	}
 	if accountName == "" {
@@ -247,10 +249,13 @@ func (s *Service) Disconnect(ctx context.Context, orgID string) error {
 		return err
 	}
 	for _, stored := range tokens {
-		resp, err := http.PostForm("https://oauth2.googleapis.com/revoke",
-			url.Values{"token": {stored.AccessToken}})
-		if err == nil {
-			resp.Body.Close()
+		for _, token := range []string{stored.AccessToken, stored.RefreshToken} {
+			if strings.TrimSpace(token) == "" {
+				continue
+			}
+			if err := revokeToken(ctx, token); err != nil {
+				log.Printf("warn: revoke token failed org_id=%q account_id=%q: %v", orgID, stored.AccountID, err)
+			}
 		}
 	}
 	return s.store.DeleteToken(ctx, orgID)
@@ -279,10 +284,13 @@ func (s *Service) DisconnectAccount(ctx context.Context, orgID, accountID string
 		return nil
 	}
 
-	resp, revokeErr := http.PostForm("https://oauth2.googleapis.com/revoke",
-		url.Values{"token": {tok.AccessToken}})
-	if revokeErr == nil {
-		resp.Body.Close()
+	for _, token := range []string{tok.AccessToken, tok.RefreshToken} {
+		if strings.TrimSpace(token) == "" {
+			continue
+		}
+		if revokeErr := revokeToken(ctx, token); revokeErr != nil {
+			log.Printf("warn: revoke token failed org_id=%q account_id=%q: %v", orgID, accountID, revokeErr)
+		}
 	}
 
 	if err := s.store.DeleteTokenByAccount(ctx, orgID, providerGoogleForms, accountID); err != nil {
@@ -591,19 +599,20 @@ func (s *Service) GenerateState(orgID, userID string) (string, error) {
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("generate state bytes: %w", err)
 	}
-	state := base64.RawURLEncoding.EncodeToString(raw)
 
-	now := time.Now()
-	s.stateMu.Lock()
-	for key, pending := range s.authStates {
-		if pending.ExpiresAt.Before(now) {
-			delete(s.authStates, key)
-		}
+	statePayload := signedAuthState{
+		OrgID:     strings.TrimSpace(orgID),
+		UserID:    strings.TrimSpace(userID),
+		ExpiresAt: time.Now().Add(authStateTTL).Unix(),
+		Nonce:     base64.RawURLEncoding.EncodeToString(raw),
 	}
-	s.authStates[state] = pendingAuthState{OrgID: orgID, UserID: userID, ExpiresAt: now.Add(authStateTTL)}
-	s.stateMu.Unlock()
-
-	return state, nil
+	payloadJSON, err := json.Marshal(statePayload)
+	if err != nil {
+		return "", fmt.Errorf("marshal oauth state: %w", err)
+	}
+	encodedPayload := base64.RawURLEncoding.EncodeToString(payloadJSON)
+	signature := s.signStatePayload(encodedPayload)
+	return encodedPayload + "." + signature, nil
 }
 
 func (s *Service) ValidateAndConsumeState(state string) (string, string, error) {
@@ -611,17 +620,25 @@ func (s *Service) ValidateAndConsumeState(state string) (string, string, error) 
 	if trimmed == "" {
 		return "", "", fmt.Errorf("state is required")
 	}
-
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-
-	pending, ok := s.authStates[trimmed]
-	if !ok {
-		return "", "", fmt.Errorf("state not found")
+	parts := strings.Split(trimmed, ".")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("state format invalid")
 	}
-	delete(s.authStates, trimmed)
+	encodedPayload := parts[0]
+	signature := parts[1]
+	if !hmac.Equal([]byte(signature), []byte(s.signStatePayload(encodedPayload))) {
+		return "", "", fmt.Errorf("state signature invalid")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(encodedPayload)
+	if err != nil {
+		return "", "", fmt.Errorf("state payload decode failed")
+	}
+	var pending signedAuthState
+	if err := json.Unmarshal(payloadBytes, &pending); err != nil {
+		return "", "", fmt.Errorf("state payload parse failed")
+	}
 
-	if time.Now().After(pending.ExpiresAt) {
+	if time.Now().Unix() > pending.ExpiresAt {
 		return "", "", fmt.Errorf("state expired")
 	}
 	if strings.TrimSpace(pending.OrgID) == "" {
@@ -631,6 +648,47 @@ func (s *Service) ValidateAndConsumeState(state string) (string, string, error) 
 		return "", "", fmt.Errorf("state missing user")
 	}
 	return pending.OrgID, pending.UserID, nil
+}
+
+func buildStateSigningKey(clientSecret string) []byte {
+	secret := strings.TrimSpace(os.Getenv("GOOGLE_OAUTH_STATE_SECRET"))
+	if secret == "" {
+		secret = clientSecret
+	}
+	if secret == "" {
+		return nil
+	}
+	sum := sha256.Sum256([]byte(secret))
+	return sum[:]
+}
+
+func (s *Service) signStatePayload(encodedPayload string) string {
+	if len(s.stateSigningKey) == 0 {
+		return ""
+	}
+	mac := hmac.New(sha256.New, s.stateSigningKey)
+	_, _ = mac.Write([]byte(encodedPayload))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func revokeToken(ctx context.Context, token string) error {
+	form := url.Values{"token": {token}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://oauth2.googleapis.com/revoke", strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("build revoke request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send revoke request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("revoke request failed with status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func parseTokenScopes(tok *oauth2.Token) []string {

@@ -106,21 +106,12 @@ func (e *Executor) FindOrStartInstanceByFormResponse(wf models.Workflow, data ma
 }
 
 func (e *Executor) findInstanceIDByFormResponse(workflowID, responseID string) (string, error) {
-	instances, err := e.store.ListInstancesByWorkflow(workflowID)
+	inst, ok, err := e.store.FindInstanceByWorkflowAndFormResponse(workflowID, responseID)
 	if err != nil {
 		return "", err
 	}
-	for _, inst := range instances {
-		if inst.Data == nil {
-			continue
-		}
-		candidate := strings.TrimSpace(fmt.Sprint(inst.Data["form_response_id"]))
-		if candidate == "" {
-			candidate = strings.TrimSpace(fmt.Sprint(inst.Data["_response_id"]))
-		}
-		if candidate == responseID {
-			return inst.ID, nil
-		}
+	if ok {
+		return inst.ID, nil
 	}
 	return "", nil
 }

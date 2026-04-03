@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 
@@ -43,6 +43,7 @@ export default function GoogleFormsIntegrationPage() {
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const loadDataRequestIdRef = useRef(0);
   const gfApiBase = (GF_API || "").trim();
 
   const connectUrl = useMemo(() => {
@@ -62,21 +63,30 @@ export default function GoogleFormsIntegrationPage() {
   }, [getToken]);
 
   const loadData = useCallback(async () => {
+    const requestId = ++loadDataRequestIdRef.current;
+    const isLatest = () => loadDataRequestIdRef.current === requestId;
+
     if (!organization?.id) return;
+
+    setStatus(null);
+    setAccounts([]);
+    setError(null);
+
     if (!gfApiBase) {
-      setError(GF_API_MISSING_ERROR);
-      setStatus(null);
-      setAccounts([]);
+      if (isLatest()) {
+        setError(GF_API_MISSING_ERROR);
+      }
       return;
     }
     setLoading(true);
-    setError(null);
 
     try {
       const [statusRes, accountsRes] = await Promise.all([
         authFetch(`${gfApiBase}/integration/status?org_id=${encodeURIComponent(organization.id)}`),
         authFetch(`${gfApiBase}/integration/accounts?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
       ]);
+
+      if (!isLatest()) return;
 
       if (!statusRes.ok) {
         const body = await statusRes.text();
@@ -90,16 +100,27 @@ export default function GoogleFormsIntegrationPage() {
       const statusData = (await statusRes.json()) as IntegrationStatus;
       const accountsData = (await accountsRes.json()) as { items?: ConnectedAccount[] };
 
+      if (!isLatest()) return;
+
       setStatus(statusData);
       setAccounts(accountsData.items || []);
     } catch (err: any) {
+      if (!isLatest()) return;
       setStatus(null);
       setAccounts([]);
       setError(err?.message || "Failed to load Google Forms integration details");
     } finally {
-      setLoading(false);
+      if (isLatest()) {
+        setLoading(false);
+      }
     }
   }, [gfApiBase, organization?.id, authFetch]);
+
+  useEffect(() => {
+    return () => {
+      loadDataRequestIdRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     if (!gfApiBase) {
@@ -198,7 +219,7 @@ export default function GoogleFormsIntegrationPage() {
                   return;
                 }
                 try {
-                  const res = await authFetch(connectUrl);
+                  const res = await authFetch(connectUrl, { credentials: "include" });
                   if (!res.ok) {
                     const body = await res.text();
                     throw new Error(`${res.status} ${body}`);

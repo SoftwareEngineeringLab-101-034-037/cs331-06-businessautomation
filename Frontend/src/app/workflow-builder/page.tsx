@@ -26,7 +26,8 @@ import { createBlankStep, generateStepId, NODE_TYPE_CONFIG } from "@/types/workf
 
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
-const GF_API = process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
+const GF_API = (process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "").trim();
+const GF_API_MISSING_ERROR = "NEXT_PUBLIC_GOOGLE_FORMS_API is not configured.";
 
 interface BackendDepartment {
   id: string;
@@ -193,6 +194,14 @@ export default function WorkflowBuilderPage() {
 
   const loadGoogleForms = useCallback(async () => {
     if (!organization?.id) return;
+    if (!GF_API) {
+      setGoogleAuthConfigured(false);
+      setGoogleConnected(false);
+      setGoogleForms([]);
+      setGoogleFormsError(GF_API_MISSING_ERROR);
+      setGoogleFormsLoading(false);
+      return;
+    }
     const requestID = ++loadGoogleFormsRequestIDRef.current;
     const isLatest = () => loadGoogleFormsRequestIDRef.current === requestID;
     setGoogleFormsLoading(true);
@@ -260,6 +269,13 @@ export default function WorkflowBuilderPage() {
     const trimmedFormID = formID.trim();
     const requestID = ++loadGoogleFormFieldsRequestIDRef.current;
     const isLatest = () => loadGoogleFormFieldsRequestIDRef.current === requestID;
+    if (!GF_API) {
+      setTriggerFormFields([]);
+      setTriggerFormFieldsError(GF_API_MISSING_ERROR);
+      setTriggerFormFieldsLoading(false);
+      triggerFieldsFormIDRef.current = "";
+      return;
+    }
     if (!organization?.id || !trimmedFormID) {
       setTriggerFormFields([]);
       setTriggerFormFieldsError(null);
@@ -320,8 +336,14 @@ export default function WorkflowBuilderPage() {
       setGoogleFormsError("Select an organization first.");
       return;
     }
+    if (!GF_API) {
+      setGoogleFormsError(GF_API_MISSING_ERROR);
+      return;
+    }
     try {
-      const res = await authFetch(`${GF_API}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}`);
+      const res = await authFetch(`${GF_API}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}`, {
+        credentials: "include",
+      });
       if (!res.ok) {
         const body = await res.text();
         throw new Error(`connect-url failed (${res.status}): ${body}`);
@@ -343,6 +365,9 @@ export default function WorkflowBuilderPage() {
     triggerConfig: WorkflowTrigger["config"],
   ) => {
     if (!organization?.id) return;
+    if (!GF_API) {
+      throw new Error(GF_API_MISSING_ERROR);
+    }
 
     const triggerIsForm = triggerType === "form_submission";
     const formID = (triggerConfig.form_id || extractGoogleFormID(triggerConfig.form_url || "")).trim();

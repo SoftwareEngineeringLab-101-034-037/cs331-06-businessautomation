@@ -44,6 +44,11 @@ function parseCommaSeparatedList(raw: string): string[] {
   return out;
 }
 
+function extractGoogleFormID(formURL: string): string {
+  const match = formURL.match(/\/forms\/d\/(?:e\/)?([^/]+)/i);
+  return match?.[1] || "";
+}
+
 /* ──────────────────────────────────────────────────────────────
    Trigger Editor  (used when user clicks the Start node)
    ────────────────────────────────────────────────────────────── */
@@ -258,9 +263,19 @@ export function TriggerEditor({
                 className="wf-input"
                 placeholder="google-form-id"
                 value={trigger.config.form_id || ""}
-                onChange={(e) =>
-                  onChange({ ...trigger, config: { ...trigger.config, form_id: e.target.value, field_mapping: "", field_schema: "" } })
-                }
+                onChange={(e) => {
+                  const formID = e.target.value;
+                  onChange({
+                    ...trigger,
+                    config: {
+                      ...trigger.config,
+                      form_id: formID,
+                      form_url: "",
+                      field_mapping: "",
+                      field_schema: "",
+                    },
+                  });
+                }}
               />
             </div>
 
@@ -270,9 +285,20 @@ export function TriggerEditor({
                 className="wf-input"
                 placeholder="https://docs.google.com/forms/d/.../viewform"
                 value={trigger.config.form_url || ""}
-                onChange={(e) =>
-                  onChange({ ...trigger, config: { ...trigger.config, form_url: e.target.value, field_mapping: "", field_schema: "" } })
-                }
+                onChange={(e) => {
+                  const formURL = e.target.value;
+                  const extractedFormID = extractGoogleFormID(formURL);
+                  onChange({
+                    ...trigger,
+                    config: {
+                      ...trigger.config,
+                      form_url: formURL,
+                      form_id: extractedFormID,
+                      field_mapping: "",
+                      field_schema: "",
+                    },
+                  });
+                }}
               />
             </div>
 

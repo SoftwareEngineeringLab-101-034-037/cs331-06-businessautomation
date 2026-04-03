@@ -151,6 +151,24 @@ func (m *mockStore) GetInstance(id string) (models.Instance, bool) {
 	return inst, ok
 }
 
+func (m *mockStore) FindInstanceByWorkflowAndFormResponse(workflowID, formResponseID string) (models.Instance, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, inst := range m.instances {
+		if inst.WorkflowID != workflowID || inst.Data == nil {
+			continue
+		}
+		value, ok := inst.Data["form_response_id"]
+		if !ok || value == nil {
+			continue
+		}
+		if fmt.Sprint(value) == formResponseID {
+			return inst, true, nil
+		}
+	}
+	return models.Instance{}, false, nil
+}
+
 func (m *mockStore) ListInstancesByWorkflow(workflowID string) ([]models.Instance, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

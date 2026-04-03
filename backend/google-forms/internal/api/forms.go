@@ -116,10 +116,22 @@ func (s *Server) createForm(w http.ResponseWriter, r *http.Request) {
 	if len(req.Questions) > 0 {
 		if err := googleapi.AddQuestions(client, form.FormID, req.Questions); err != nil {
 			log.Printf("forms.createForm add questions failed for form_id=%q: %v", form.FormID, err)
-			writeJSON(w, http.StatusBadGateway, map[string]interface{}{
-				"error":   "questions could not be added to created form",
-				"form_id": form.FormID,
-				"stage":   "add_questions",
+			warning := "form created but adding questions failed"
+			if rollbackErr := googleapi.DeleteForm(client, form.FormID); rollbackErr != nil {
+				log.Printf("forms.createForm rollback delete failed for form_id=%q: %v", form.FormID, rollbackErr)
+				warning = "form was created but adding questions failed and rollback delete failed"
+				writeJSON(w, http.StatusCreated, map[string]interface{}{
+					"form_id": form.FormID,
+					"stage":   "add_questions",
+					"warning": warning,
+				})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"form_id":     form.FormID,
+				"stage":       "add_questions",
+				"warning":     warning,
+				"rolled_back": true,
 			})
 			return
 		}
