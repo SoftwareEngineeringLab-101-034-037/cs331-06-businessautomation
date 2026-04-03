@@ -354,6 +354,15 @@
   box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.2);
 }
 
+.status-dot.delayed {
+  color: #f97316;
+}
+
+.status-dot.delayed::before {
+  background: #f97316;
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.22);
+}
+
 /* ─────────────────────────────────────────────
    Integrations Page
    ───────────────────────────────────────────── */
@@ -1538,10 +1547,9 @@
 }
 
 .kanban-card-progress {
-  height: 3px;
-  border-radius: 99px;
-  background: var(--surface-alt);
-  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .kanban-card-progress-fill {
@@ -3890,6 +3898,37 @@
 
 .data-table tr:hover td {
   background: var(--hover);
+}
+
+.workstation-page .data-table {
+  font-size: 0.8rem;
+}
+
+.workstation-page .data-table th {
+  padding: 9px 12px;
+  font-size: 0.7rem;
+}
+
+.workstation-page .data-table td {
+  padding: 5px 12px;
+}
+
+/* Workstation tables: keep sleek scrollbar, but visually start below sticky header. */
+.workstation-page .table-container {
+  position: relative;
+  scrollbar-gutter: auto;
+}
+
+.workstation-page .table-container::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 10px;
+  height: 36px;
+  background: var(--surface-alt);
+  pointer-events: none;
+  z-index: 4;
 }
 
 .table-name-cell {
