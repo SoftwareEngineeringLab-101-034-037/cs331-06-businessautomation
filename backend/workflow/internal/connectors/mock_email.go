@@ -7,6 +7,12 @@ type EmailConnector interface {
 	Send(to, subject, body string) error
 }
 
+// OrgEmailConnector supports org-aware sending for connectors backed by
+// integration services that need org-level context.
+type OrgEmailConnector interface {
+	SendForOrg(orgID, to, cc, subject, body, fromName, fromAccountID string) error
+}
+
 // MockEmail logs emails instead of sending them.
 type MockEmail struct{}
 

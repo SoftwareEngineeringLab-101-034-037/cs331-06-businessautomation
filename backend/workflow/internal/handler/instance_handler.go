@@ -168,6 +168,125 @@ func parseFieldMappingCSV(raw string) map[string]string {
 	return out
 }
 
+// POST /integrations/gmail/events
+func (h *InstanceHandler) StartFromGmail(c *gin.Context) {
+	if strings.TrimSpace(h.IntegrationKey) == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "integration key not configured"})
+		return
+	}
+
+	header := c.GetHeader("X-Integration-Key")
+	if subtle.ConstantTimeCompare([]byte(header), []byte(h.IntegrationKey)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid integration key"})
+		return
+	}
+
+	var req struct {
+		OrgID      string                 `json:"org_id"`
+		WorkflowID string                 `json:"workflow_id"`
+		Data       map[string]interface{} `json:"data"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
+		return
+	}
+	if req.OrgID == "" || req.WorkflowID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "org_id and workflow_id are required"})
+		return
+	}
+
+	wf, ok := h.Store.GetWorkflow(req.WorkflowID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
+		return
+	}
+	if wf.OrgID != req.OrgID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	if wf.Status != models.WorkflowActive {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow is not active"})
+		return
+	}
+	if wf.Trigger.Type != models.TriggerEmail {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow trigger is not email_received"})
+		return
+	}
+
+	if wf.Trigger.Config != nil {
+		incomingFrom := strings.ToLower(strings.TrimSpace(fmt.Sprint(req.Data["_from"])))
+		incomingSubject := strings.ToLower(strings.TrimSpace(fmt.Sprint(req.Data["_subject"])))
+		incomingSnippet := strings.ToLower(strings.TrimSpace(fmt.Sprint(req.Data["_snippet"])))
+
+		if expectedFrom := strings.ToLower(strings.TrimSpace(wf.Trigger.Config["from_contains"])); expectedFrom != "" {
+			if !strings.Contains(incomingFrom, expectedFrom) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "email sender does not match trigger config"})
+				return
+			}
+		}
+		if expectedSubject := strings.ToLower(strings.TrimSpace(wf.Trigger.Config["subject_contains"])); expectedSubject != "" {
+			if !strings.Contains(incomingSubject, expectedSubject) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "email subject does not match trigger config"})
+				return
+			}
+		}
+		if expectedSnippet := strings.ToLower(strings.TrimSpace(wf.Trigger.Config["snippet_contains"])); expectedSnippet != "" {
+			if !strings.Contains(incomingSnippet, expectedSnippet) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "email content does not match trigger config"})
+				return
+			}
+		}
+	}
+
+	normalizedData := normalizeGmailData(wf.Trigger.Config, req.Data)
+	instID, err := h.Exec.StartInstance(wf, normalizedData, middleware.GetAuthorizationHeader(c))
+	if err != nil {
+		log.Printf("instance_handler.StartFromGmail failed workflow_id=%q org_id=%q: %v", wf.ID, wf.OrgID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "start failed"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"instance_id": instID})
+}
+
+func normalizeGmailData(triggerConfig map[string]string, payload map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(payload)+8)
+	for k, v := range payload {
+		out[k] = v
+	}
+
+	out["trigger_source"] = "gmail"
+	out["trigger_type"] = string(models.TriggerEmail)
+	out["email_event"] = payload
+
+	if v, ok := payload["_message_id"]; ok {
+		out["email_message_id"] = v
+	}
+	if v, ok := payload["_thread_id"]; ok {
+		out["email_thread_id"] = v
+	}
+	if v, ok := payload["_subject"]; ok {
+		out["email_subject"] = v
+	}
+	if v, ok := payload["_from"]; ok {
+		out["email_from"] = v
+	}
+	if v, ok := payload["_to"]; ok {
+		out["email_to"] = v
+	}
+	if v, ok := payload["_snippet"]; ok {
+		out["email_snippet"] = v
+	}
+
+	if triggerConfig != nil {
+		if value := strings.TrimSpace(triggerConfig["query"]); value != "" {
+			out["email_trigger_query"] = value
+		}
+	}
+
+	return out
+}
+
 // POST /api/orgs/:orgId/instances
 func (h *InstanceHandler) Start(c *gin.Context) {
 	var req struct {

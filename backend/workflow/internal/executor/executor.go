@@ -179,7 +179,7 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 		return
 
 	case models.NodeAction:
-		e.executeAction(instanceID, node, data)
+		e.executeAction(instanceID, wf.OrgID, node, data)
 		e.setNodeState(instanceID, nodeID, "completed")
 		e.walkNext(instanceID, node, "", wf, data, authHeader)
 		return
@@ -301,7 +301,7 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 	return "", nil
 }
 
-func (e *Executor) executeAction(instanceID string, node *models.WorkflowNode, data map[string]interface{}) {
+func (e *Executor) executeAction(instanceID, orgID string, node *models.WorkflowNode, data map[string]interface{}) {
 	if node.Connector == nil {
 		e.audit(instanceID, node.ID, "action_skipped", map[string]interface{}{"reason": "missing_connector"})
 		return
@@ -311,13 +311,25 @@ func (e *Executor) executeAction(instanceID string, node *models.WorkflowNode, d
 		return
 	}
 	to := resolveParam(node.Connector.Params, "to", data)
+	cc := resolveParam(node.Connector.Params, "cc", data)
 	subject := resolveParam(node.Connector.Params, "subject", data)
 	body := resolveParam(node.Connector.Params, "body_template", data)
+	fromName := resolveParam(node.Connector.Params, "from_name", data)
+	fromAccountID := resolveParam(node.Connector.Params, "from_account_id", data)
 	if to == "" {
+		e.audit(instanceID, node.ID, "action_skipped", map[string]interface{}{"reason": "missing_to_recipient"})
 		return
 	}
-	if err := e.email.Send(to, subject, body); err != nil {
+
+	var err error
+	if sender, ok := e.email.(connectors.OrgEmailConnector); ok {
+		err = sender.SendForOrg(orgID, to, cc, subject, body, fromName, fromAccountID)
+	} else {
+		err = e.email.Send(to, subject, body)
+	}
+	if err != nil {
 		log.Printf("executor: email send failed: %v", err)
+		e.audit(instanceID, node.ID, "action_failed", map[string]interface{}{"connector": "email", "error": err.Error()})
 		return
 	}
 	e.audit(instanceID, node.ID, "email_sent", map[string]interface{}{
