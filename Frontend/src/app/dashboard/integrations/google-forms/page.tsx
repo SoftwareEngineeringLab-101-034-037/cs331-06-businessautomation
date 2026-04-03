@@ -5,7 +5,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 
-const GF_API = process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
+const GF_API = process.env.NEXT_PUBLIC_GOOGLE_FORMS_API;
+const GF_API_MISSING_ERROR = "NEXT_PUBLIC_GOOGLE_FORMS_API is not configured.";
 
 type IntegrationStatus = {
   configured?: boolean;
@@ -16,7 +17,7 @@ type IntegrationStatus = {
   primary_account_id?: string;
   primary_account_email?: string;
   primary_account_name?: string;
-  workflow_engine_url?: string;
+  workflow_engine?: string;
   workflow_engine_healthy?: boolean;
   workflow_engine_error?: string;
   token_lookup_error?: string;
@@ -42,11 +43,12 @@ export default function GoogleFormsIntegrationPage() {
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const gfApiBase = (GF_API || "").trim();
 
   const connectUrl = useMemo(() => {
-    if (!organization?.id) return "";
-    return `${GF_API}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}`;
-  }, [organization?.id]);
+    if (!organization?.id || !gfApiBase) return "";
+    return `${gfApiBase}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}`;
+  }, [gfApiBase, organization?.id]);
 
   const authFetch = useCallback(async (input: string, init: RequestInit = {}) => {
     const token = await getToken();
@@ -61,13 +63,19 @@ export default function GoogleFormsIntegrationPage() {
 
   const loadData = useCallback(async () => {
     if (!organization?.id) return;
+    if (!gfApiBase) {
+      setError(GF_API_MISSING_ERROR);
+      setStatus(null);
+      setAccounts([]);
+      return;
+    }
     setLoading(true);
     setError(null);
 
     try {
       const [statusRes, accountsRes] = await Promise.all([
-        authFetch(`${GF_API}/integration/status?org_id=${encodeURIComponent(organization.id)}`),
-        authFetch(`${GF_API}/integration/accounts?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
+        authFetch(`${gfApiBase}/integration/status?org_id=${encodeURIComponent(organization.id)}`),
+        authFetch(`${gfApiBase}/integration/accounts?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
       ]);
 
       if (!statusRes.ok) {
@@ -91,7 +99,13 @@ export default function GoogleFormsIntegrationPage() {
     } finally {
       setLoading(false);
     }
-  }, [organization?.id, authFetch]);
+  }, [gfApiBase, organization?.id, authFetch]);
+
+  useEffect(() => {
+    if (!gfApiBase) {
+      setError(GF_API_MISSING_ERROR);
+    }
+  }, [gfApiBase]);
 
   useEffect(() => {
     loadData();
@@ -100,11 +114,15 @@ export default function GoogleFormsIntegrationPage() {
   const disconnectAccount = useCallback(
     async (accountID: string) => {
       if (!organization?.id) return;
+      if (!gfApiBase) {
+        setError(GF_API_MISSING_ERROR);
+        return;
+      }
       setLoading(true);
       setError(null);
       try {
         const res = await authFetch(
-          `${GF_API}/integration/accounts/${encodeURIComponent(accountID)}?org_id=${encodeURIComponent(organization.id)}`,
+          `${gfApiBase}/integration/accounts/${encodeURIComponent(accountID)}?org_id=${encodeURIComponent(organization.id)}`,
           { method: "DELETE" },
         );
         if (!res.ok) {
@@ -117,15 +135,19 @@ export default function GoogleFormsIntegrationPage() {
         setLoading(false);
       }
     },
-    [organization?.id, loadData, authFetch],
+    [gfApiBase, organization?.id, loadData, authFetch],
   );
 
   const disconnectAll = useCallback(async () => {
     if (!organization?.id) return;
+    if (!gfApiBase) {
+      setError(GF_API_MISSING_ERROR);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const res = await authFetch(`${GF_API}/auth/google/disconnect?org_id=${encodeURIComponent(organization.id)}`, {
+      const res = await authFetch(`${gfApiBase}/auth/google/disconnect?org_id=${encodeURIComponent(organization.id)}`, {
         method: "DELETE",
       });
       if (!res.ok) {
@@ -137,7 +159,7 @@ export default function GoogleFormsIntegrationPage() {
       setError(err?.message || "Failed to disconnect accounts");
       setLoading(false);
     }
-  }, [organization?.id, loadData, authFetch]);
+  }, [gfApiBase, organization?.id, loadData, authFetch]);
 
   const missingFields = (status?.missing_fields || []).join(", ");
 
@@ -170,6 +192,11 @@ export default function GoogleFormsIntegrationPage() {
               disabled={!connectUrl || !status?.configured}
               onClick={async () => {
                 if (!connectUrl || !status?.configured) return;
+                const popup = window.open("", "_blank");
+                if (!popup) {
+                  setError("Popup was blocked by the browser. Please allow popups and try again.");
+                  return;
+                }
                 try {
                   const res = await authFetch(connectUrl);
                   if (!res.ok) {
@@ -180,8 +207,9 @@ export default function GoogleFormsIntegrationPage() {
                   if (!payload.auth_url) {
                     throw new Error("missing auth_url in connect response");
                   }
-                  window.open(payload.auth_url, "_blank", "noopener,noreferrer");
+                  popup.location.href = payload.auth_url;
                 } catch (err: any) {
+                  popup.close();
                   setError(err?.message || "Failed to start Google OAuth connect flow");
                 }
               }}
@@ -230,8 +258,8 @@ export default function GoogleFormsIntegrationPage() {
                 <strong>{status?.primary_account_email || status?.primary_account_name || "n/a"}</strong>
               </div>
               <div className="integration-row">
-                <span>Workflow engine URL</span>
-                <strong>{status?.workflow_engine_url || "n/a"}</strong>
+                <span>Workflow engine</span>
+                <strong>{status?.workflow_engine || "n/a"}</strong>
               </div>
             </div>
 

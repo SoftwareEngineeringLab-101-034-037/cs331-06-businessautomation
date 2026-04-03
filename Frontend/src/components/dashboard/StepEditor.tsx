@@ -60,6 +60,7 @@ interface TriggerEditorProps {
   googleAuthConfigured?: boolean;
   googleConnected?: boolean;
   googleConnectURL?: string;
+  onGoogleConnect?: () => void;
   onRefreshForms?: () => void;
   formFields?: GoogleFormField[];
   formFieldsLoading?: boolean;
@@ -78,6 +79,7 @@ export function TriggerEditor({
   googleAuthConfigured = true,
   googleConnected = false,
   googleConnectURL,
+  onGoogleConnect,
   onRefreshForms,
   formFields = [],
   formFieldsLoading = false,
@@ -232,9 +234,20 @@ export function TriggerEditor({
                   Google Forms integration is not configured yet. A platform admin needs to set OAuth credentials in the Google Forms service.
                 </span>
               )}
-              {googleAuthConfigured && !googleConnected && googleConnectURL && (
+              {googleAuthConfigured && !googleConnected && (googleConnectURL || onGoogleConnect) && (
                 <span className="wf-field-hint">
-                  Google account not connected. <a href={googleConnectURL} target="_blank" rel="noreferrer">Connect Google Forms</a>
+                  Google account not connected.{" "}
+                  {onGoogleConnect ? (
+                    <button
+                      type="button"
+                      onClick={onGoogleConnect}
+                      style={{ background: "none", border: "none", padding: 0, color: "var(--accent)", textDecoration: "underline", cursor: "pointer", font: "inherit" }}
+                    >
+                      Connect Google Forms
+                    </button>
+                  ) : (
+                    <a href={googleConnectURL} target="_blank" rel="noreferrer">Connect Google Forms</a>
+                  )}
                 </span>
               )}
             </div>
@@ -772,15 +785,16 @@ export function StepEditor({
                       className="wf-select"
                       value={step.connector?.params.form_id || ""}
                       onChange={(e) => {
-                        const selected = availableForms.find((f) => f.form_id === e.target.value);
+                        const selectedFormID = e.target.value;
+                        const selected = availableForms.find((f) => f.form_id === selectedFormID);
                         onChange({
                           ...step,
                           connector: {
                             ...step.connector!,
                             params: {
                               ...step.connector!.params,
-                              form_id: e.target.value,
-                              form_url: selected?.responder_uri || step.connector!.params.form_url || "",
+                              form_id: selectedFormID,
+                              form_url: selectedFormID ? (selected?.responder_uri || "") : "",
                             },
                           },
                         });

@@ -3029,7 +3029,7 @@
 .workflow-data-codekey {
   font-size: 0.68rem;
   color: var(--text-muted);
-  font-family: Consolas, Courier New, monospace;
+  font-family: Consolas, "Courier New", monospace;
   word-break: break-all;
 }
 
@@ -3089,7 +3089,9 @@
   background: var(--surface-alt);
   color: var(--text-secondary);
   max-width: 100%;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  hyphens: auto;
 }
 
 .workflow-data-subgrid {
@@ -3112,7 +3114,8 @@
 .workflow-data-subvalue {
   font-size: 0.8rem;
   color: var(--text-secondary);
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .workflow-data-details {

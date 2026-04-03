@@ -199,7 +199,7 @@ export default function WorkflowBuilderPage() {
     setGoogleFormsError(null);
     try {
       const [statusRes, formsRes] = await Promise.all([
-        fetch(`${GF_API}/auth/google/status?org_id=${encodeURIComponent(organization.id)}`),
+        authFetch(`${GF_API}/auth/google/status?org_id=${encodeURIComponent(organization.id)}`),
         authFetch(`${GF_API}/forms?org_id=${encodeURIComponent(organization.id)}`),
       ]);
 
@@ -314,6 +314,27 @@ export default function WorkflowBuilderPage() {
       }
     }
   }, [authFetch, organization?.id, extractGoogleFormID, parseFieldMapping, buildSuggestedFieldMapping, serializeFieldMapping, buildFieldSchemaJSON]);
+
+  const handleGoogleConnect = useCallback(async () => {
+    if (!organization?.id) {
+      setGoogleFormsError("Select an organization first.");
+      return;
+    }
+    try {
+      const res = await authFetch(`${GF_API}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}`);
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`connect-url failed (${res.status}): ${body}`);
+      }
+      const payload = await res.json() as { auth_url?: string };
+      if (!payload.auth_url) {
+        throw new Error("connect-url response missing auth_url");
+      }
+      window.location.href = payload.auth_url;
+    } catch (err: any) {
+      setGoogleFormsError(err?.message || "Failed to start Google OAuth flow.");
+    }
+  }, [authFetch, organization?.id]);
 
   const syncGoogleFormsWatch = useCallback(async (
     workflowID: string,
@@ -1688,7 +1709,7 @@ export default function WorkflowBuilderPage() {
                     loadGoogleFormFields(selectedFormID, { applySuggestedMapping: false });
                   }}
                   onApplySuggestedMapping={applySuggestedTriggerMapping}
-                  googleConnectURL={organization?.id ? `${GF_API}/auth/google/connect?org_id=${encodeURIComponent(organization.id)}` : undefined}
+                  onGoogleConnect={handleGoogleConnect}
                   onClose={handleCloseEditor}
                 />
               )}
