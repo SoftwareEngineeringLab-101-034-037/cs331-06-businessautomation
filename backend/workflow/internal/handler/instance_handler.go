@@ -78,20 +78,28 @@ func (h *InstanceHandler) StartFromGoogleForms(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow trigger config is required"})
 		return
 	}
-
-	normalizedData := normalizeGoogleFormsData(wf.Trigger.Config, req.Data)
 	if configuredFormID := strings.TrimSpace(wf.Trigger.Config["form_id"]); configuredFormID != "" {
-		incomingFormID := strings.TrimSpace(fmt.Sprint(normalizedData["form_id"]))
-		if incomingFormID == "" || incomingFormID != configuredFormID {
+		rawIncomingFormID := strings.TrimSpace(fmt.Sprint(req.Data["_form_id"]))
+		if rawIncomingFormID == "" || rawIncomingFormID != configuredFormID {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "form submission does not match configured form_id"})
 			return
 		}
 	}
 
-	instID, err := h.Exec.StartInstance(wf, normalizedData, middleware.GetAuthorizationHeader(c))
+	normalizedData := normalizeGoogleFormsData(wf.Trigger.Config, req.Data)
+	responseID := strings.TrimSpace(fmt.Sprint(normalizedData["_response_id"]))
+	if responseID == "" {
+		responseID = strings.TrimSpace(fmt.Sprint(normalizedData["form_response_id"]))
+	}
+
+	instID, deduped, err := h.Exec.FindOrStartInstanceByFormResponse(wf, normalizedData, responseID, middleware.GetAuthorizationHeader(c))
 	if err != nil {
 		log.Printf("instance_handler.StartFromGoogleForms failed workflow_id=%q org_id=%q: %v", wf.ID, wf.OrgID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "start failed"})
+		return
+	}
+	if deduped {
+		c.JSON(http.StatusOK, gin.H{"instance_id": instID})
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"instance_id": instID})
@@ -127,7 +135,9 @@ func normalizeGoogleFormsData(triggerConfig map[string]string, payload map[strin
 		out["form_submitted_at"] = v
 	}
 	if v, ok := payload["_response_id"]; ok {
-		out["form_response_id"] = v
+		if strings.TrimSpace(fmt.Sprint(v)) != "" {
+			out["form_response_id"] = v
+		}
 	}
 
 	return out

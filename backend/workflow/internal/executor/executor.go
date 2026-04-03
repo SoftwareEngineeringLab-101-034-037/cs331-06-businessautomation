@@ -72,6 +72,59 @@ func (e *Executor) StartInstance(wf models.Workflow, data map[string]interface{}
 	return id, nil
 }
 
+func (e *Executor) FindOrStartInstanceByFormResponse(wf models.Workflow, data map[string]interface{}, responseID, authHeader string) (string, bool, error) {
+	trimmedResponseID := strings.TrimSpace(responseID)
+	if trimmedResponseID == "" {
+		id, err := e.StartInstance(wf, data, authHeader)
+		return id, false, err
+	}
+
+	// Serialize create/check flow by workflow+response key to prevent duplicate starts in-process.
+	lock := e.instanceLock("form_response:" + wf.ID + ":" + trimmedResponseID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	existingID, err := e.findInstanceIDByFormResponse(wf.ID, trimmedResponseID)
+	if err != nil {
+		return "", false, err
+	}
+	if existingID != "" {
+		return existingID, true, nil
+	}
+
+	instanceID, err := e.StartInstance(wf, data, authHeader)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
+			existingID, lookupErr := e.findInstanceIDByFormResponse(wf.ID, trimmedResponseID)
+			if lookupErr == nil && existingID != "" {
+				return existingID, true, nil
+			}
+		}
+		return "", false, err
+	}
+	return instanceID, false, nil
+}
+
+func (e *Executor) findInstanceIDByFormResponse(workflowID, responseID string) (string, error) {
+	instances, err := e.store.ListInstancesByWorkflow(workflowID)
+	if err != nil {
+		return "", err
+	}
+	for _, inst := range instances {
+		if inst.Data == nil {
+			continue
+		}
+		candidate := strings.TrimSpace(fmt.Sprint(inst.Data["form_response_id"]))
+		if candidate == "" {
+			candidate = strings.TrimSpace(fmt.Sprint(inst.Data["_response_id"]))
+		}
+		if candidate == responseID {
+			return inst.ID, nil
+		}
+	}
+	return "", nil
+}
+
 func (e *Executor) run(instanceID string, wf models.Workflow, data map[string]interface{}, authHeader string) {
 	log.Printf("executor: running instance=%s workflow=%s", instanceID, wf.ID)
 

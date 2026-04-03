@@ -64,6 +64,7 @@ func (m *MongoStore) ensureIndexes(ctx context.Context) error {
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "workflow_id", Value: 1}}},
 		{Keys: bson.D{{Key: "org_id", Value: 1}}},
+		{Keys: bson.D{{Key: "workflow_id", Value: 1}, {Key: "data.form_response_id", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"data.form_response_id": bson.M{"$exists": true}})},
 		{Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "started_at", Value: -1}}},
 	}); err != nil {
 		return err
