@@ -693,6 +693,35 @@ func TestExecuteTaskVisibilityNoneWithoutOverrides(t *testing.T) {
 	}
 }
 
+func TestExecuteTaskVisibilityUnknownModeDefaultsToNone(t *testing.T) {
+	store := newMockStore()
+	exec := NewExecutor(store, &mockEmail{}, nil)
+
+	wf := models.Workflow{
+		ID:    "wf-visibility-unknown",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{{
+			ID:                 "task",
+			Type:               models.NodeTask,
+			Title:              "Review",
+			TaskDataVisibility: "unexpected_mode",
+		}},
+	}
+
+	if _, err := exec.executeTask("inst-3", &wf, &wf.Nodes[0], map[string]interface{}{"secret": "x"}, ""); err != nil {
+		t.Fatalf("executeTask failed: %v", err)
+	}
+
+	var savedTask models.TaskAssignment
+	for _, task := range store.tasks {
+		savedTask = task
+		break
+	}
+	if savedTask.VisibleData != nil {
+		t.Fatalf("expected no visible data for unknown mode, got %#v", savedTask.VisibleData)
+	}
+}
+
 func TestContinueTaskStartClaimsTaskWithoutComment(t *testing.T) {
 	store := newMockStore()
 	exec := NewExecutor(store, &mockEmail{}, nil)

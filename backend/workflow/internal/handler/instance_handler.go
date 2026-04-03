@@ -69,6 +69,10 @@ func (h *InstanceHandler) StartFromGoogleForms(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow is not active"})
 		return
 	}
+	if wf.Trigger.Type != models.TriggerFormSubmit {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow trigger is not form_submit"})
+		return
+	}
 
 	normalizedData := normalizeGoogleFormsData(wf.Trigger.Config, req.Data)
 	instID, err := h.Exec.StartInstance(wf, normalizedData, "")

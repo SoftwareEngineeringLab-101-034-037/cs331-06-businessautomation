@@ -687,6 +687,10 @@ func buildTaskVisibleData(node *models.WorkflowNode, data map[string]interface{}
 
 	visible := make(map[string]interface{})
 	switch mode {
+	case "all":
+		for key, value := range data {
+			visible[key] = value
+		}
 	case "none":
 		// Intentionally leave empty unless explicit include toggles are enabled.
 	case "selected":
@@ -700,9 +704,7 @@ func buildTaskVisibleData(node *models.WorkflowNode, data map[string]interface{}
 			}
 		}
 	default:
-		for key, value := range data {
-			visible[key] = value
-		}
+		// Unknown modes are treated as none to avoid unintentionally exposing all task data.
 	}
 
 	if node.IncludeFormSubmission {
