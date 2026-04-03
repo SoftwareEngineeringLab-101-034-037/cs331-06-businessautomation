@@ -3867,6 +3867,13 @@
   white-space: nowrap;
 }
 
+.table-container .data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--surface-alt);
+}
+
 .data-table td {
   padding: 12px 16px;
   border-bottom: 1px solid var(--border-subtle);
