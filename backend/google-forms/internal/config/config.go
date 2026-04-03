@@ -16,7 +16,9 @@ type Config struct {
 	GoogleClientID      string
 	GoogleClientSecret  string
 	GoogleRedirectURI   string
+	AuthServiceURL      string
 	WorkflowEngineURL   string
+	WorkflowServiceKey  string
 	PollIntervalSeconds int
 }
 
@@ -39,22 +41,24 @@ func Load() (*Config, error) {
 		GoogleClientID:      strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")),
 		GoogleClientSecret:  strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET")),
 		GoogleRedirectURI:   strings.TrimSpace(os.Getenv("GOOGLE_REDIRECT_URI")),
+		AuthServiceURL:      getenv("AUTH_SERVICE_URL", "http://localhost:8080"),
 		WorkflowEngineURL:   getenv("WORKFLOW_ENGINE_URL", "http://localhost:8085"),
+		WorkflowServiceKey:  strings.TrimSpace(os.Getenv("WORKFLOW_INTEGRATION_KEY")),
 		PollIntervalSeconds: interval,
 	}
 
-	var missing []string
+	missing := make([]string, 0, 3)
 	if cfg.GoogleClientID == "" {
 		missing = append(missing, "GOOGLE_CLIENT_ID")
 	}
 	if cfg.GoogleClientSecret == "" {
 		missing = append(missing, "GOOGLE_CLIENT_SECRET")
 	}
-	if cfg.MongoURI == "mongodb://localhost:27017" && os.Getenv("MONGO_URI") == "" {
-		// not fatal, just a default — skip
+	if cfg.WorkflowServiceKey == "" {
+		missing = append(missing, "WORKFLOW_INTEGRATION_KEY")
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("missing required configuration: %s", strings.Join(missing, ", "))
 	}
 
 	return cfg, nil

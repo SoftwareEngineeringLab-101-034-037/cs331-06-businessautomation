@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -68,6 +70,9 @@ func (m *MongoStore) ensureIndexes(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	if err := m.ensureWorkflowFormResponseIndex(ictx); err != nil {
+		return err
+	}
 	if _, err := m.taskCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "assigned_role", Value: 1}, {Key: "status", Value: 1}}},
@@ -77,6 +82,50 @@ func (m *MongoStore) ensureIndexes(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (m *MongoStore) ensureWorkflowFormResponseIndex(ctx context.Context) error {
+	const indexName = "workflow_id_1_data.form_response_id_1"
+	model := mongo.IndexModel{
+		Keys: bson.D{{Key: "workflow_id", Value: 1}, {Key: "data.form_response_id", Value: 1}},
+		Options: options.Index().
+			SetName(indexName).
+			SetUnique(true).
+			SetPartialFilterExpression(bson.M{"data.form_response_id": bson.M{"$type": "string", "$gt": ""}}),
+	}
+
+	if _, err := m.instCol.Indexes().CreateOne(ctx, model); err == nil {
+		return nil
+	} else if !isIndexConflictError(err) {
+		return err
+	}
+
+	if _, err := m.instCol.Indexes().DropOne(ctx, indexName); err != nil && !isIndexNotFoundError(err) {
+		return fmt.Errorf("drop conflicting index %s: %w", indexName, err)
+	}
+
+	if _, err := m.instCol.Indexes().CreateOne(ctx, model); err != nil {
+		return fmt.Errorf("create index %s after drop: %w", indexName, err)
+	}
+	return nil
+}
+
+func isIndexConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "indexkeyspecsconflict") ||
+		strings.Contains(msg, "indexoptionsconflict") ||
+		strings.Contains(msg, "same name as the requested index")
+}
+
+func isIndexNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "indexnotfound") || strings.Contains(msg, "index not found")
 }
 
 // -- Workflows --
@@ -173,6 +222,24 @@ func (m *MongoStore) GetInstance(id string) (models.Instance, bool) {
 		return models.Instance{}, false
 	}
 	return inst, true
+}
+
+func (m *MongoStore) FindInstanceByWorkflowAndFormResponse(workflowID, formResponseID string) (models.Instance, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var inst models.Instance
+	err := m.instCol.FindOne(ctx, bson.M{
+		"workflow_id":           workflowID,
+		"data.form_response_id": formResponseID,
+	}).Decode(&inst)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return models.Instance{}, false, nil
+		}
+		return models.Instance{}, false, err
+	}
+	return inst, true, nil
 }
 
 func (m *MongoStore) ListInstancesByWorkflow(workflowID string) ([]models.Instance, error) {

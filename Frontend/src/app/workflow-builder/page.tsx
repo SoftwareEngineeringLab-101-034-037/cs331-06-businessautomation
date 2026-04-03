@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import {
@@ -14,6 +14,7 @@ import { useTheme } from "@/components/ThemeProvider";
 import WorkflowCanvas from "@/components/dashboard/WorkflowCanvas";
 import { TriggerEditor, StepEditor } from "@/components/dashboard/StepEditor";
 import { useToast, ToastContainer } from "@/components/Toast";
+import { parseFieldMapping, serializeFieldMapping } from "@/lib/workflow-mapping";
 import type {
   WorkflowDraft,
   WorkflowStep,
@@ -25,6 +26,8 @@ import { createBlankStep, generateStepId, NODE_TYPE_CONFIG } from "@/types/workf
 
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
+const GF_API = (process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "").trim();
+const GF_API_MISSING_ERROR = "NEXT_PUBLIC_GOOGLE_FORMS_API is not configured.";
 
 interface BackendDepartment {
   id: string;
@@ -36,6 +39,31 @@ interface BackendRole {
   id: string;
   name: string;
   description?: string;
+}
+
+interface GoogleFormOption {
+  form_id: string;
+  title: string;
+  responder_uri?: string;
+  edit_uri?: string;
+  modified_time?: string;
+}
+
+interface FormWatch {
+  id: string;
+  org_id: string;
+  form_id: string;
+  workflow_id: string;
+  active: boolean;
+  field_mapping?: Record<string, string>;
+}
+
+interface GoogleFormField {
+  question_id: string;
+  item_id?: string;
+  title: string;
+  required?: boolean;
+  field_type?: string;
 }
 
 /* ── Initial draft ── */
@@ -96,6 +124,338 @@ export default function WorkflowBuilderPage() {
     });
   }, [getToken]);
 
+  const parseVisibleDataKeys = useCallback((keys: string[] | undefined): string[] => {
+    if (!Array.isArray(keys)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of keys) {
+      const key = String(raw || "").trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+    }
+    return out;
+  }, []);
+
+  const normalizeVariableKey = useCallback((input: string): string => {
+    const base = input
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .replace(/_+/g, "_");
+    if (!base) return "field_value";
+    if (/^[0-9]/.test(base)) return `field_${base}`;
+    return base;
+  }, []);
+
+  const buildSuggestedFieldMapping = useCallback((fields: GoogleFormField[]): Record<string, string> => {
+    const out: Record<string, string> = {};
+    const used = new Set<string>();
+
+    for (const field of fields) {
+      const source = field.question_id?.trim();
+      if (!source) continue;
+
+      const seed = normalizeVariableKey(field.title || source);
+      let candidate = seed;
+      let suffix = 2;
+      while (used.has(candidate)) {
+        candidate = `${seed}_${suffix}`;
+        suffix += 1;
+      }
+
+      used.add(candidate);
+      out[source] = candidate;
+    }
+
+    return out;
+  }, [normalizeVariableKey]);
+
+  const buildFieldSchemaJSON = useCallback((fields: GoogleFormField[], mapping: Record<string, string>): string => {
+    return JSON.stringify(
+      fields.map((field) => ({
+        question_id: field.question_id,
+        title: field.title,
+        required: Boolean(field.required),
+        field_type: field.field_type || "text",
+        variable: mapping[field.question_id] || "",
+      })),
+    );
+  }, []);
+
+  const extractGoogleFormID = useCallback((formURL: string): string => {
+    const m = formURL.match(/\/forms\/d\/(?:e\/)?([^/]+)/i);
+    return m?.[1] || "";
+  }, []);
+
+  const loadGoogleFormsRequestIDRef = useRef(0);
+  const loadGoogleFormFieldsRequestIDRef = useRef(0);
+
+  const loadGoogleForms = useCallback(async () => {
+    if (!organization?.id) return;
+    if (!GF_API) {
+      setGoogleAuthConfigured(false);
+      setGoogleConnected(false);
+      setGoogleForms([]);
+      setGoogleFormsError(GF_API_MISSING_ERROR);
+      setGoogleFormsLoading(false);
+      return;
+    }
+    const requestID = ++loadGoogleFormsRequestIDRef.current;
+    const isLatest = () => loadGoogleFormsRequestIDRef.current === requestID;
+    setGoogleFormsLoading(true);
+    setGoogleFormsError(null);
+    try {
+      const [statusRes, formsRes] = await Promise.all([
+        authFetch(`${GF_API}/auth/google/status?org_id=${encodeURIComponent(organization.id)}`),
+        authFetch(`${GF_API}/forms?org_id=${encodeURIComponent(organization.id)}`),
+      ]);
+
+      if (!isLatest()) return;
+
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        if (!isLatest()) return;
+        const configured = statusData?.configured !== false;
+        setGoogleAuthConfigured(configured);
+        setGoogleConnected(Boolean(statusData?.connected));
+
+        if (!configured) {
+          const missing = Array.isArray(statusData?.missing_fields)
+            ? statusData.missing_fields.join(", ")
+            : "GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI";
+          setGoogleForms([]);
+          setGoogleFormsError(
+            statusData?.message || `Google Forms integration is not configured yet. Missing: ${missing}.`,
+          );
+          return;
+        }
+      } else {
+        setGoogleAuthConfigured(true);
+        setGoogleConnected(false);
+      }
+
+      if (formsRes.ok) {
+        const formsData = await formsRes.json();
+        if (!isLatest()) return;
+        setGoogleForms(Array.isArray(formsData?.forms) ? formsData.forms : []);
+      } else if (formsRes.status === 401) {
+        setGoogleForms([]);
+        setGoogleFormsError("Connect your Google account to list forms.");
+      } else if (formsRes.status === 503) {
+        const body = await formsRes.text();
+        setGoogleForms([]);
+        setGoogleFormsError(body || "Google Forms integration is not configured yet.");
+      } else {
+        const body = await formsRes.text();
+        setGoogleForms([]);
+        setGoogleFormsError(`Could not load forms (${formsRes.status}). ${body || ""}`.trim());
+      }
+    } catch {
+      if (!isLatest()) return;
+      setGoogleAuthConfigured(true);
+      setGoogleConnected(false);
+      setGoogleForms([]);
+      setGoogleFormsError("Google Forms service is unreachable.");
+    } finally {
+      if (isLatest()) {
+        setGoogleFormsLoading(false);
+      }
+    }
+  }, [authFetch, organization?.id]);
+
+  const loadGoogleFormFields = useCallback(async (formID: string, options?: { applySuggestedMapping?: boolean }) => {
+    const trimmedFormID = formID.trim();
+    const requestID = ++loadGoogleFormFieldsRequestIDRef.current;
+    const isLatest = () => loadGoogleFormFieldsRequestIDRef.current === requestID;
+    if (!GF_API) {
+      setTriggerFormFields([]);
+      setTriggerFormFieldsError(GF_API_MISSING_ERROR);
+      setTriggerFormFieldsLoading(false);
+      triggerFieldsFormIDRef.current = "";
+      return;
+    }
+    if (!organization?.id || !trimmedFormID) {
+      setTriggerFormFields([]);
+      setTriggerFormFieldsError(null);
+      triggerFieldsFormIDRef.current = "";
+      return;
+    }
+
+    setTriggerFormFieldsLoading(true);
+    setTriggerFormFieldsError(null);
+
+    try {
+      const res = await authFetch(`${GF_API}/forms/${encodeURIComponent(trimmedFormID)}/fields?org_id=${encodeURIComponent(organization.id)}`);
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`${res.status} ${body}`.trim());
+      }
+
+      const data = await res.json();
+      if (!isLatest()) return;
+      const fields: GoogleFormField[] = Array.isArray(data?.fields) ? data.fields : [];
+      setTriggerFormFields(fields);
+      triggerFieldsFormIDRef.current = trimmedFormID;
+
+      setDraft((d) => {
+        if (d.trigger.type !== "form_submission") return d;
+        const activeFormID = (d.trigger.config.form_id || extractGoogleFormID(d.trigger.config.form_url || "")).trim();
+        if (activeFormID !== trimmedFormID) return d;
+
+        const existingMapping = parseFieldMapping(d.trigger.config.field_mapping || "");
+        const shouldApplySuggested = Boolean(options?.applySuggestedMapping) && Object.keys(existingMapping).length === 0;
+        const finalMapping = shouldApplySuggested ? buildSuggestedFieldMapping(fields) : existingMapping;
+
+        return {
+          ...d,
+          trigger: {
+            ...d.trigger,
+            config: {
+              ...d.trigger.config,
+              field_mapping: serializeFieldMapping(finalMapping),
+              field_schema: buildFieldSchemaJSON(fields, finalMapping),
+            },
+          },
+        };
+      });
+    } catch (err: any) {
+      if (!isLatest()) return;
+      setTriggerFormFields([]);
+      setTriggerFormFieldsError(err?.message || "Failed to load form fields.");
+    } finally {
+      if (isLatest()) {
+        setTriggerFormFieldsLoading(false);
+      }
+    }
+  }, [authFetch, organization?.id, extractGoogleFormID, parseFieldMapping, buildSuggestedFieldMapping, serializeFieldMapping, buildFieldSchemaJSON]);
+
+  const handleGoogleConnect = useCallback(async () => {
+    if (!organization?.id) {
+      setGoogleFormsError("Select an organization first.");
+      return;
+    }
+    if (!GF_API) {
+      setGoogleFormsError(GF_API_MISSING_ERROR);
+      return;
+    }
+    try {
+      const res = await authFetch(`${GF_API}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}`, {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`connect-url failed (${res.status}): ${body}`);
+      }
+      const payload = await res.json() as { auth_url?: string };
+      if (!payload.auth_url) {
+        throw new Error("connect-url response missing auth_url");
+      }
+      window.location.href = payload.auth_url;
+    } catch (err: any) {
+      setGoogleFormsError(err?.message || "Failed to start Google OAuth flow.");
+    }
+  }, [authFetch, organization?.id]);
+
+  const syncGoogleFormsWatch = useCallback(async (
+    workflowID: string,
+    active: boolean,
+    triggerType: WorkflowTrigger["type"],
+    triggerConfig: WorkflowTrigger["config"],
+  ) => {
+    if (!organization?.id) return;
+    if (!GF_API) {
+      throw new Error(GF_API_MISSING_ERROR);
+    }
+
+    const triggerIsForm = triggerType === "form_submission";
+    const formID = (triggerConfig.form_id || extractGoogleFormID(triggerConfig.form_url || "")).trim();
+    const fieldMapping = parseFieldMapping(triggerConfig.field_mapping || "");
+
+    const watchesRes = await authFetch(`${GF_API}/watches?org_id=${encodeURIComponent(organization.id)}`);
+    if (!watchesRes.ok) {
+      const txt = await watchesRes.text();
+      throw new Error(`watch lookup failed (${watchesRes.status}): ${txt}`);
+    }
+
+    const watchesData = await watchesRes.json();
+    const watches: FormWatch[] = Array.isArray(watchesData) ? watchesData : [];
+    const existing = watches.find((w) => w.workflow_id === workflowID);
+
+    if (!triggerIsForm || !formID) {
+      if (existing && existing.active) {
+        const disableRes = await authFetch(`${GF_API}/watches/${existing.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ active: false }),
+        });
+        if (!disableRes.ok) {
+          const txt = await disableRes.text();
+          throw new Error(`watch disable failed (${disableRes.status}): ${txt}`);
+        }
+      }
+      return;
+    }
+
+    if (!existing) {
+      const createRes = await authFetch(`${GF_API}/watches`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          org_id: organization.id,
+          form_id: formID,
+          workflow_id: workflowID,
+          active,
+          field_mapping: fieldMapping,
+        }),
+      });
+      if (!createRes.ok) {
+        const txt = await createRes.text();
+        throw new Error(`watch create failed (${createRes.status}): ${txt}`);
+      }
+      return;
+    }
+
+    if (existing.form_id !== formID) {
+    const deleteRes = await authFetch(`${GF_API}/watches/${existing.id}`, { method: "DELETE" });
+    if (!deleteRes.ok) {
+      const txt = await deleteRes.text();
+      throw new Error(`watch delete failed (${deleteRes.status}): ${txt}`);
+    }
+      const recreateRes = await authFetch(`${GF_API}/watches`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          org_id: organization.id,
+          form_id: formID,
+          workflow_id: workflowID,
+          active,
+          field_mapping: fieldMapping,
+        }),
+      });
+      if (!recreateRes.ok) {
+        const txt = await recreateRes.text();
+        throw new Error(`watch recreate failed (${recreateRes.status}): ${txt}`);
+      }
+      return;
+    }
+
+    const updateRes = await authFetch(`${GF_API}/watches/${existing.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        active,
+        workflow_id: workflowID,
+        field_mapping: fieldMapping,
+      }),
+    });
+    if (!updateRes.ok) {
+      const txt = await updateRes.text();
+      throw new Error(`watch update failed (${updateRes.status}): ${txt}`);
+    }
+  }, [authFetch, organization?.id, parseFieldMapping, extractGoogleFormID]);
+
   /* ── State ── */
   const [draft, setDraft] = useState<WorkflowDraft>(INITIAL_DRAFT);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -106,6 +466,54 @@ export default function WorkflowBuilderPage() {
   const [detailsSidebarOpen, setDetailsSidebarOpen] = useState(false);
   const [departments, setDepartments] = useState<BackendDepartment[]>([]);
   const [roles, setRoles] = useState<BackendRole[]>([]);
+  const [googleForms, setGoogleForms] = useState<GoogleFormOption[]>([]);
+  const [googleFormsLoading, setGoogleFormsLoading] = useState(false);
+  const [googleFormsError, setGoogleFormsError] = useState<string | null>(null);
+  const [googleAuthConfigured, setGoogleAuthConfigured] = useState(true);
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [triggerFormFields, setTriggerFormFields] = useState<GoogleFormField[]>([]);
+  const [triggerFormFieldsLoading, setTriggerFormFieldsLoading] = useState(false);
+  const [triggerFormFieldsError, setTriggerFormFieldsError] = useState<string | null>(null);
+  const triggerFieldsFormIDRef = useRef<string>("");
+
+  const applySuggestedTriggerMapping = useCallback(() => {
+    if (triggerFormFields.length === 0) return;
+    const suggested = buildSuggestedFieldMapping(triggerFormFields);
+
+    setDraft((d) => {
+      if (d.trigger.type !== "form_submission") return d;
+      return {
+        ...d,
+        trigger: {
+          ...d.trigger,
+          config: {
+            ...d.trigger.config,
+            field_mapping: serializeFieldMapping(suggested),
+            field_schema: buildFieldSchemaJSON(triggerFormFields, suggested),
+          },
+        },
+      };
+    });
+  }, [triggerFormFields, buildSuggestedFieldMapping, serializeFieldMapping, buildFieldSchemaJSON]);
+
+  const suggestedTaskDataKeys = useMemo(() => {
+    const suggested = new Set<string>([
+      "trigger_source",
+      "trigger_type",
+      "form_id",
+      "form_response_id",
+      "form_submitted_at",
+      "form_submission",
+    ]);
+
+    const fieldMapping = parseFieldMapping(draft.trigger.config.field_mapping || "");
+    for (const alias of Object.values(fieldMapping)) {
+      const key = alias.trim();
+      if (key) suggested.add(key);
+    }
+
+    return Array.from(suggested).sort((a, b) => a.localeCompare(b));
+  }, [draft.trigger.config.field_mapping, parseFieldMapping]);
 
   /* ── Editing existing workflow (via ?id=) ── */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -154,7 +562,7 @@ export default function WorkflowBuilderPage() {
           description: wf.description || "",
           department: wf.department || "",
           trigger: {
-            type: wf.trigger?.type || "manual",
+            type: wf.trigger?.type === "form_submit" ? "form_submission" : (wf.trigger?.type || "manual"),
             config: wf.trigger?.config || {},
           },
           steps,
@@ -220,6 +628,35 @@ export default function WorkflowBuilderPage() {
     };
   }, [organization?.id, getToken]);
 
+  useEffect(() => {
+    if (!organization?.id) return;
+    loadGoogleForms();
+  }, [organization?.id, loadGoogleForms]);
+
+  useEffect(() => {
+    const isFormTrigger = draft.trigger.type === "form_submission";
+    const formID = (draft.trigger.config.form_id || extractGoogleFormID(draft.trigger.config.form_url || "")).trim();
+
+    if (!isFormTrigger || !formID) {
+      setTriggerFormFields([]);
+      setTriggerFormFieldsError(null);
+      triggerFieldsFormIDRef.current = "";
+      return;
+    }
+
+    if (formID === triggerFieldsFormIDRef.current) {
+      return;
+    }
+
+    loadGoogleFormFields(formID, { applySuggestedMapping: true });
+  }, [
+    draft.trigger.type,
+    draft.trigger.config.form_id,
+    draft.trigger.config.form_url,
+    extractGoogleFormID,
+    loadGoogleFormFields,
+  ]);
+
   /* Dialog form local state */
   const [dlgName, setDlgName] = useState("");
   const [dlgDesc, setDlgDesc] = useState("");
@@ -262,8 +699,28 @@ export default function WorkflowBuilderPage() {
 
   /* ── Trigger ── */
   const handleTriggerChange = useCallback(
-    (t: WorkflowTrigger) => setDraft((d) => ({ ...d, trigger: t })),
-    [],
+    (t: WorkflowTrigger) => {
+      setDraft((d) => {
+        const nextConfig = { ...t.config };
+
+        if (t.type === "form_submission" && triggerFormFields.length > 0) {
+          const formID = (nextConfig.form_id || extractGoogleFormID(nextConfig.form_url || "")).trim();
+          if (formID && formID === triggerFieldsFormIDRef.current) {
+            const mapping = parseFieldMapping(nextConfig.field_mapping || "");
+            nextConfig.field_schema = buildFieldSchemaJSON(triggerFormFields, mapping);
+          }
+        }
+
+        return {
+          ...d,
+          trigger: {
+            ...t,
+            config: nextConfig,
+          },
+        };
+      });
+    },
+    [triggerFormFields, extractGoogleFormID, parseFieldMapping, buildFieldSchemaJSON],
   );
 
   /* ── React Flow change handlers ── */
@@ -508,6 +965,11 @@ export default function WorkflowBuilderPage() {
         errors.push(`End node "${e.title}" has no incoming connection.`);
     }
 
+    const triggerFormID = (draft.trigger.config.form_id || extractGoogleFormID(draft.trigger.config.form_url || "")).trim();
+    if (draft.trigger.type === "form_submission" && !triggerFormID) {
+      errors.push("Form Submission trigger requires a Google Form to be selected (or a form_id entered).");
+    }
+
     // ── 3. Every non-end node must have at least one outgoing edge ──
     for (const s of steps) {
       if (s.type === "end") continue;
@@ -707,6 +1169,10 @@ export default function WorkflowBuilderPage() {
         node.task_actions = s.taskActions || [];
         node.form_template_id = s.formTemplateId || "";
         node.sla_days = s.slaDays || 0;
+        node.task_data_visibility = s.taskDataVisibility || "all";
+        node.visible_data_keys = parseVisibleDataKeys(s.visibleDataKeys);
+        node.include_form_submission = Boolean(s.includeFullFormResponse);
+        node.include_form_files = Boolean(s.includeFormFiles);
       }
 
       // ── Action connector fields ───────────────────
@@ -721,6 +1187,11 @@ export default function WorkflowBuilderPage() {
     }
 
     // ── Build final payload matching backend Workflow struct ──
+    const normalizedTriggerConfig = {
+      ...draft.trigger.config,
+      form_id: (draft.trigger.config.form_id || extractGoogleFormID(draft.trigger.config.form_url || "")).trim(),
+    };
+
     const payload = {
       name: draft.name,
       description: draft.description,
@@ -729,7 +1200,7 @@ export default function WorkflowBuilderPage() {
       status: "active",
       trigger: {
         type: draft.trigger.type === "form_submission" ? "form_submit" : draft.trigger.type,
-        config: draft.trigger.config,
+        config: normalizedTriggerConfig,
       },
       nodes: backendNodes,
       tags: draft.tags,
@@ -760,6 +1231,16 @@ export default function WorkflowBuilderPage() {
       }
       const hasBody = res.status !== 204 && res.headers.get("content-length") !== "0" && res.headers.get("content-type")?.includes("json");
       const resBody = hasBody ? await res.json() : null;
+
+      const savedWorkflowID = editingId || resBody?.id || resBody?.workflow?.id;
+      if (savedWorkflowID) {
+        try {
+          await syncGoogleFormsWatch(savedWorkflowID, true, draft.trigger.type, normalizedTriggerConfig);
+        } catch (watchErr: any) {
+          showToast("Workflow published, but Google Forms trigger sync failed: " + (watchErr?.message || watchErr), "warning");
+        }
+      }
+
       setShowPublishModal(false);
       const msg = editingId ? `Workflow updated!` : `Workflow published!${resBody?.id ? ` ID: ${resBody.id}` : ""}`;
       router.push(`/dashboard/workstation?toast=${encodeURIComponent(msg)}&toastType=success`);
@@ -767,7 +1248,7 @@ export default function WorkflowBuilderPage() {
       console.error(err);
       showToast("Failed to publish workflow: " + (err.message || err), "error");
     }
-  }, [canPublish, hasChanges, commitMessage, draft, editingId, router, showToast]);
+  }, [canPublish, hasChanges, commitMessage, draft, editingId, router, showToast, syncGoogleFormsWatch, organization?.id, extractGoogleFormID, parseVisibleDataKeys]);
 
   const handleSaveDraft = useCallback(async () => {
     if (!draft.name.trim()) { showToast("Please enter a workflow name before saving.", "warning"); return; }
@@ -798,6 +1279,10 @@ export default function WorkflowBuilderPage() {
         node.task_actions = s.taskActions || [];
         node.form_template_id = s.formTemplateId || "";
         node.sla_days = s.slaDays || 0;
+        node.task_data_visibility = s.taskDataVisibility || "all";
+        node.visible_data_keys = parseVisibleDataKeys(s.visibleDataKeys);
+        node.include_form_submission = Boolean(s.includeFullFormResponse);
+        node.include_form_files = Boolean(s.includeFormFiles);
       } else if (s.type === "condition") {
         node.condition = s.condition || "";
         node.next_yes = out.find((e) => e.sourceHandle === "yes")?.target || "";
@@ -809,13 +1294,18 @@ export default function WorkflowBuilderPage() {
       }
       return node;
     });
+    const normalizedTriggerConfig = {
+      ...draft.trigger.config,
+      form_id: (draft.trigger.config.form_id || extractGoogleFormID(draft.trigger.config.form_url || "")).trim(),
+    };
+
     const payload = {
       name: draft.name,
       description: draft.description,
       department: draft.department,
       version: 0,
       status: "draft",
-      trigger: { type: draft.trigger.type === "form_submission" ? "form_submit" : draft.trigger.type, config: draft.trigger.config },
+      trigger: { type: draft.trigger.type === "form_submission" ? "form_submit" : draft.trigger.type, config: normalizedTriggerConfig },
       nodes: backendNodes,
       tags: draft.tags,
       raw_json: JSON.stringify({ steps: draft.steps, edges: draft.edges }),
@@ -828,12 +1318,22 @@ export default function WorkflowBuilderPage() {
       if (!res.ok) { const t = await res.text(); throw new Error(`${res.status}: ${t}`); }
       const hasBody = res.status !== 204 && res.headers.get("content-length") !== "0" && res.headers.get("content-type")?.includes("json");
       const resBody = hasBody ? await res.json() : null;
+
+      const savedWorkflowID = editingId || resBody?.id || resBody?.workflow?.id;
+      if (savedWorkflowID) {
+        try {
+          await syncGoogleFormsWatch(savedWorkflowID, false, draft.trigger.type, normalizedTriggerConfig);
+        } catch (watchErr: any) {
+          showToast("Draft saved, but Google Forms watch sync failed: " + (watchErr?.message || watchErr), "warning");
+        }
+      }
+
       const msg = editingId ? `Draft updated.` : `Draft saved!${resBody?.id ? ` ID: ${resBody.id}` : ""}`;
       router.push(`/dashboard/workstation?toast=${encodeURIComponent(msg)}&toastType=success`);
     } catch (err: any) {
       showToast("Failed to save draft: " + (err.message || err), "error");
     }
-  }, [draft, editingId, router, showToast]);
+  }, [draft, editingId, router, showToast, syncGoogleFormsWatch, extractGoogleFormID, parseVisibleDataKeys]);
 
   /* ── Selected step for editor ── */
   const selectedStep =
@@ -1216,6 +1716,25 @@ export default function WorkflowBuilderPage() {
                 <TriggerEditor
                   trigger={draft.trigger}
                   onChange={handleTriggerChange}
+                  availableForms={googleForms}
+                  formsLoading={googleFormsLoading}
+                  formsError={googleFormsError}
+                  googleAuthConfigured={googleAuthConfigured}
+                  googleConnected={googleConnected}
+                  onRefreshForms={loadGoogleForms}
+                  formFields={triggerFormFields}
+                  formFieldsLoading={triggerFormFieldsLoading}
+                  formFieldsError={triggerFormFieldsError}
+                  onRefreshFormFields={() => {
+                    const selectedFormID = (draft.trigger.config.form_id || extractGoogleFormID(draft.trigger.config.form_url || "")).trim();
+                    if (!selectedFormID) {
+                      setTriggerFormFieldsError("Select a Google Form first.");
+                      return;
+                    }
+                    loadGoogleFormFields(selectedFormID, { applySuggestedMapping: false });
+                  }}
+                  onApplySuggestedMapping={applySuggestedTriggerMapping}
+                  onGoogleConnect={handleGoogleConnect}
                   onClose={handleCloseEditor}
                 />
               )}
@@ -1224,6 +1743,10 @@ export default function WorkflowBuilderPage() {
                   step={selectedStep}
                   stepIndex={selectedStepIndex}
                   availableRoles={roles.map((r) => r.name)}
+                  suggestedDataKeys={suggestedTaskDataKeys}
+                  availableForms={googleForms}
+                  formsLoading={googleFormsLoading}
+                  onRefreshForms={loadGoogleForms}
                   onChange={handleStepChange}
                   onClose={handleCloseEditor}
                 />

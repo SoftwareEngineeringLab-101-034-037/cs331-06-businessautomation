@@ -151,6 +151,24 @@ func (m *mockStore) GetInstance(id string) (models.Instance, bool) {
 	return inst, ok
 }
 
+func (m *mockStore) FindInstanceByWorkflowAndFormResponse(workflowID, formResponseID string) (models.Instance, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, inst := range m.instances {
+		if inst.WorkflowID != workflowID || inst.Data == nil {
+			continue
+		}
+		value, ok := inst.Data["form_response_id"]
+		if !ok || value == nil {
+			continue
+		}
+		if fmt.Sprint(value) == formResponseID {
+			return inst, true, nil
+		}
+	}
+	return models.Instance{}, false, nil
+}
+
 func (m *mockStore) ListInstancesByWorkflow(workflowID string) ([]models.Instance, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -560,6 +578,12 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	if savedTask.NodeID != "task" || savedTask.AssignedRole != "manager" {
 		t.Fatalf("unexpected saved task: %+v", savedTask)
 	}
+	if savedTask.VisibleData == nil {
+		t.Fatalf("expected visible data to be populated by default")
+	}
+	if got, ok := savedTask.VisibleData["request_id"]; !ok || got != "r-1" {
+		t.Fatalf("expected request_id in visible data, got %#v", savedTask.VisibleData)
+	}
 	if countAuditAction(inst, "task_assigned") != 1 {
 		t.Fatalf("expected task_assigned audit entry")
 	}
@@ -593,6 +617,126 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	}
 	if _, ok := inst.NodeStates["approved-end"]; !ok {
 		t.Fatalf("expected approved-end to be visited")
+	}
+}
+
+func TestExecuteTaskAppliesVisibilitySelection(t *testing.T) {
+	store := newMockStore()
+	exec := NewExecutor(store, &mockEmail{}, nil)
+
+	wf := models.Workflow{
+		ID:    "wf-visibility-selected",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{{
+			ID:                    "task",
+			Type:                  models.NodeTask,
+			Title:                 "Review",
+			TaskDataVisibility:    "selected",
+			VisibleDataKeys:       []string{"employee_name", "amount", "missing_key"},
+			IncludeFormSubmission: true,
+			IncludeFormFiles:      true,
+		}},
+	}
+
+	data := map[string]interface{}{
+		"employee_name": "Alice",
+		"amount":        "1200",
+		"internal_note": "sensitive",
+		"form_submission": map[string]interface{}{
+			"receipt": "https://drive.google.com/file/d/abc123/view",
+		},
+	}
+
+	if _, err := exec.executeTask("inst-1", &wf, &wf.Nodes[0], data, ""); err != nil {
+		t.Fatalf("executeTask failed: %v", err)
+	}
+	if len(store.tasks) != 1 {
+		t.Fatalf("expected one saved task, got %d", len(store.tasks))
+	}
+
+	var savedTask models.TaskAssignment
+	for _, task := range store.tasks {
+		savedTask = task
+		break
+	}
+
+	if savedTask.Data == nil || savedTask.Data["internal_note"] != "sensitive" {
+		t.Fatalf("expected full internal data to be retained, got %#v", savedTask.Data)
+	}
+	if _, ok := savedTask.VisibleData["internal_note"]; ok {
+		t.Fatalf("did not expect internal_note in assignee visible data: %#v", savedTask.VisibleData)
+	}
+	if savedTask.VisibleData["employee_name"] != "Alice" || savedTask.VisibleData["amount"] != "1200" {
+		t.Fatalf("expected selected fields in visible data, got %#v", savedTask.VisibleData)
+	}
+	if _, ok := savedTask.VisibleData["form_submission"]; !ok {
+		t.Fatalf("expected form_submission to be included when requested")
+	}
+	rawFiles, ok := savedTask.VisibleData["form_submission_files"]
+	if !ok {
+		t.Fatalf("expected extracted file refs in visible data")
+	}
+	files, ok := rawFiles.([]string)
+	if !ok || len(files) != 1 {
+		t.Fatalf("expected one extracted file ref, got %#v", rawFiles)
+	}
+}
+
+func TestExecuteTaskVisibilityNoneWithoutOverrides(t *testing.T) {
+	store := newMockStore()
+	exec := NewExecutor(store, &mockEmail{}, nil)
+
+	wf := models.Workflow{
+		ID:    "wf-visibility-none",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{{
+			ID:                 "task",
+			Type:               models.NodeTask,
+			Title:              "Review",
+			TaskDataVisibility: "none",
+		}},
+	}
+
+	if _, err := exec.executeTask("inst-2", &wf, &wf.Nodes[0], map[string]interface{}{"secret": "x"}, ""); err != nil {
+		t.Fatalf("executeTask failed: %v", err)
+	}
+
+	var savedTask models.TaskAssignment
+	for _, task := range store.tasks {
+		savedTask = task
+		break
+	}
+	if savedTask.VisibleData != nil {
+		t.Fatalf("expected no visible data for none mode, got %#v", savedTask.VisibleData)
+	}
+}
+
+func TestExecuteTaskVisibilityUnknownModeDefaultsToNone(t *testing.T) {
+	store := newMockStore()
+	exec := NewExecutor(store, &mockEmail{}, nil)
+
+	wf := models.Workflow{
+		ID:    "wf-visibility-unknown",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{{
+			ID:                 "task",
+			Type:               models.NodeTask,
+			Title:              "Review",
+			TaskDataVisibility: "unexpected_mode",
+		}},
+	}
+
+	if _, err := exec.executeTask("inst-3", &wf, &wf.Nodes[0], map[string]interface{}{"secret": "x"}, ""); err != nil {
+		t.Fatalf("executeTask failed: %v", err)
+	}
+
+	var savedTask models.TaskAssignment
+	for _, task := range store.tasks {
+		savedTask = task
+		break
+	}
+	if savedTask.VisibleData != nil {
+		t.Fatalf("expected no visible data for unknown mode, got %#v", savedTask.VisibleData)
 	}
 }
 

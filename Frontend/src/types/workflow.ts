@@ -188,6 +188,8 @@ export interface ConnectorConfigData {
 /** Allowed task actions the assignee can take */
 export type TaskAction = "approve" | "reject" | "clarify" | "complete";
 
+export type TaskDataVisibilityMode = "all" | "selected" | "none";
+
 export const TASK_ACTION_OPTIONS: { value: TaskAction; label: string; color: string }[] = [
   { value: "approve",  label: "Approve",  color: "#22c55e" },
   { value: "reject",   label: "Reject",   color: "#ef4444" },
@@ -283,6 +285,10 @@ export interface WorkflowStep {
   /** Maps each task action to the downstream node ID (derived from canvas edges on publish). */
   nextActions?: Record<string, string>;
   formTemplateId?: string;
+  taskDataVisibility?: TaskDataVisibilityMode;
+  visibleDataKeys?: string[];
+  includeFullFormResponse?: boolean;
+  includeFormFiles?: boolean;
   slaDays: number;
   isRequired: boolean;
   actionType: StepActionType;
@@ -345,7 +351,11 @@ export function createBlankStep(
   order: number,
   position?: { x: number; y: number },
 ): WorkflowStep {
-  const normalizedOrder = Math.max(1, Math.floor(order));
+  let rawOrder = Number(order);
+  if (!Number.isFinite(rawOrder)) {
+    rawOrder = 1;
+  }
+  const normalizedOrder = Math.max(1, Math.floor(rawOrder));
   return {
     id: generateStepId(normalizedOrder),
     type: "task",
@@ -353,6 +363,10 @@ export function createBlankStep(
     description: "",
     actionType: "custom_task",
     assignedRole: "",
+    taskDataVisibility: "all",
+    visibleDataKeys: [],
+    includeFullFormResponse: false,
+    includeFormFiles: false,
     slaDays: 1,
     isRequired: true,
     branches: 2,

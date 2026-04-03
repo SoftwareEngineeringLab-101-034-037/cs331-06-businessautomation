@@ -1,14 +1,19 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 
 type ToastType = "success" | "error" | "warning" | "info";
 
 interface Toast {
-  id: number;
+  id: string;
   message: string;
   type: ToastType;
+  createdAt: number;
+  expiresAt: number;
 }
+
+const DEFAULT_TOAST_DURATION_MS = 3800;
+const TOAST_STORE_KEY = "flowengine:toasts";
 
 const ICONS: Record<ToastType, string> = {
   success: "M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
@@ -24,26 +29,128 @@ const COLORS: Record<ToastType, { border: string; icon: string; text: string }> 
   info:    { border: "rgba(37,99,235,0.3)",   icon: "#2563eb", text: "var(--text-primary)" },
 };
 
+function readPersistedToasts(): Toast[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.sessionStorage.getItem(TOAST_STORE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const now = Date.now();
+    return parsed
+      .filter((t): t is Toast => (
+        typeof t?.id === "string" &&
+        typeof t?.message === "string" &&
+        typeof t?.type === "string" &&
+        typeof t?.createdAt === "number" &&
+        typeof t?.expiresAt === "number"
+      ))
+      .filter((t) => t.expiresAt > now);
+  } catch {
+    return [];
+  }
+}
+
+function writePersistedToasts(toasts: Toast[]) {
+  if (typeof window === "undefined") return;
+  try {
+    if (toasts.length === 0) {
+      window.sessionStorage.removeItem(TOAST_STORE_KEY);
+      return;
+    }
+    window.sessionStorage.setItem(TOAST_STORE_KEY, JSON.stringify(toasts));
+  } catch {
+    // Ignore storage errors to avoid blocking UI notifications.
+  }
+}
+
+function generateToastID(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function useToast() {
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const nextId = useRef(0);
+  const [toasts, setToastsState] = useState<Toast[]>(() => readPersistedToasts());
+  const toastsRef = useRef<Toast[]>(toasts);
+  const timersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  const showToast = useCallback((message: string, type: ToastType = "info") => {
-    const id = ++nextId.current;
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3800);
+  const setToasts = useCallback((next: Toast[]) => {
+    toastsRef.current = next;
+    writePersistedToasts(next);
+    setToastsState(next);
   }, []);
 
-  const dismissToast = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
+  const dismissToast = useCallback((id: string) => {
+    const existingTimer = timersRef.current[id];
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      delete timersRef.current[id];
+    }
+    setToasts(toastsRef.current.filter((t) => t.id !== id));
+  }, [setToasts]);
+
+  const showToast = useCallback((message: string, type: ToastType = "info", durationMs: number = DEFAULT_TOAST_DURATION_MS) => {
+    const now = Date.now();
+    const toast: Toast = {
+      id: generateToastID(),
+      message,
+      type,
+      createdAt: now,
+      expiresAt: now + Math.max(300, durationMs),
+    };
+    setToasts([...toastsRef.current, toast]);
+  }, [setToasts]);
+
+  useEffect(() => {
+    const now = Date.now();
+    const activeToasts = toasts.filter((t) => t.expiresAt > now);
+    const activeIDs = new Set(activeToasts.map((t) => t.id));
+    const expiredIDs = toasts
+      .filter((t) => !activeIDs.has(t.id))
+      .map((t) => t.id);
+
+    for (const id of expiredIDs) {
+      dismissToast(id);
+    }
+
+    const liveToasts = toastsRef.current.filter((t) => t.expiresAt > now);
+
+    for (const [id, timer] of Object.entries(timersRef.current)) {
+      if (!liveToasts.some((t) => t.id === id)) {
+        clearTimeout(timer);
+        delete timersRef.current[id];
+      }
+    }
+
+    for (const toast of liveToasts) {
+      if (timersRef.current[toast.id]) continue;
+      const remaining = Math.max(1, toast.expiresAt - now);
+      timersRef.current[toast.id] = setTimeout(() => {
+        dismissToast(toast.id);
+      }, remaining);
+    }
+  }, [toasts, dismissToast]);
+
+  useEffect(() => {
+    const syncFromStorage = () => {
+      setToasts(readPersistedToasts());
+    };
+
+    window.addEventListener("storage", syncFromStorage);
+    return () => {
+      window.removeEventListener("storage", syncFromStorage);
+      for (const timer of Object.values(timersRef.current)) {
+        clearTimeout(timer);
+      }
+      timersRef.current = {};
+    };
+  }, [setToasts]);
 
   return { toasts, showToast, dismissToast };
 }
 
 interface ToastContainerProps {
   toasts: Toast[];
-  onDismiss: (id: number) => void;
+  onDismiss: (id: string) => void;
 }
 
 export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
@@ -56,7 +163,7 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
         bottom: 24,
         right: 24,
         display: "flex",
-        flexDirection: "column",
+        flexDirection: "column-reverse",
         gap: 10,
         zIndex: 99999,
         pointerEvents: "none",

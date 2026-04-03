@@ -24,6 +24,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	if strings.TrimSpace(cfg.IntegrationKey) == "" {
+		log.Printf("WARNING: WORKFLOW_INTEGRATION_KEY is empty; integration ingress is disabled")
+		log.Fatalf("WORKFLOW_INTEGRATION_KEY must be set")
+	}
 
 	// Connect to MongoDB (required)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -43,7 +47,7 @@ func main() {
 	exec := executor.NewExecutor(store, email, assigneeSelector)
 
 	workflowHandler := handler.NewWorkflowHandler(store)
-	instanceHandler := handler.NewInstanceHandler(store, exec)
+	instanceHandler := handler.NewInstanceHandler(store, exec, cfg.IntegrationKey)
 	taskHandler := handler.NewTaskHandler(store, exec)
 
 	// ── Clerk JWT auth ────────────────────────────────────────────────────────
@@ -73,6 +77,7 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	r.POST("/integrations/google-forms/events", instanceHandler.StartFromGoogleForms)
 
 	// Protected
 	api := r.Group("/api")

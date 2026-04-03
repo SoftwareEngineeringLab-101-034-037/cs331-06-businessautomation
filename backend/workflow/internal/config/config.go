@@ -14,6 +14,7 @@ type Config struct {
 	ClerkIssuerURL   string
 	AuthServiceURL   string
 	AuthServiceToken string
+	IntegrationKey   string
 	Port             string
 }
 
@@ -37,6 +38,7 @@ func Load() (*Config, error) {
 		ClerkIssuerURL:   strings.TrimSpace(getEnv("CLERK_ISSUER_URL", "")),
 		AuthServiceURL:   strings.TrimSpace(getEnv("AUTH_SERVICE_URL", "http://localhost:8080")),
 		AuthServiceToken: strings.TrimSpace(getEnv("AUTH_SERVICE_TOKEN", "")),
+		IntegrationKey:   strings.TrimSpace(getEnv("WORKFLOW_INTEGRATION_KEY", "")),
 		Port:             strings.TrimSpace(getEnv("PORT", "8085")),
 	}
 

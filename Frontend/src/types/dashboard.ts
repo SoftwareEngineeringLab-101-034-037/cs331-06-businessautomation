@@ -44,6 +44,7 @@ export interface Task {
   stepNumber: number;
   totalSteps: number;
   allowedActions?: string[];
+  visibleData?: Record<string, unknown>;
   nodeId?: string;
   orgId?: string;
   instanceId?: string;
@@ -204,6 +205,12 @@ export const DASHBOARD_NAV: NavItem[] = [
     label: "Team",
     href: "/dashboard/team",
     icon: "team",
+    roles: ["admin"],
+  },
+  {
+    label: "Integrations",
+    href: "/dashboard/integrations",
+    icon: "integrations",
     roles: ["admin"],
   },
 ];

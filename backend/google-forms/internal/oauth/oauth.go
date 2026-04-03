@@ -2,11 +2,18 @@ package oauth
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -19,15 +26,50 @@ import (
 var scopes = []string{
 	"https://www.googleapis.com/auth/forms.body",
 	"https://www.googleapis.com/auth/forms.responses.readonly",
+	"https://www.googleapis.com/auth/drive.metadata.readonly",
 	"https://www.googleapis.com/auth/drive.file",
+	"https://www.googleapis.com/auth/userinfo.email",
+	"https://www.googleapis.com/auth/userinfo.profile",
 }
+
+const providerGoogleForms = "google_forms"
 
 type Service struct {
-	cfg   *oauth2.Config
-	store storage.Store
+	cfg             *oauth2.Config
+	store           storage.Store
+	configured      bool
+	missingFields   []string
+	stateSigningKey []byte
 }
 
+type signedAuthState struct {
+	OrgID     string `json:"org_id"`
+	UserID    string `json:"user_id"`
+	ExpiresAt int64  `json:"exp"`
+	Nonce     string `json:"nonce"`
+}
+
+const authStateTTL = 10 * time.Minute
+const oauthActorCookieName = "gf_oauth_actor"
+
+var ErrOAuthNotConfigured = errors.New("google oauth is not configured on server")
+var ErrOAuthReconnectRequired = errors.New("google oauth reconnect required")
+var ErrOAuthNotConnected = errors.New("google oauth not connected")
+
 func NewService(clientID, clientSecret, redirectURI string, store storage.Store) *Service {
+	missing := make([]string, 0, 3)
+	if strings.TrimSpace(clientID) == "" {
+		missing = append(missing, "GOOGLE_CLIENT_ID")
+	}
+	if strings.TrimSpace(clientSecret) == "" {
+		missing = append(missing, "GOOGLE_CLIENT_SECRET")
+	}
+	if strings.TrimSpace(redirectURI) == "" {
+		missing = append(missing, "GOOGLE_REDIRECT_URI")
+	}
+
+	configured := len(missing) == 0
+
 	return &Service{
 		cfg: &oauth2.Config{
 			ClientID:     clientID,
@@ -36,26 +78,115 @@ func NewService(clientID, clientSecret, redirectURI string, store storage.Store)
 			Scopes:       scopes,
 			Endpoint:     google.Endpoint,
 		},
-		store: store,
+		store:           store,
+		configured:      configured,
+		missingFields:   missing,
+		stateSigningKey: buildStateSigningKey(clientSecret),
 	}
 }
 
-func (s *Service) AuthURL(orgID string) string {
-	return s.cfg.AuthCodeURL(orgID, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
+func (s *Service) IsConfigured() bool {
+	return s.configured
+}
+
+func (s *Service) MissingFields() []string {
+	out := make([]string, len(s.missingFields))
+	copy(out, s.missingFields)
+	return out
+}
+
+func IsNotConfiguredError(err error) bool {
+	return errors.Is(err, ErrOAuthNotConfigured)
+}
+
+func IsReconnectRequiredError(err error) bool {
+	return errors.Is(err, ErrOAuthReconnectRequired)
+}
+
+func IsNotConnectedError(err error) bool {
+	return errors.Is(err, ErrOAuthNotConnected)
+}
+
+func (s *Service) AuthURL(orgID, userID string) string {
+	if !s.IsConfigured() {
+		return ""
+	}
+	state, err := s.GenerateState(orgID, userID)
+	if err != nil {
+		log.Printf("warn: failed to generate oauth state for org %s: %v", orgID, err)
+		return ""
+	}
+	return s.cfg.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
 }
 
 func (s *Service) Exchange(ctx context.Context, code, orgID string) error {
+	if !s.IsConfigured() {
+		return ErrOAuthNotConfigured
+	}
 	tok, err := s.cfg.Exchange(ctx, code)
 	if err != nil {
 		return fmt.Errorf("exchange code: %w", err)
 	}
+
+	grantedScopes := parseTokenScopes(tok)
+	if ok, missing := hasRequiredScopes(grantedScopes, scopes); !ok {
+		return fmt.Errorf("missing required granted scopes %s", strings.Join(missing, ", "))
+	}
+
+	client := s.cfg.Client(ctx, tok)
+	accountID, accountEmail, accountName := s.fetchGoogleAccountDetails(ctx, client)
+	if accountID == "" {
+		if accountEmail != "" {
+			accountID = strings.ToLower(accountEmail)
+		} else {
+			log.Printf("oauth.exchange missing stable account identifier org_id=%q: google user info returned empty sub and email", orgID)
+			return fmt.Errorf("missing stable account identifier from google user info")
+		}
+	}
+	if accountName == "" {
+		accountName = accountEmail
+	}
+
+	if tok.RefreshToken == "" {
+		existing, getErr := s.store.GetTokenByAccount(ctx, orgID, providerGoogleForms, accountID)
+		if getErr == nil && existing != nil {
+			tok.RefreshToken = existing.RefreshToken
+		}
+	}
+
+	isPrimary := false
+	if existing, getErr := s.store.GetTokenByAccount(ctx, orgID, providerGoogleForms, accountID); getErr == nil && existing != nil && existing.IsPrimary {
+		isPrimary = true
+	} else {
+		tokens, listErr := s.store.ListTokens(ctx, orgID, providerGoogleForms)
+		if listErr == nil {
+			if len(tokens) == 0 {
+				isPrimary = true
+			} else {
+				hasPrimary := false
+				for _, token := range tokens {
+					if token.IsPrimary {
+						hasPrimary = true
+						break
+					}
+				}
+				isPrimary = !hasPrimary
+			}
+		}
+	}
+
 	m := &models.OAuthToken{
+		Provider:     providerGoogleForms,
 		OrgID:        orgID,
+		AccountID:    accountID,
+		AccountEmail: accountEmail,
+		AccountName:  accountName,
+		IsPrimary:    isPrimary,
 		AccessToken:  tok.AccessToken,
 		RefreshToken: tok.RefreshToken,
 		TokenType:    tok.TokenType,
 		Expiry:       tok.Expiry,
-		Scopes:       scopes,
+		Scopes:       grantedScopes,
 		ConnectedAt:  time.Now(),
 	}
 	return s.store.SaveToken(ctx, m)
@@ -64,12 +195,19 @@ func (s *Service) Exchange(ctx context.Context, code, orgID string) error {
 // GetClient returns an HTTP client authenticated for the given org.
 // It auto-refreshes the access token and persists the new token if refreshed.
 func (s *Service) GetClient(ctx context.Context, orgID string) (*http.Client, error) {
+	if !s.IsConfigured() {
+		return nil, ErrOAuthNotConfigured
+	}
+
 	stored, err := s.store.GetToken(ctx, orgID)
 	if err != nil {
 		return nil, err
 	}
 	if stored == nil {
-		return nil, fmt.Errorf("no google connection for org %s", orgID)
+		return nil, ErrOAuthNotConnected
+	}
+	if ok, missing := hasRequiredScopes(stored.Scopes, scopes); !ok {
+		return nil, fmt.Errorf("%w: missing scopes %s", ErrOAuthReconnectRequired, strings.Join(missing, ", "))
 	}
 
 	tok := &oauth2.Token{
@@ -81,6 +219,12 @@ func (s *Service) GetClient(ctx context.Context, orgID string) (*http.Client, er
 
 	fresh, err := s.cfg.TokenSource(ctx, tok).Token()
 	if err != nil {
+		if isRefreshReauthError(err) {
+			if delErr := s.store.DeleteTokenByAccount(ctx, orgID, stored.Provider, stored.AccountID); delErr != nil {
+				log.Printf("warn: delete invalid token for org %s: %v", orgID, delErr)
+			}
+			return nil, fmt.Errorf("%w: %v", ErrOAuthReconnectRequired, err)
+		}
 		return nil, fmt.Errorf("token refresh: %w", err)
 	}
 
@@ -96,37 +240,213 @@ func (s *Service) GetClient(ctx context.Context, orgID string) (*http.Client, er
 }
 
 func (s *Service) Disconnect(ctx context.Context, orgID string) error {
-	stored, err := s.store.GetToken(ctx, orgID)
+	if !s.IsConfigured() {
+		return nil
+	}
+
+	tokens, err := s.store.ListTokens(ctx, orgID, providerGoogleForms)
 	if err != nil {
 		return err
 	}
-	if stored != nil {
-		resp, err := http.PostForm("https://oauth2.googleapis.com/revoke",
-			url.Values{"token": {stored.AccessToken}})
-		if err == nil {
-			resp.Body.Close()
+	for _, stored := range tokens {
+		for _, token := range []string{stored.AccessToken, stored.RefreshToken} {
+			if strings.TrimSpace(token) == "" {
+				continue
+			}
+			if err := revokeToken(ctx, token); err != nil {
+				log.Printf("warn: revoke token failed org_id=%q account_id=%q: %v", orgID, stored.AccountID, err)
+			}
 		}
 	}
 	return s.store.DeleteToken(ctx, orgID)
 }
 
+func (s *Service) ListConnections(ctx context.Context, orgID string) ([]*models.OAuthToken, error) {
+	if !s.IsConfigured() {
+		return []*models.OAuthToken{}, nil
+	}
+	return s.store.ListTokens(ctx, orgID, providerGoogleForms)
+}
+
+func (s *Service) DisconnectAccount(ctx context.Context, orgID, accountID string) error {
+	if !s.IsConfigured() {
+		return nil
+	}
+	if strings.TrimSpace(accountID) == "" {
+		return fmt.Errorf("account_id required")
+	}
+
+	tok, err := s.store.GetTokenByAccount(ctx, orgID, providerGoogleForms, accountID)
+	if err != nil {
+		return err
+	}
+	if tok == nil {
+		return nil
+	}
+
+	for _, token := range []string{tok.AccessToken, tok.RefreshToken} {
+		if strings.TrimSpace(token) == "" {
+			continue
+		}
+		if revokeErr := revokeToken(ctx, token); revokeErr != nil {
+			log.Printf("warn: revoke token failed org_id=%q account_id=%q: %v", orgID, accountID, revokeErr)
+		}
+	}
+
+	if err := s.store.DeleteTokenByAccount(ctx, orgID, providerGoogleForms, accountID); err != nil {
+		return err
+	}
+
+	if tok.IsPrimary {
+		nextTokens, listErr := s.store.ListTokens(ctx, orgID, providerGoogleForms)
+		if listErr == nil && len(nextTokens) > 0 {
+			nextTokens[0].IsPrimary = true
+			if saveErr := s.store.SaveToken(ctx, nextTokens[0]); saveErr != nil {
+				log.Printf("warn: failed to persist replacement primary token for org %s account %s: %v", orgID, nextTokens[0].AccountID, saveErr)
+			}
+		}
+	}
+
+	return nil
+}
+
 func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
-	mux.HandleFunc("/auth/google/connect", func(w http.ResponseWriter, r *http.Request) {
-		orgID := r.URL.Query().Get("org_id")
+	authorizeOrg := func(r *http.Request, orgID string) (int, string) {
+		return authorizeOrgAccess(r, orgID)
+	}
+
+	mux.HandleFunc("/auth/google/connect-url", func(w http.ResponseWriter, r *http.Request) {
+		cookieSecure := r.TLS != nil
+		if !svc.IsConfigured() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+				"error":          ErrOAuthNotConfigured.Error(),
+				"configured":     false,
+				"missing_fields": svc.MissingFields(),
+				"action":         "Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI in service environment, then restart.",
+			})
+			return
+		}
+
+		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 		if orgID == "" {
 			writeError(w, http.StatusBadRequest, "org_id required")
 			return
 		}
-		http.Redirect(w, r, svc.AuthURL(orgID), http.StatusTemporaryRedirect)
+		status, msg := authorizeOrg(r, orgID)
+		if status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+
+		userID, err := extractBearerUserID(r.Header.Get("Authorization"))
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid authorization token")
+			return
+		}
+
+		authURL := svc.AuthURL(orgID, userID)
+		if authURL == "" {
+			writeError(w, http.StatusInternalServerError, "failed to initialize oauth authorization")
+			return
+		}
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     oauthActorCookieName,
+			Value:    userID,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   cookieSecure,
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   int(authStateTTL.Seconds()),
+		})
+
+		writeJSON(w, http.StatusOK, map[string]string{"auth_url": authURL})
+	})
+
+	mux.HandleFunc("/auth/google/connect", func(w http.ResponseWriter, r *http.Request) {
+		cookieSecure := r.TLS != nil
+		if !svc.IsConfigured() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+				"error":          ErrOAuthNotConfigured.Error(),
+				"configured":     false,
+				"missing_fields": svc.MissingFields(),
+				"action":         "Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI in service environment, then restart.",
+			})
+			return
+		}
+
+		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+		if orgID == "" {
+			writeError(w, http.StatusBadRequest, "org_id required")
+			return
+		}
+		status, msg := authorizeOrg(r, orgID)
+		if status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+
+		userID, err := extractBearerUserID(r.Header.Get("Authorization"))
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid authorization token")
+			return
+		}
+
+		authURL := svc.AuthURL(orgID, userID)
+		if authURL == "" {
+			writeError(w, http.StatusInternalServerError, "failed to initialize oauth authorization")
+			return
+		}
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     oauthActorCookieName,
+			Value:    userID,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   cookieSecure,
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   int(authStateTTL.Seconds()),
+		})
+		http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
 	})
 
 	mux.HandleFunc("/auth/google/callback", func(w http.ResponseWriter, r *http.Request) {
+		cookieSecure := r.TLS != nil
+		if !svc.IsConfigured() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+				"error":          ErrOAuthNotConfigured.Error(),
+				"configured":     false,
+				"missing_fields": svc.MissingFields(),
+				"action":         "Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI in service environment, then restart.",
+			})
+			return
+		}
+
 		code := r.URL.Query().Get("code")
-		orgID := r.URL.Query().Get("state")
-		if code == "" || orgID == "" {
+		stateToken := r.URL.Query().Get("state")
+		if code == "" || stateToken == "" {
 			writeError(w, http.StatusBadRequest, "missing code or state")
 			return
 		}
+		orgID, stateUserID, err := svc.ValidateAndConsumeState(stateToken)
+		if err != nil {
+			writeError(w, http.StatusForbidden, "invalid or expired oauth state")
+			return
+		}
+		actorCookie, cookieErr := r.Cookie(oauthActorCookieName)
+		if cookieErr != nil || strings.TrimSpace(actorCookie.Value) == "" || strings.TrimSpace(actorCookie.Value) != stateUserID {
+			writeError(w, http.StatusForbidden, "oauth callback actor mismatch")
+			return
+		}
+		if authHeader := strings.TrimSpace(r.Header.Get("Authorization")); authHeader != "" {
+			currentUserID, userErr := extractBearerUserID(authHeader)
+			if userErr != nil || currentUserID != stateUserID {
+				writeError(w, http.StatusForbidden, "oauth callback actor mismatch")
+				return
+			}
+		}
+
+		http.SetCookie(w, &http.Cookie{Name: oauthActorCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: cookieSecure, SameSite: http.SameSiteLaxMode})
 		if err := svc.Exchange(r.Context(), code, orgID); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -139,12 +459,24 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		orgID := r.URL.Query().Get("org_id")
+		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+		accountID := r.URL.Query().Get("account_id")
 		if orgID == "" {
 			writeError(w, http.StatusBadRequest, "org_id required")
 			return
 		}
-		if err := svc.Disconnect(r.Context(), orgID); err != nil {
+		status, msg := authorizeOrg(r, orgID)
+		if status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+		var err error
+		if accountID != "" {
+			err = svc.DisconnectAccount(r.Context(), orgID, accountID)
+		} else {
+			err = svc.Disconnect(r.Context(), orgID)
+		}
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -152,26 +484,76 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 	})
 
 	mux.HandleFunc("/auth/google/status", func(w http.ResponseWriter, r *http.Request) {
-		orgID := r.URL.Query().Get("org_id")
+		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 		if orgID == "" {
 			writeError(w, http.StatusBadRequest, "org_id required")
 			return
 		}
+		status, msg := authorizeOrg(r, orgID)
+		if status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+		if !svc.IsConfigured() {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"configured":     false,
+				"connected":      false,
+				"missing_fields": svc.MissingFields(),
+				"message":        "Google Forms integration needs admin setup before org admins can connect accounts.",
+			})
+			return
+		}
+
 		tok, err := store.GetToken(r.Context(), orgID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if tok == nil {
-			writeJSON(w, http.StatusOK, map[string]bool{"connected": false})
+			writeJSON(w, http.StatusOK, map[string]interface{}{"configured": true, "connected": false})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"connected":    true,
-			"connected_at": tok.ConnectedAt,
-			"scopes":       tok.Scopes,
+			"configured":    true,
+			"connected":     true,
+			"connected_at":  tok.ConnectedAt,
+			"scopes":        tok.Scopes,
+			"account_id":    tok.AccountID,
+			"account_email": tok.AccountEmail,
+			"account_name":  tok.AccountName,
 		})
 	})
+}
+
+func (s *Service) fetchGoogleAccountDetails(ctx context.Context, client *http.Client) (string, string, string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/oauth2/v3/userinfo", nil)
+	if err != nil {
+		return "", "", ""
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("warn: fetch google user info failed: %v", err)
+		return "", "", ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("warn: fetch google user info returned %d", resp.StatusCode)
+		return "", "", ""
+	}
+
+	var user struct {
+		Sub   string `json:"sub"`
+		Email string `json:"email"`
+		Name  string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		log.Printf("warn: decode google user info failed: %v", err)
+		return "", "", ""
+	}
+
+	return user.Sub, user.Email, user.Name
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -182,4 +564,248 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func hasRequiredScopes(granted, required []string) (bool, []string) {
+	if len(required) == 0 {
+		return true, nil
+	}
+	grantedSet := make(map[string]struct{}, len(granted))
+	for _, scope := range granted {
+		trimmed := strings.TrimSpace(scope)
+		if trimmed == "" {
+			continue
+		}
+		grantedSet[trimmed] = struct{}{}
+	}
+	missing := make([]string, 0)
+	for _, scope := range required {
+		if _, ok := grantedSet[scope]; !ok {
+			missing = append(missing, scope)
+		}
+	}
+	return len(missing) == 0, missing
+}
+
+func (s *Service) GenerateState(orgID, userID string) (string, error) {
+	if strings.TrimSpace(orgID) == "" {
+		return "", fmt.Errorf("org_id required")
+	}
+	if strings.TrimSpace(userID) == "" {
+		return "", fmt.Errorf("user_id required")
+	}
+
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate state bytes: %w", err)
+	}
+
+	statePayload := signedAuthState{
+		OrgID:     strings.TrimSpace(orgID),
+		UserID:    strings.TrimSpace(userID),
+		ExpiresAt: time.Now().Add(authStateTTL).Unix(),
+		Nonce:     base64.RawURLEncoding.EncodeToString(raw),
+	}
+	payloadJSON, err := json.Marshal(statePayload)
+	if err != nil {
+		return "", fmt.Errorf("marshal oauth state: %w", err)
+	}
+	encodedPayload := base64.RawURLEncoding.EncodeToString(payloadJSON)
+	signature := s.signStatePayload(encodedPayload)
+	return encodedPayload + "." + signature, nil
+}
+
+func (s *Service) ValidateAndConsumeState(state string) (string, string, error) {
+	trimmed := strings.TrimSpace(state)
+	if trimmed == "" {
+		return "", "", fmt.Errorf("state is required")
+	}
+	parts := strings.Split(trimmed, ".")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("state format invalid")
+	}
+	encodedPayload := parts[0]
+	signature := parts[1]
+	if !hmac.Equal([]byte(signature), []byte(s.signStatePayload(encodedPayload))) {
+		return "", "", fmt.Errorf("state signature invalid")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(encodedPayload)
+	if err != nil {
+		return "", "", fmt.Errorf("state payload decode failed")
+	}
+	var pending signedAuthState
+	if err := json.Unmarshal(payloadBytes, &pending); err != nil {
+		return "", "", fmt.Errorf("state payload parse failed")
+	}
+
+	if time.Now().Unix() > pending.ExpiresAt {
+		return "", "", fmt.Errorf("state expired")
+	}
+	if strings.TrimSpace(pending.OrgID) == "" {
+		return "", "", fmt.Errorf("state missing org")
+	}
+	if strings.TrimSpace(pending.UserID) == "" {
+		return "", "", fmt.Errorf("state missing user")
+	}
+	return pending.OrgID, pending.UserID, nil
+}
+
+func buildStateSigningKey(clientSecret string) []byte {
+	secret := strings.TrimSpace(os.Getenv("GOOGLE_OAUTH_STATE_SECRET"))
+	if secret == "" {
+		secret = clientSecret
+	}
+	if secret == "" {
+		return nil
+	}
+	sum := sha256.Sum256([]byte(secret))
+	return sum[:]
+}
+
+func (s *Service) signStatePayload(encodedPayload string) string {
+	if len(s.stateSigningKey) == 0 {
+		return ""
+	}
+	mac := hmac.New(sha256.New, s.stateSigningKey)
+	_, _ = mac.Write([]byte(encodedPayload))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func revokeToken(ctx context.Context, token string) error {
+	form := url.Values{"token": {token}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://oauth2.googleapis.com/revoke", strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("build revoke request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send revoke request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("revoke request failed with status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func parseTokenScopes(tok *oauth2.Token) []string {
+	raw := tok.Extra("scope")
+	out := make([]string, 0)
+	seen := make(map[string]struct{})
+	appendScope := func(v string) {
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+
+	switch v := raw.(type) {
+	case string:
+		for _, part := range strings.Fields(v) {
+			appendScope(part)
+		}
+	case []string:
+		for _, part := range v {
+			appendScope(part)
+		}
+	case []interface{}:
+		for _, part := range v {
+			appendScope(fmt.Sprint(part))
+		}
+	}
+	return out
+}
+
+func authorizeOrgAccess(r *http.Request, orgID string) (int, string) {
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authHeader == "" || !strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		return http.StatusUnauthorized, "missing or invalid authorization header"
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_SERVICE_URL")), "/")
+	if baseURL == "" {
+		baseURL = "http://localhost:8080"
+	}
+
+	verifyURL := fmt.Sprintf("%s/api/orgs/%s/roles", baseURL, url.PathEscape(orgID))
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, verifyURL, nil)
+	if err != nil {
+		return http.StatusInternalServerError, "failed to build auth verification request"
+	}
+	req.Header.Set("Authorization", authHeader)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return http.StatusBadGateway, "failed to verify org access"
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return 0, ""
+	case http.StatusUnauthorized:
+		return http.StatusUnauthorized, "invalid or expired authorization token"
+	case http.StatusForbidden, http.StatusNotFound:
+		return http.StatusForbidden, "forbidden for org"
+	default:
+		return http.StatusBadGateway, "auth service verification failed"
+	}
+}
+
+func extractBearerUserID(authHeader string) (string, error) {
+	header := strings.TrimSpace(authHeader)
+	if header == "" {
+		return "", fmt.Errorf("missing authorization header")
+	}
+	if !strings.HasPrefix(strings.ToLower(header), "bearer ") {
+		return "", fmt.Errorf("invalid authorization header")
+	}
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid authorization header")
+	}
+	token := strings.TrimSpace(parts[1])
+	if token == "" {
+		return "", fmt.Errorf("missing bearer token")
+	}
+	jwtParts := strings.Split(token, ".")
+	if len(jwtParts) != 3 {
+		return "", fmt.Errorf("invalid jwt format")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(jwtParts[1])
+	if err != nil {
+		return "", fmt.Errorf("decode jwt payload: %w", err)
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return "", fmt.Errorf("parse jwt payload: %w", err)
+	}
+	sub, _ := claims["sub"].(string)
+	if strings.TrimSpace(sub) == "" {
+		return "", fmt.Errorf("missing sub claim")
+	}
+	return strings.TrimSpace(sub), nil
+}
+
+// isRefreshReauthError uses string matching because golang.org/x/oauth2 does
+// not expose structured error types for Google OAuth token refresh responses.
+// It intentionally detects unauthorized_client, invalid_grant, and
+// invalid_client to trigger reconnect flows.
+func isRefreshReauthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unauthorized_client") ||
+		strings.Contains(msg, "invalid_grant") ||
+		strings.Contains(msg, "invalid_client")
 }

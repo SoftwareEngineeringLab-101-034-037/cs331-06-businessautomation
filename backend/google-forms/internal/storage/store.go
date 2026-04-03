@@ -9,7 +9,10 @@ import (
 type Store interface {
 	SaveToken(ctx context.Context, token *models.OAuthToken) error
 	GetToken(ctx context.Context, orgID string) (*models.OAuthToken, error)
+	GetTokenByAccount(ctx context.Context, orgID, provider, accountID string) (*models.OAuthToken, error)
+	ListTokens(ctx context.Context, orgID, provider string) ([]*models.OAuthToken, error)
 	DeleteToken(ctx context.Context, orgID string) error
+	DeleteTokenByAccount(ctx context.Context, orgID, provider, accountID string) error
 
 	SaveWatch(ctx context.Context, watch *models.FormWatch) error
 	GetWatch(ctx context.Context, id string) (*models.FormWatch, error)

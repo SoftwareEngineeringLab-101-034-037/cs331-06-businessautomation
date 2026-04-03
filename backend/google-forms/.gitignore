@@ -1,2 +1,27 @@
-.env
-.env.example
+# Environment files
+.env*
+!.env.example
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+# Environment files
+.env*
+!.env.example
+
+Thumbs.db

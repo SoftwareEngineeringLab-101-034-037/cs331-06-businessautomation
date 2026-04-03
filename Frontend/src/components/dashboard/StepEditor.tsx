@@ -9,6 +9,7 @@ import type {
   NodeType,
   ConnectorType,
   TaskAction,
+  TaskDataVisibilityMode,
 } from "@/types/workflow";
 import {
   TRIGGER_CONFIG,
@@ -19,6 +20,34 @@ import {
   CONNECTOR_CONFIG,
   TASK_ACTION_OPTIONS,
 } from "@/types/workflow";
+import { parseFieldMapping, serializeFieldMapping } from "@/lib/workflow-mapping";
+
+const GOOGLE_FORMS_CREATE_URL = "https://docs.google.com/forms/u/0/create";
+
+type GoogleFormField = {
+  question_id: string;
+  item_id?: string;
+  title: string;
+  required?: boolean;
+  field_type?: string;
+};
+
+function parseCommaSeparatedList(raw: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw.split(",")) {
+    const key = item.trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+function extractGoogleFormID(formURL: string): string {
+  const match = formURL.match(/\/forms\/d\/(?:e\/)?([^/]+)/i);
+  return match?.[1] || "";
+}
 
 /* ──────────────────────────────────────────────────────────────
    Trigger Editor  (used when user clicks the Start node)
@@ -26,10 +55,63 @@ import {
 interface TriggerEditorProps {
   trigger: WorkflowTrigger;
   onChange: (t: WorkflowTrigger) => void;
+  availableForms?: Array<{
+    form_id: string;
+    title: string;
+    responder_uri?: string;
+  }>;
+  formsLoading?: boolean;
+  formsError?: string | null;
+  googleAuthConfigured?: boolean;
+  googleConnected?: boolean;
+  googleConnectURL?: string;
+  onGoogleConnect?: () => void;
+  onRefreshForms?: () => void;
+  formFields?: GoogleFormField[];
+  formFieldsLoading?: boolean;
+  formFieldsError?: string | null;
+  onRefreshFormFields?: () => void;
+  onApplySuggestedMapping?: () => void;
   onClose: () => void;
 }
 
-export function TriggerEditor({ trigger, onChange, onClose }: TriggerEditorProps) {
+export function TriggerEditor({
+  trigger,
+  onChange,
+  availableForms = [],
+  formsLoading = false,
+  formsError = null,
+  googleAuthConfigured = true,
+  googleConnected = false,
+  googleConnectURL,
+  onGoogleConnect,
+  onRefreshForms,
+  formFields = [],
+  formFieldsLoading = false,
+  formFieldsError = null,
+  onRefreshFormFields,
+  onApplySuggestedMapping,
+  onClose,
+}: TriggerEditorProps) {
+  const mapping = parseFieldMapping(trigger.config.field_mapping || "");
+
+  const updateFieldAlias = (questionID: string, alias: string) => {
+    const next = { ...mapping };
+    const normalized = alias.trim();
+    if (!normalized) {
+      delete next[questionID];
+    } else {
+      next[questionID] = normalized;
+    }
+    onChange({
+      ...trigger,
+      config: {
+        ...trigger.config,
+        field_mapping: serializeFieldMapping(next),
+      },
+    });
+  };
+
   return (
     <div className="wf-editor">
       <div className="wf-editor-header">
@@ -100,17 +182,182 @@ export function TriggerEditor({ trigger, onChange, onClose }: TriggerEditorProps
           </div>
         )}
         {trigger.type === "form_submission" && (
-          <div className="wf-field">
-            <label className="wf-field-label">Form Name</label>
-            <input
-              className="wf-input"
-              placeholder="e.g. Leave Request Form"
-              value={trigger.config.formName || ""}
-              onChange={(e) =>
-                onChange({ ...trigger, config: { ...trigger.config, formName: e.target.value } })
-              }
-            />
-          </div>
+          <>
+            <div className="wf-field">
+              <label className="wf-field-label">Google Form</label>
+              <div className="wf-field-row">
+                <select
+                  className="wf-select"
+                  value={trigger.config.form_id || ""}
+                  onChange={(e) => {
+                    const selectedFormID = e.target.value;
+                    const selected = availableForms.find((f) => f.form_id === selectedFormID);
+                    onChange({
+                      ...trigger,
+                      config: {
+                        ...trigger.config,
+                        form_id: selectedFormID,
+                        form_url: selectedFormID ? (selected?.responder_uri || "") : "",
+                        formName: selectedFormID ? (selected?.title || "") : "",
+                        field_mapping: "",
+                        field_schema: "",
+                      },
+                    });
+                  }}
+                >
+                  <option value="">Select an existing form...</option>
+                  {availableForms.map((form) => (
+                    <option key={form.form_id} value={form.form_id}>
+                      {form.title}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="action-btn action-btn-outline"
+                  type="button"
+                  onClick={() => onRefreshForms?.()}
+                  disabled={formsLoading}
+                  style={{ marginTop: 8 }}
+                >
+                  {formsLoading ? "Refreshing..." : "Refresh"}
+                </button>
+                <button
+                  className="action-btn action-btn-outline"
+                  type="button"
+                  onClick={() => window.open(GOOGLE_FORMS_CREATE_URL, "_blank", "noopener,noreferrer")}
+                  style={{ marginTop: 8 }}
+                >
+                  Create New Form
+                </button>
+              </div>
+              {formsError && <span className="wf-field-hint" style={{ color: "#b45309" }}>{formsError}</span>}
+              <span className="wf-field-hint">
+                If you create a new form, click Refresh to load it in this list.
+              </span>
+              {!googleAuthConfigured && (
+                <span className="wf-field-hint">
+                  Google Forms integration is not configured yet. A platform admin needs to set OAuth credentials in the Google Forms service.
+                </span>
+              )}
+              {googleAuthConfigured && !googleConnected && (googleConnectURL || onGoogleConnect) && (
+                <span className="wf-field-hint">
+                  Google account not connected.{" "}
+                  {onGoogleConnect ? (
+                    <button
+                      type="button"
+                      onClick={onGoogleConnect}
+                      style={{ background: "none", border: "none", padding: 0, color: "var(--accent)", textDecoration: "underline", cursor: "pointer", font: "inherit" }}
+                    >
+                      Connect Google Forms
+                    </button>
+                  ) : (
+                    <a href={googleConnectURL} target="_blank" rel="noreferrer">Connect Google Forms</a>
+                  )}
+                </span>
+              )}
+            </div>
+
+            <div className="wf-field">
+              <label className="wf-field-label">Form ID</label>
+              <input
+                className="wf-input"
+                placeholder="google-form-id"
+                value={trigger.config.form_id || ""}
+                onChange={(e) => {
+                  const formID = e.target.value;
+                  onChange({
+                    ...trigger,
+                    config: {
+                      ...trigger.config,
+                      form_id: formID,
+                      form_url: "",
+                      field_mapping: "",
+                      field_schema: "",
+                    },
+                  });
+                }}
+              />
+            </div>
+
+            <div className="wf-field">
+              <label className="wf-field-label">Form URL (optional)</label>
+              <input
+                className="wf-input"
+                placeholder="https://docs.google.com/forms/d/.../viewform"
+                value={trigger.config.form_url || ""}
+                onChange={(e) => {
+                  const formURL = e.target.value;
+                  const extractedFormID = extractGoogleFormID(formURL);
+                  onChange({
+                    ...trigger,
+                    config: {
+                      ...trigger.config,
+                      form_url: formURL,
+                      form_id: extractedFormID,
+                      field_mapping: "",
+                      field_schema: "",
+                    },
+                  });
+                }}
+              />
+            </div>
+
+            <div className="wf-field">
+              <label className="wf-field-label">Field Mapping</label>
+              <div className="integration-actions" style={{ marginBottom: 8 }}>
+                <button
+                  className="action-btn action-btn-outline"
+                  type="button"
+                  onClick={() => onRefreshFormFields?.()}
+                  disabled={formFieldsLoading || !(trigger.config.form_id || trigger.config.form_url)}
+                >
+                  {formFieldsLoading ? "Loading fields..." : "Load Form Fields"}
+                </button>
+                <button
+                  className="action-btn action-btn-outline"
+                  type="button"
+                  onClick={onApplySuggestedMapping}
+                  disabled={formFieldsLoading || formFields.length === 0}
+                >
+                  Use Suggested Mapping
+                </button>
+              </div>
+              {formFieldsError && (
+                <span className="wf-field-hint" style={{ color: "#b45309" }}>{formFieldsError}</span>
+              )}
+              {formFields.length > 0 ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  {formFields.map((field) => (
+                    <div key={field.question_id} className="wf-field-row" style={{ alignItems: "center", gap: 8 }}>
+                      <div style={{ flex: 1, minWidth: 180 }}>
+                        <div style={{ fontSize: "0.82rem", fontWeight: 600 }}>{field.title}</div>
+                        <div className="wf-field-hint">{field.question_id}{field.required ? " • required" : ""}</div>
+                      </div>
+                      <input
+                        className="wf-input"
+                        style={{ flex: 1 }}
+                        placeholder="workflow_variable_name"
+                        value={mapping[field.question_id] || ""}
+                        onChange={(e) => updateFieldAlias(field.question_id, e.target.value)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <input
+                  className="wf-input"
+                  placeholder="questionId:name, amountQuestion:amount"
+                  value={trigger.config.field_mapping || ""}
+                  onChange={(e) =>
+                    onChange({ ...trigger, config: { ...trigger.config, field_mapping: e.target.value } })
+                  }
+                />
+              )}
+              <span className="wf-field-hint">
+                Mapped values become global workflow data keys and are available as template tokens like {"{{data.your_field}}"}.
+              </span>
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -126,9 +373,27 @@ interface StepEditorProps {
   onChange: (updated: WorkflowStep) => void;
   onClose: () => void;
   availableRoles?: string[];
+  suggestedDataKeys?: string[];
+  availableForms?: Array<{
+    form_id: string;
+    title: string;
+    responder_uri?: string;
+  }>;
+  formsLoading?: boolean;
+  onRefreshForms?: () => void;
 }
 
-export function StepEditor({ step, stepIndex, onChange, onClose, availableRoles = PRESET_ORG_ROLES }: StepEditorProps) {
+export function StepEditor({
+  step,
+  stepIndex,
+  onChange,
+  onClose,
+  availableRoles = PRESET_ORG_ROLES,
+  suggestedDataKeys = [],
+  availableForms = [],
+  formsLoading = false,
+  onRefreshForms,
+}: StepEditorProps) {
   const [roleSearch, setRoleSearch] = useState("");
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
   const [posSearch, setPosSearch] = useState("");
@@ -140,6 +405,8 @@ export function StepEditor({ step, stepIndex, onChange, onClose, availableRoles 
   const filteredPositions = PRESET_POSITIONS.filter((p) =>
     p.toLowerCase().includes(posSearch.toLowerCase()),
   );
+  const visibilityMode: TaskDataVisibilityMode = step.taskDataVisibility || "all";
+  const visibleDataKeys = step.visibleDataKeys || [];
 
   function selectRole(role: string) {
     onChange({ ...step, assignedRole: role });
@@ -411,6 +678,86 @@ export function StepEditor({ step, stepIndex, onChange, onClose, availableRoles 
                 </div>
               </div>
             </div>
+
+            {/* ── Assignee data visibility ── */}
+            <div className="wf-section">
+              <div className="wf-section-label">Assignee Data Visibility</div>
+              <span className="wf-field-hint">
+                Control which instance values are shown in the assignee task drawer.
+              </span>
+
+              <div className="wf-task-actions-grid" style={{ marginTop: 8 }}>
+                {([
+                  { value: "all", label: "Show All Data" },
+                  { value: "selected", label: "Select Keys" },
+                  { value: "none", label: "Hide All Data" },
+                ] as Array<{ value: TaskDataVisibilityMode; label: string }>).map((opt) => {
+                  const selected = visibilityMode === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      className={`wf-task-action-btn ${selected ? "active" : ""}`}
+                      onClick={() => onChange({ ...step, taskDataVisibility: opt.value })}
+                      style={selected ? { borderColor: "#3b82f6", background: "rgba(59,130,246,0.16)", color: "#1d4ed8" } : {}}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {visibilityMode === "selected" && (
+                <div className="wf-field" style={{ marginTop: 10 }}>
+                  <label className="wf-field-label">Visible Keys</label>
+                  <input
+                    className="wf-input"
+                    placeholder="amount, employee_name, form_response_id"
+                    value={visibleDataKeys.join(", ")}
+                    onChange={(e) => onChange({ ...step, visibleDataKeys: parseCommaSeparatedList(e.target.value) })}
+                  />
+                  <span className="wf-field-hint">Comma-separated top-level instance keys.</span>
+                  {suggestedDataKeys.length > 0 && (
+                    <div className="wf-task-actions-grid" style={{ marginTop: 8 }}>
+                      {suggestedDataKeys.map((key) => {
+                        const selected = visibleDataKeys.includes(key);
+                        return (
+                          <button
+                            key={key}
+                            className={`wf-task-action-btn ${selected ? "active" : ""}`}
+                            style={selected ? { borderColor: "#22c55e", background: "rgba(34,197,94,0.16)", color: "#15803d" } : {}}
+                            onClick={() => {
+                              const next = selected
+                                ? visibleDataKeys.filter((k) => k !== key)
+                                : [...visibleDataKeys, key];
+                              onChange({ ...step, visibleDataKeys: next });
+                            }}
+                          >
+                            {key}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="wf-task-actions-grid" style={{ marginTop: 10 }}>
+                <button
+                  className={`wf-task-action-btn ${step.includeFullFormResponse ? "active" : ""}`}
+                  style={step.includeFullFormResponse ? { borderColor: "#8b5cf6", background: "rgba(139,92,246,0.16)", color: "#6d28d9" } : {}}
+                  onClick={() => onChange({ ...step, includeFullFormResponse: !step.includeFullFormResponse })}
+                >
+                  Include Full Form Response
+                </button>
+                <button
+                  className={`wf-task-action-btn ${step.includeFormFiles ? "active" : ""}`}
+                  style={step.includeFormFiles ? { borderColor: "#0ea5e9", background: "rgba(14,165,233,0.16)", color: "#0369a1" } : {}}
+                  onClick={() => onChange({ ...step, includeFormFiles: !step.includeFormFiles })}
+                >
+                  Include Form File Links
+                </button>
+              </div>
+            </div>
           </>
         )}
 
@@ -457,6 +804,46 @@ export function StepEditor({ step, stepIndex, onChange, onClose, availableRoles 
                 <div className="wf-section-label">
                   {CONNECTOR_CONFIG[step.connector.type].label} Parameters
                 </div>
+                {step.connector.type === "form_submit" && (
+                  <div className="wf-field">
+                    <label className="wf-field-label">Use Existing Form</label>
+                    <select
+                      className="wf-select"
+                      value={step.connector?.params.form_id || ""}
+                      onChange={(e) => {
+                        const selectedFormID = e.target.value;
+                        const selected = availableForms.find((f) => f.form_id === selectedFormID);
+                        onChange({
+                          ...step,
+                          connector: {
+                            ...step.connector!,
+                            params: {
+                              ...step.connector!.params,
+                              form_id: selectedFormID,
+                              form_url: selectedFormID ? (selected?.responder_uri || "") : "",
+                            },
+                          },
+                        });
+                      }}
+                    >
+                      <option value="">Select an existing form...</option>
+                      {availableForms.map((form) => (
+                        <option key={form.form_id} value={form.form_id}>
+                          {form.title}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="action-btn action-btn-outline"
+                      type="button"
+                      style={{ marginTop: 8 }}
+                      onClick={() => onRefreshForms?.()}
+                      disabled={formsLoading}
+                    >
+                      {formsLoading ? "Refreshing..." : "Refresh list"}
+                    </button>
+                  </div>
+                )}
                 {CONNECTOR_CONFIG[step.connector.type].paramFields.map((field) => (
                   <div key={field.key} className="wf-field">
                     <label className="wf-field-label">

@@ -65,6 +65,9 @@ func (s *Server) listWatches(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if watches == nil {
+		watches = []*models.FormWatch{}
+	}
 	writeJSON(w, http.StatusOK, watches)
 }
 
