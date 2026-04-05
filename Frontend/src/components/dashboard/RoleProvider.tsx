@@ -6,6 +6,7 @@ import type { UserRole } from "@/types/dashboard";
 
 interface RoleContextValue {
   role: UserRole | null;
+  roleResolved: boolean;
   setRole: (r: UserRole) => void;
   hasAccess: (allowed: UserRole[]) => boolean;
 }
@@ -19,19 +20,19 @@ const RoleContext = createContext<RoleContextValue | null>(null);
  */
 export function RoleProvider({
   children,
-  defaultRole = "employee",
 }: {
   children: ReactNode;
-  defaultRole?: UserRole;
 }) {
   const { orgRole, isLoaded } = useAuth();
   const [manualRole, setManualRole] = useState<UserRole | null>(null);
+  const roleResolved = isLoaded;
 
   const derivedRole = useMemo<UserRole | null>(() => {
-    if (!isLoaded) return null;
+    if (!roleResolved) return null;
     if (orgRole === "org:admin" || orgRole === "org:owner") return "admin";
-    return "employee";
-  }, [isLoaded, orgRole]);
+    if (orgRole === "org:member") return "employee";
+    return null;
+  }, [roleResolved, orgRole]);
 
   const role = manualRole ?? derivedRole;
 
@@ -40,12 +41,12 @@ export function RoleProvider({
   }, []);
 
   const hasAccess = useCallback(
-    (allowed: UserRole[]) => role !== null && allowed.includes(role),
-    [role],
+    (allowed: UserRole[]) => roleResolved && role !== null && allowed.includes(role),
+    [roleResolved, role],
   );
 
   return (
-    <RoleContext.Provider value={{ role, setRole, hasAccess }}>
+    <RoleContext.Provider value={{ role, roleResolved, setRole, hasAccess }}>
       {children}
     </RoleContext.Provider>
   );
@@ -70,8 +71,9 @@ export function RoleGate({
   children: ReactNode;
   fallback?: ReactNode;
 }) {
-  const { role, hasAccess } = useRole();
-  if (role === null) return null;
+  const { role, roleResolved, hasAccess } = useRole();
+  if (!roleResolved && role === null) return null;
+  if (roleResolved && role === null) return fallback ?? null;
   if (!hasAccess(allowed)) return fallback ?? null;
   return <>{children}</>;
 }

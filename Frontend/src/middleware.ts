@@ -17,7 +17,10 @@ export default clerkMiddleware(async (auth, req) => {
     return NextResponse.next();
   }
 
-  if (req.nextUrl.pathname.startsWith("/api") || req.nextUrl.pathname.startsWith("/trpc")) {
+  const pathname = req.nextUrl.pathname;
+  const isAPIRoute = pathname === "/api" || pathname.startsWith("/api/");
+  const isTRPCRoute = pathname === "/trpc" || pathname.startsWith("/trpc/");
+  if (isAPIRoute || isTRPCRoute) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

@@ -81,12 +81,13 @@ export default function IntegrationsPage() {
 
   const authFetch = useCallback(async (input: string, init: RequestInit = {}) => {
     const token = await getTokenRef.current();
+    const headers = new Headers(init.headers);
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
     return fetch(input, {
       ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
+      headers,
     });
   }, []);
 

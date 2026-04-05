@@ -8,14 +8,23 @@ export function mergeSignals(signals: Array<AbortSignal | null | undefined>): Ab
   }
 
   const controller = new AbortController();
-  const abort = () => controller.abort();
+  const cleanup = () => {
+    for (const signal of activeSignals) {
+      signal.removeEventListener("abort", abort);
+    }
+  };
+  const abort = () => {
+    cleanup();
+    controller.abort();
+  };
   for (const signal of activeSignals) {
     if (signal.aborted) {
-      controller.abort();
+      abort();
       break;
     }
     signal.addEventListener("abort", abort, { once: true });
   }
+  controller.signal.addEventListener("abort", cleanup, { once: true });
   return controller.signal;
 }
 
@@ -27,15 +36,16 @@ export async function authFetch(
 ): Promise<Response> {
   const token = await getToken();
   const controller = new AbortController();
+  const headers = new Headers(init.headers);
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
   const timeoutID = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(input, {
       ...init,
       signal: mergeSignals([init.signal, controller.signal]),
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
+      headers,
     });
   } finally {
     clearTimeout(timeoutID);
