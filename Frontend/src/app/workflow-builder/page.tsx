@@ -14,6 +14,7 @@ import { useTheme } from "@/components/ThemeProvider";
 import WorkflowCanvas from "@/components/dashboard/WorkflowCanvas";
 import { TriggerEditor, StepEditor } from "@/components/dashboard/StepEditor";
 import { useToast, ToastContainer } from "@/components/Toast";
+import { authFetch as authFetchWithToken } from "@/lib/auth-fetch";
 import { parseFieldMapping, serializeFieldMapping } from "@/lib/workflow-mapping";
 import type {
   WorkflowDraft,
@@ -26,7 +27,7 @@ import { createBlankStep, generateStepId, NODE_TYPE_CONFIG } from "@/types/workf
 
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
-const GF_API = (process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086").trim();
+const GF_API = (process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "").trim();
 const GF_API_MISSING_ERROR = "NEXT_PUBLIC_INTEGRATIONS_API (or NEXT_PUBLIC_GOOGLE_FORMS_API) is not configured.";
 
 interface BackendDepartment {
@@ -121,14 +122,7 @@ export default function WorkflowBuilderPage() {
   const orgApiBase = `${WF_API}/api/orgs/${organization?.id}`;
 
   const authFetch = useCallback(async (input: string, init: RequestInit = {}): Promise<Response> => {
-    const token = await getToken();
-    return fetch(input, {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    return authFetchWithToken(getToken, input, init);
   }, [getToken]);
 
   const parseVisibleDataKeys = useCallback((keys: string[] | undefined): string[] => {
@@ -280,6 +274,7 @@ export default function WorkflowBuilderPage() {
     if (!organization?.id) {
       if (isLatest()) {
         setGmailAccounts([]);
+        setGmailAccountsError(null);
         setGmailAccountsLoading(false);
       }
       return;
@@ -287,12 +282,15 @@ export default function WorkflowBuilderPage() {
     if (!GF_API) {
       if (isLatest()) {
         setGmailAccounts([]);
+        setGmailAccountsError(GF_API_MISSING_ERROR);
         setGmailAccountsLoading(false);
       }
       return;
     }
 
     setGmailAccountsLoading(true);
+    setGmailAccounts([]);
+    setGmailAccountsError(null);
 
     try {
       const response = await authFetch(`${GF_API}/integrations/gmail/accounts?org_id=${encodeURIComponent(organization.id)}`);
@@ -306,9 +304,10 @@ export default function WorkflowBuilderPage() {
       const payload = await response.json() as { items?: GmailAccountOption[] };
       if (!isLatest()) return;
       setGmailAccounts(Array.isArray(payload?.items) ? payload.items : []);
+      setGmailAccountsError(null);
     } catch (err: any) {
       if (!isLatest()) return;
-      setGmailAccounts([]);
+      setGmailAccountsError(err?.message || "Failed to load Gmail accounts.");
     } finally {
       if (isLatest()) {
         setGmailAccountsLoading(false);
@@ -419,12 +418,13 @@ export default function WorkflowBuilderPage() {
     if (!GF_API) {
       throw new Error(GF_API_MISSING_ERROR);
     }
+    const orgQuery = `org_id=${encodeURIComponent(organization.id)}`;
 
     const triggerIsForm = triggerType === "form_submission";
     const formID = (triggerConfig.form_id || extractGoogleFormID(triggerConfig.form_url || "")).trim();
     const fieldMapping = parseFieldMapping(triggerConfig.field_mapping || "");
 
-    const watchesRes = await authFetch(`${GF_API}/watches?org_id=${encodeURIComponent(organization.id)}`);
+    const watchesRes = await authFetch(`${GF_API}/watches?${orgQuery}`);
     if (!watchesRes.ok) {
       const txt = await watchesRes.text();
       throw new Error(`watch lookup failed (${watchesRes.status}): ${txt}`);
@@ -436,7 +436,7 @@ export default function WorkflowBuilderPage() {
 
     if (!triggerIsForm || !formID) {
       if (existing && existing.active) {
-        const disableRes = await authFetch(`${GF_API}/watches/${existing.id}`, {
+        const disableRes = await authFetch(`${GF_API}/watches/${existing.id}?${orgQuery}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ active: false }),
@@ -450,7 +450,7 @@ export default function WorkflowBuilderPage() {
     }
 
     if (!existing) {
-      const createRes = await authFetch(`${GF_API}/watches`, {
+      const createRes = await authFetch(`${GF_API}/watches?${orgQuery}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -469,12 +469,12 @@ export default function WorkflowBuilderPage() {
     }
 
     if (existing.form_id !== formID) {
-    const deleteRes = await authFetch(`${GF_API}/watches/${existing.id}`, { method: "DELETE" });
+    const deleteRes = await authFetch(`${GF_API}/watches/${existing.id}?${orgQuery}`, { method: "DELETE" });
     if (!deleteRes.ok) {
       const txt = await deleteRes.text();
       throw new Error(`watch delete failed (${deleteRes.status}): ${txt}`);
     }
-      const recreateRes = await authFetch(`${GF_API}/watches`, {
+      const recreateRes = await authFetch(`${GF_API}/watches?${orgQuery}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -492,7 +492,7 @@ export default function WorkflowBuilderPage() {
       return;
     }
 
-    const updateRes = await authFetch(`${GF_API}/watches/${existing.id}`, {
+    const updateRes = await authFetch(`${GF_API}/watches/${existing.id}?${orgQuery}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -524,6 +524,7 @@ export default function WorkflowBuilderPage() {
   const [googleConnected, setGoogleConnected] = useState(false);
   const [gmailAccounts, setGmailAccounts] = useState<GmailAccountOption[]>([]);
   const [gmailAccountsLoading, setGmailAccountsLoading] = useState(false);
+  const [gmailAccountsError, setGmailAccountsError] = useState<string | null>(null);
   const [triggerFormFields, setTriggerFormFields] = useState<GoogleFormField[]>([]);
   const [triggerFormFieldsLoading, setTriggerFormFieldsLoading] = useState(false);
   const [triggerFormFieldsError, setTriggerFormFieldsError] = useState<string | null>(null);
@@ -685,6 +686,13 @@ export default function WorkflowBuilderPage() {
     if (!organization?.id) return;
     loadGoogleForms();
   }, [organization?.id, loadGoogleForms]);
+
+  useEffect(() => {
+    if (!GF_API) {
+      setGoogleFormsError(GF_API_MISSING_ERROR);
+      setGmailAccountsError(GF_API_MISSING_ERROR);
+    }
+  }, []);
 
   useEffect(() => {
     loadGmailAccounts();
@@ -1806,6 +1814,7 @@ export default function WorkflowBuilderPage() {
                   onRefreshForms={loadGoogleForms}
                   availableGmailAccounts={gmailAccounts}
                   gmailAccountsLoading={gmailAccountsLoading}
+                  gmailAccountsError={gmailAccountsError}
                   onRefreshGmailAccounts={loadGmailAccounts}
                   onChange={handleStepChange}
                   onClose={handleCloseEditor}
