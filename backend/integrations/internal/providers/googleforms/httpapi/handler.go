@@ -48,10 +48,6 @@ func (h *Handler) HandleForms(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) HandleFormByPath(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/forms/"), "/"), "/")
-	if len(parts) == 0 {
-		writeError(w, http.StatusBadRequest, "form_id required")
-		return
-	}
 	formID := parts[0]
 	if formID == "" {
 		writeError(w, http.StatusBadRequest, "form_id required")
@@ -153,7 +149,7 @@ func (h *Handler) createForm(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{
+			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
 				"form_id":     form.FormID,
 				"stage":       "add_questions",
 				"warning":     warning,
@@ -578,7 +574,9 @@ func detectFormFieldType(question googleapi.Question) string {
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("googleforms.writeJSON encode failed status=%d value_type=%T: %v", status, v, err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
