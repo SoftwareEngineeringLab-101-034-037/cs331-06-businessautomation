@@ -20,7 +20,7 @@ import (
 )
 
 func main() {
-	runMigrations := flag.Bool("migrate", false, "run database migrations on startup")
+	skipMigrations := flag.Bool("skip-migrate", false, "skip database migrations on startup")
 	flag.Parse()
 
 	//Load env vars
@@ -35,12 +35,12 @@ func main() {
 	}
 
 	// Run migrations by default so workflow-role membership support is always available.
-	if *runMigrations {
+	if !*skipMigrations {
 		if err := database.Migrate(); err != nil {
 			log.Fatalf("Failed to run migrations: %v", err)
 		}
 	} else {
-		log.Println("Skipping database migrations (-migrate=false)")
+		log.Println("Skipping database migrations (-skip-migrate=true)")
 	}
 
 	cleanup.Start(cleanup.DefaultConfig())
