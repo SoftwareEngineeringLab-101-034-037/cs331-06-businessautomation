@@ -45,7 +45,7 @@ func Load() (*Config, error) {
 		AuthServiceURL:      getenv("AUTH_SERVICE_URL", "http://localhost:8080"),
 		WorkflowEngineURL:   getenv("WORKFLOW_ENGINE_URL", "http://localhost:8085"),
 		WorkflowServiceKey:  strings.TrimSpace(os.Getenv("WORKFLOW_INTEGRATION_KEY")),
-		CORSAllowedOrigins:  parseCSVEnv("CORS_ALLOWED_ORIGINS"),
+		CORSAllowedOrigins:  parseCSVEnvWithDefault("CORS_ALLOWED_ORIGINS", []string{"http://localhost:3000", "http://127.0.0.1:3000"}),
 		PollIntervalSeconds: interval,
 	}
 
@@ -87,5 +87,18 @@ func parseCSVEnv(key string) []string {
 		}
 		out = append(out, value)
 	}
+	return out
+}
+
+func parseCSVEnvWithDefault(key string, fallback []string) []string {
+	values := parseCSVEnv(key)
+	if len(values) > 0 {
+		return values
+	}
+	if len(fallback) == 0 {
+		return nil
+	}
+	out := make([]string, len(fallback))
+	copy(out, fallback)
 	return out
 }

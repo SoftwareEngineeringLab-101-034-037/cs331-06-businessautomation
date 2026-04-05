@@ -54,7 +54,12 @@ export default function GmailIntegrationPage() {
   const loadDataRequestIdRef = useRef(0);
   const oauthPollRef = useRef<number | null>(null);
   const oauthPopupRef = useRef<Window | null>(null);
+  const getTokenRef = useRef(getToken);
   const apiBase = (INTEGRATIONS_API || "").trim();
+
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
 
   const connectUrl = useMemo(() => {
     if (!organization?.id || !apiBase) return "";
@@ -62,7 +67,7 @@ export default function GmailIntegrationPage() {
   }, [apiBase, organization?.id]);
 
   const authFetch = useCallback(async (input: string, init: RequestInit = {}) => {
-    const token = await getToken();
+    const token = await getTokenRef.current();
     return fetch(input, {
       ...init,
       headers: {
@@ -70,7 +75,7 @@ export default function GmailIntegrationPage() {
         Authorization: `Bearer ${token}`,
       },
     });
-  }, [getToken]);
+  }, []);
 
   const loadData = useCallback(async (signal?: AbortSignal) => {
     const requestId = ++loadDataRequestIdRef.current;
@@ -406,7 +411,7 @@ export default function GmailIntegrationPage() {
               </div>
             </div>
 
-            {!status?.configured && (
+            {status && !status.configured && (
               <div className="integration-alert warning">
                 <strong>Setup required:</strong> Google OAuth credentials are missing.
                 {missingFields ? ` Missing: ${missingFields}.` : ""}

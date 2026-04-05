@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 
@@ -74,8 +74,13 @@ export default function IntegrationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
+  const getTokenRef = useRef(getToken);
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
+
   const authFetch = useCallback(async (input: string, init: RequestInit = {}) => {
-    const token = await getToken();
+    const token = await getTokenRef.current();
     return fetch(input, {
       ...init,
       headers: {
@@ -83,7 +88,7 @@ export default function IntegrationsPage() {
         Authorization: `Bearer ${token}`,
       },
     });
-  }, [getToken]);
+  }, []);
 
   const loadStatuses = useCallback(async () => {
     if (!organization?.id) return;
