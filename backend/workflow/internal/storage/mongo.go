@@ -258,6 +258,24 @@ func (m *MongoStore) ListInstancesByWorkflow(workflowID string) ([]models.Instan
 	return out, nil
 }
 
+func (m *MongoStore) ListInstancesByWorkflowCompact(workflowID string) ([]models.Instance, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := m.instCol.Find(ctx, bson.M{"workflow_id": workflowID},
+		options.Find().
+			SetSort(bson.D{{Key: "started_at", Value: -1}}).
+			SetProjection(compactInstanceProjection()))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var out []models.Instance
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (m *MongoStore) ListInstancesByOrg(orgID string) ([]models.Instance, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -272,6 +290,38 @@ func (m *MongoStore) ListInstancesByOrg(orgID string) ([]models.Instance, error)
 		return nil, err
 	}
 	return out, nil
+}
+
+func (m *MongoStore) ListInstancesByOrgCompact(orgID string) ([]models.Instance, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := m.instCol.Find(ctx, bson.M{"org_id": orgID},
+		options.Find().
+			SetSort(bson.D{{Key: "started_at", Value: -1}}).
+			SetProjection(compactInstanceProjection()))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var out []models.Instance
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func compactInstanceProjection() bson.M {
+	return bson.M{
+		"_id":         0,
+		"id":          1,
+		"org_id":      1,
+		"workflow_id": 1,
+		"status":      1,
+		"current_node": 1,
+		"node_states": 1,
+		"started_at":  1,
+		"completed_at": 1,
+	}
 }
 
 // -- Tasks --

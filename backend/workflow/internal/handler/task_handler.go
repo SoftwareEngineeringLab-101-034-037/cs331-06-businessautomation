@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -33,8 +34,9 @@ func NewTaskHandler(store storage.Store, exec TaskExecutor) *TaskHandler {
 // GET /api/orgs/:orgId/tasks?role=... or ?instance_id=... or ?assigned_user=...
 func (h *TaskHandler) List(c *gin.Context) {
 	orgId := c.Param("orgId")
-	role := c.Query("role")
-	instanceID := c.Query("instance_id")
+	role := strings.TrimSpace(c.Query("role"))
+	rolesCSV := strings.TrimSpace(c.Query("roles"))
+	instanceID := strings.TrimSpace(c.Query("instance_id"))
 	assignedUser := ""
 	if c.Query("assigned_user") != "" {
 		assignedUser = middleware.GetUserID(c)
@@ -57,10 +59,33 @@ func (h *TaskHandler) List(c *gin.Context) {
 		}
 	case assignedUser != "":
 		tasks, err = h.Store.ListTasksByAssignee(orgId, assignedUser)
+	case rolesCSV != "":
+		roles := parseCSVValues(rolesCSV)
+		if len(roles) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "roles cannot be empty"})
+			return
+		}
+		byID := make(map[string]models.TaskAssignment)
+		for _, roleName := range roles {
+			roleTasks, e := h.Store.ListTasksByRole(orgId, roleName)
+			if e != nil {
+				err = e
+				break
+			}
+			for _, t := range roleTasks {
+				byID[t.ID] = t
+			}
+		}
+		if err == nil {
+			tasks = make([]models.TaskAssignment, 0, len(byID))
+			for _, task := range byID {
+				tasks = append(tasks, task)
+			}
+		}
 	case role != "":
 		tasks, err = h.Store.ListTasksByRole(orgId, role)
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "provide ?role=, ?assigned_user=, or ?instance_id="})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provide ?role=, ?roles=, ?assigned_user=, or ?instance_id="})
 		return
 	}
 
@@ -72,10 +97,31 @@ func (h *TaskHandler) List(c *gin.Context) {
 	if tasks == nil {
 		tasks = []models.TaskAssignment{}
 	}
+	sort.Slice(tasks, func(i, j int) bool {
+		return tasks[i].CreatedAt.After(tasks[j].CreatedAt)
+	})
 	for i := range tasks {
 		tasks[i] = sanitizeTaskForResponse(tasks[i])
 	}
 	c.JSON(http.StatusOK, tasks)
+}
+
+func parseCSVValues(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 // PUT /api/orgs/:orgId/tasks/:id/:action  (action = approve | reject | clarify | complete)

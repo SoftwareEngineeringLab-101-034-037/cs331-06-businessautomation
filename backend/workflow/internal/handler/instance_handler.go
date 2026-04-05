@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -20,6 +21,11 @@ type InstanceHandler struct {
 	Store          storage.Store
 	Exec           *executor.Executor
 	IntegrationKey string
+}
+
+type compactInstanceLister interface {
+	ListInstancesByOrgCompact(orgID string) ([]models.Instance, error)
+	ListInstancesByWorkflowCompact(workflowID string) ([]models.Instance, error)
 }
 
 func NewInstanceHandler(store storage.Store, exec *executor.Executor, integrationKey ...string) *InstanceHandler {
@@ -355,6 +361,7 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 func (h *InstanceHandler) List(c *gin.Context) {
 	orgID := c.Param("orgId")
 	workflowID := c.Query("workflow_id")
+	compact := strings.EqualFold(strings.TrimSpace(c.Query("compact")), "true")
 
 	var (
 		instances []models.Instance
@@ -370,9 +377,25 @@ func (h *InstanceHandler) List(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 			return
 		}
-		instances, err = h.Store.ListInstancesByWorkflow(workflowID)
+		if compact {
+			if compactStore, ok := h.Store.(compactInstanceLister); ok {
+				instances, err = compactStore.ListInstancesByWorkflowCompact(workflowID)
+			} else {
+				instances, err = h.Store.ListInstancesByWorkflow(workflowID)
+			}
+		} else {
+			instances, err = h.Store.ListInstancesByWorkflow(workflowID)
+		}
 	} else {
-		instances, err = h.Store.ListInstancesByOrg(orgID)
+		if compact {
+			if compactStore, ok := h.Store.(compactInstanceLister); ok {
+				instances, err = compactStore.ListInstancesByOrgCompact(orgID)
+			} else {
+				instances, err = h.Store.ListInstancesByOrg(orgID)
+			}
+		} else {
+			instances, err = h.Store.ListInstancesByOrg(orgID)
+		}
 	}
 	if err != nil {
 		log.Printf("instance_handler.List org=%s workflow=%s list failed: %v", orgID, workflowID, err)
@@ -383,6 +406,17 @@ func (h *InstanceHandler) List(c *gin.Context) {
 	type enrichedInstance struct {
 		models.Instance
 		WorkflowName string `json:"workflow_name,omitempty"`
+	}
+	type compactInstance struct {
+		ID           string                       `json:"id"`
+		OrgID        string                       `json:"org_id"`
+		WorkflowID   string                       `json:"workflow_id"`
+		WorkflowName string                       `json:"workflow_name,omitempty"`
+		Status       models.InstanceStatus        `json:"status"`
+		CurrentNode  string                       `json:"current_node,omitempty"`
+		NodeStates   map[string]models.NodeState  `json:"node_states,omitempty"`
+		StartedAt    time.Time                    `json:"started_at"`
+		CompletedAt  *time.Time                   `json:"completed_at,omitempty"`
 	}
 	workflowIDs := make([]string, 0, len(instances))
 	seenWorkflowIDs := make(map[string]struct{}, len(instances))
@@ -403,6 +437,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		return
 	}
 	out := make([]enrichedInstance, 0, len(instances))
+	compactOut := make([]compactInstance, 0, len(instances))
 	for _, inst := range instances {
 		if inst.OrgID != orgID {
 			continue
@@ -411,7 +446,27 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		if wf, ok := workflowMap[inst.WorkflowID]; ok {
 			wfName = wf.Name
 		}
+		if compact {
+			compactOut = append(compactOut, compactInstance{
+				ID:           inst.ID,
+				OrgID:        inst.OrgID,
+				WorkflowID:   inst.WorkflowID,
+				WorkflowName: wfName,
+				Status:       inst.Status,
+				CurrentNode:  inst.CurrentNode,
+				NodeStates:   inst.NodeStates,
+				StartedAt:    inst.StartedAt,
+				CompletedAt:  inst.CompletedAt,
+			})
+			continue
+		}
+
 		out = append(out, enrichedInstance{Instance: inst, WorkflowName: wfName})
+	}
+
+	if compact {
+		c.JSON(http.StatusOK, compactOut)
+		return
 	}
 
 	c.JSON(http.StatusOK, out)

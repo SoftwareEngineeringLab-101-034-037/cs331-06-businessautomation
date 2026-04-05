@@ -145,9 +145,16 @@ func (e *Executor) run(instanceID string, wf models.Workflow, data map[string]in
 }
 
 func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data map[string]interface{}, authHeader string) {
+	if e.isInstanceTerminal(instanceID) {
+		return
+	}
+
 	node := wf.FindNode(nodeID)
 	if node == nil {
-		log.Printf("executor: unknown node %s", nodeID)
+		errMsg := fmt.Sprintf("node %s not found", nodeID)
+		log.Printf("executor: %s", errMsg)
+		e.markNodeFailed(instanceID, nodeID, errMsg)
+		e.markFailed(instanceID, errMsg)
 		return
 	}
 
@@ -166,8 +173,9 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 	case models.NodeTask:
 		action, err := e.executeTask(instanceID, wf, node, data, authHeader)
 		if err != nil {
-			e.setNodeState(instanceID, nodeID, "failed")
-			e.markFailed(instanceID, fmt.Sprintf("task node %s: %v", nodeID, err))
+			errMsg := fmt.Sprintf("task node %s failed: %v", nodeID, err)
+			e.markNodeFailed(instanceID, nodeID, errMsg)
+			e.markFailed(instanceID, errMsg)
 			return
 		}
 		if action == "" {
@@ -179,7 +187,13 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 		return
 
 	case models.NodeAction:
-		e.executeAction(instanceID, wf.OrgID, node, data)
+		err := e.executeAction(instanceID, wf.OrgID, node, data)
+		if err != nil {
+			errMsg := fmt.Sprintf("action node %s failed: %v", nodeID, err)
+			e.markNodeFailed(instanceID, nodeID, errMsg)
+			e.markFailed(instanceID, errMsg)
+			return
+		}
 		e.setNodeState(instanceID, nodeID, "completed")
 		e.walkNext(instanceID, node, "", wf, data, authHeader)
 		return
@@ -239,7 +253,13 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 }
 
 func (e *Executor) walkNext(instanceID string, node *models.WorkflowNode, result string, wf *models.Workflow, data map[string]interface{}, authHeader string) {
+	if e.isInstanceTerminal(instanceID) {
+		return
+	}
 	for _, nextID := range node.NextIDs(result) {
+		if e.isInstanceTerminal(instanceID) {
+			return
+		}
 		e.walkNode(instanceID, nextID, wf, data, authHeader)
 	}
 }
@@ -301,14 +321,12 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 	return "", nil
 }
 
-func (e *Executor) executeAction(instanceID, orgID string, node *models.WorkflowNode, data map[string]interface{}) {
+func (e *Executor) executeAction(instanceID, orgID string, node *models.WorkflowNode, data map[string]interface{}) error {
 	if node.Connector == nil {
-		e.audit(instanceID, node.ID, "action_skipped", map[string]interface{}{"reason": "missing_connector"})
-		return
+		return fmt.Errorf("missing connector configuration")
 	}
 	if node.Connector.Type != models.ConnectorEmail || e.email == nil {
-		e.audit(instanceID, node.ID, "action_skipped", map[string]interface{}{"reason": "unsupported_connector", "type": node.Connector.Type})
-		return
+		return fmt.Errorf("unsupported connector type: %s", node.Connector.Type)
 	}
 	to := resolveParam(node.Connector.Params, "to", data)
 	cc := resolveParam(node.Connector.Params, "cc", data)
@@ -317,8 +335,7 @@ func (e *Executor) executeAction(instanceID, orgID string, node *models.Workflow
 	fromName := resolveParam(node.Connector.Params, "from_name", data)
 	fromAccountID := resolveParam(node.Connector.Params, "from_account_id", data)
 	if to == "" {
-		e.audit(instanceID, node.ID, "action_skipped", map[string]interface{}{"reason": "missing_to_recipient"})
-		return
+		return fmt.Errorf("missing recipient (to)")
 	}
 
 	var err error
@@ -330,12 +347,13 @@ func (e *Executor) executeAction(instanceID, orgID string, node *models.Workflow
 	if err != nil {
 		log.Printf("executor: email send failed: %v", err)
 		e.audit(instanceID, node.ID, "action_failed", map[string]interface{}{"connector": "email", "error": err.Error()})
-		return
+		return err
 	}
 	e.audit(instanceID, node.ID, "email_sent", map[string]interface{}{
 		"to":      to,
 		"subject": subject,
 	})
+	return nil
 }
 
 func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader string) (models.TaskAssignment, error) {
@@ -525,6 +543,39 @@ func (e *Executor) markFailed(instanceID, reason string) {
 		})
 	}); err != nil {
 		log.Printf("executor: failed to mark instance failed instance_id=%s: %v", instanceID, err)
+	}
+}
+
+func (e *Executor) isInstanceTerminal(instanceID string) bool {
+	inst, ok := e.store.GetInstance(instanceID)
+	if !ok {
+		return true
+	}
+	switch inst.Status {
+	case models.InstanceFailed, models.InstanceCancelled, models.InstanceCompleted:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Executor) markNodeFailed(instanceID, nodeID, output string) {
+	if _, err := e.saveInstanceMutation(instanceID, func(inst *models.Instance) {
+		if inst.NodeStates == nil {
+			inst.NodeStates = make(map[string]models.NodeState)
+		}
+		ns := inst.NodeStates[nodeID]
+		now := time.Now()
+		ns.Status = "failed"
+		ns.Output = strings.TrimSpace(output)
+		ns.CompletedAt = &now
+		if ns.StartedAt == nil {
+			ns.StartedAt = &now
+		}
+		inst.NodeStates[nodeID] = ns
+		inst.CurrentNode = nodeID
+	}); err != nil {
+		log.Printf("executor: failed to persist failed node state instance_id=%s node_id=%s: %v", instanceID, nodeID, err)
 	}
 }
 

@@ -17,14 +17,18 @@ type emailCall struct {
 }
 
 type mockEmail struct {
-	mu    sync.Mutex
-	calls []emailCall
+	mu      sync.Mutex
+	calls    []emailCall
+	sendErr error
 }
 
 func (m *mockEmail) Send(to, subject, body string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, emailCall{to: to, subject: subject, body: body})
+	if m.sendErr != nil {
+		return m.sendErr
+	}
 	return nil
 }
 
@@ -812,7 +816,8 @@ func mustGetInstance(t *testing.T, store *mockStore, instanceID string) models.I
 
 func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{}, nil)
+	email := &mockEmail{}
+	exec := NewExecutor(store, email, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-parallel",
@@ -820,8 +825,8 @@ func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 		Nodes: []models.WorkflowNode{
 			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "parallel"},
 			{ID: "parallel", Type: models.NodeParallel, Title: "Parallel", NextBranches: []string{"a", "b"}},
-			{ID: "a", Type: models.NodeAction, Title: "A", Next: "merge"},
-			{ID: "b", Type: models.NodeAction, Title: "B", Next: "merge"},
+			{ID: "a", Type: models.NodeAction, Title: "A", Connector: &models.ConnectorConfig{Type: models.ConnectorEmail, Params: map[string]interface{}{"to": "a@example.com", "subject": "A", "body_template": "A"}}, Next: "merge"},
+			{ID: "b", Type: models.NodeAction, Title: "B", Connector: &models.ConnectorConfig{Type: models.ConnectorEmail, Params: map[string]interface{}{"to": "b@example.com", "subject": "B", "body_template": "B"}}, Next: "merge"},
 			{ID: "merge", Type: models.NodeMerge, Title: "Merge", RequiredInputs: []string{"a", "b"}, Next: "end"},
 			{ID: "end", Type: models.NodeEnd, Title: "End"},
 		},
@@ -840,9 +845,12 @@ func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 	if got := countAuditAction(inst, "merge_completed"); got != 1 {
 		t.Fatalf("expected one merge_completed audit event, got %d", got)
 	}
+	if email.count() != 2 {
+		t.Fatalf("expected two email calls, got %d", email.count())
+	}
 }
 
-func TestRunActionSkippedForUnknownAndMissingConnector(t *testing.T) {
+func TestRunActionFailureMarksInstanceFailedAndStopsProgress(t *testing.T) {
 	store := newMockStore()
 	exec := NewExecutor(store, &mockEmail{}, nil)
 
@@ -869,7 +877,66 @@ func TestRunActionSkippedForUnknownAndMissingConnector(t *testing.T) {
 	exec.run(instanceID, wf, map[string]interface{}{}, "")
 
 	inst, _ := store.GetInstance(instanceID)
-	if got := countAuditAction(inst, "action_skipped"); got != 2 {
-		t.Fatalf("expected two action_skipped audit events, got %d", got)
+	if inst.Status != models.InstanceFailed {
+		t.Fatalf("expected failed status, got %s", inst.Status)
+	}
+	if got := countAuditAction(inst, "instance_failed"); got != 1 {
+		t.Fatalf("expected one instance_failed audit event, got %d", got)
+	}
+	if state := inst.NodeStates["unknown"]; state.Status != "failed" {
+		t.Fatalf("expected unknown node failed state, got %+v", state)
+	}
+	if _, ok := inst.NodeStates["missing"]; ok {
+		t.Fatalf("expected execution to stop before missing node")
+	}
+	if _, ok := inst.NodeStates["end"]; ok {
+		t.Fatalf("expected execution to stop before end node")
+	}
+}
+
+func TestRunActionSendErrorMarksFailedAndDoesNotAdvance(t *testing.T) {
+	store := newMockStore()
+	email := &mockEmail{sendErr: errors.New("gmail send denied")}
+	exec := NewExecutor(store, email, nil)
+
+	wf := models.Workflow{
+		ID:    "wf-action-send-fail",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{
+			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "email"},
+			{
+				ID:    "email",
+				Type:  models.NodeAction,
+				Title: "Send Email",
+				Connector: &models.ConnectorConfig{
+					Type: models.ConnectorEmail,
+					Params: map[string]interface{}{
+						"to":            "alice@example.com",
+						"subject":       "Subject",
+						"body_template": "Body",
+					},
+				},
+				Next: "end",
+			},
+			{ID: "end", Type: models.NodeEnd, Title: "End"},
+		},
+	}
+
+	instanceID := seedInstance(t, store, wf, map[string]interface{}{})
+
+	exec.run(instanceID, wf, map[string]interface{}{}, "")
+
+	inst, _ := store.GetInstance(instanceID)
+	if inst.Status != models.InstanceFailed {
+		t.Fatalf("expected failed status, got %s", inst.Status)
+	}
+	if got := countAuditAction(inst, "action_failed"); got != 1 {
+		t.Fatalf("expected one action_failed audit event, got %d", got)
+	}
+	if got := countAuditAction(inst, "instance_failed"); got != 1 {
+		t.Fatalf("expected one instance_failed audit event, got %d", got)
+	}
+	if _, ok := inst.NodeStates["end"]; ok {
+		t.Fatalf("expected execution not to reach end node")
 	}
 }
