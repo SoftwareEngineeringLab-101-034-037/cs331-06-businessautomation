@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 import InviteDialog from "@/components/dashboard/InviteDialog";
+import { useToast, ToastContainer } from "@/components/Toast";
 
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
@@ -141,9 +142,14 @@ export default function TeamPage() {
   const [tasks, setTasks] = useState<WorkflowTask[]>([]);
   const [taskLoading, setTaskLoading] = useState(false);
   const [taskError, setTaskError] = useState<string | null>(null);
+  const [memberMenuOpen, setMemberMenuOpen] = useState(false);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+  const [removeConfirmText, setRemoveConfirmText] = useState("");
+  const [removeLoading, setRemoveLoading] = useState(false);
 
-  const { getToken } = useAuth();
+  const { getToken, userId } = useAuth();
   const { organization } = useOrganization();
+  const { toasts, showToast, dismissToast } = useToast();
 
   const authorizedFetch = useCallback(async (input: string, init: RequestInit = {}): Promise<Response> => {
     const token = await getToken();
@@ -219,6 +225,16 @@ export default function TeamPage() {
     });
   }, [employees, deptFilter, search]);
 
+  const orderedMembers = useMemo(() => {
+    return [...filtered].sort((left, right) => {
+      const leftIsYou = left.id === userId;
+      const rightIsYou = right.id === userId;
+      if (leftIsYou && !rightIsYou) return -1;
+      if (!leftIsYou && rightIsYou) return 1;
+      return `${left.first_name} ${left.last_name}`.localeCompare(`${right.first_name} ${right.last_name}`);
+    });
+  }, [filtered, userId]);
+
   const totalMembers = employees.length;
   const activeMembers = employees.filter((employee) => employee.is_active).length;
   const unassignedMembers = employees.filter((employee) => !employee.department?.name).length;
@@ -289,6 +305,13 @@ export default function TeamPage() {
       setSelectedEmployeeID(null);
     }
   }, [selectedEmployee, selectedEmployeeID]);
+
+  useEffect(() => {
+    setMemberMenuOpen(false);
+    setShowRemoveConfirm(false);
+    setRemoveConfirmText("");
+    setRemoveLoading(false);
+  }, [selectedEmployeeID]);
 
   useEffect(() => {
     let active = true;
@@ -443,6 +466,42 @@ export default function TeamPage() {
     }
   }, [organization?.id, selectedEmployeeID, selectedRoleIDs, roles, authorizedFetch, fetchEmployeesAndRoles]);
 
+  const handleInviteResult = useCallback((message: string, type: "success" | "error") => {
+    showToast(message, type);
+    if (type === "success") {
+      void fetchEmployeesAndRoles();
+    }
+  }, [showToast, fetchEmployeesAndRoles]);
+
+  const canRemoveSelectedMember = !!selectedEmployee && !selectedEmployee.is_admin && selectedEmployee.id !== userId;
+
+  const removeSelectedMember = useCallback(async () => {
+    if (!organization?.id || !selectedEmployee || !canRemoveSelectedMember) return;
+    if (removeConfirmText.trim().toLowerCase() !== "remove") return;
+
+    setRemoveLoading(true);
+    try {
+      const res = await authorizedFetch(`${AUTH_API}/api/orgs/${organization.id}/employees/${selectedEmployee.id}`, {
+        method: "DELETE",
+      });
+      const payload = await res.json().catch(() => ({} as { error?: string; message?: string }));
+      if (!res.ok) {
+        throw new Error(payload.error || `Failed to remove member (${res.status})`);
+      }
+
+      showToast(payload.message || "Member removed successfully.", "success");
+      setShowRemoveConfirm(false);
+      setMemberMenuOpen(false);
+      setRemoveConfirmText("");
+      closeEmployeeDrawer();
+      await fetchEmployeesAndRoles();
+    } catch (removeError) {
+      showToast(normalizeError(removeError, "Failed to remove member"), "error");
+    } finally {
+      setRemoveLoading(false);
+    }
+  }, [organization?.id, selectedEmployee, canRemoveSelectedMember, removeConfirmText, authorizedFetch, showToast, closeEmployeeDrawer, fetchEmployeesAndRoles]);
+
   return (
     <RoleGate
       allowed={["admin"]}
@@ -578,12 +637,13 @@ export default function TeamPage() {
 
         {!loading && !error && (
           <div className="obs-team-grid">
-            {filtered.map((member) => {
+            {orderedMembers.map((member) => {
               const memberRoles = roleAssignmentsByUser.get(member.id) || [];
+              const isYou = member.id === userId;
               return (
                 <div
                   key={member.id}
-                  className="obs-team-card obs-team-card-interactive"
+                  className={`obs-team-card obs-team-card-interactive ${isYou ? "obs-team-card-self" : ""}`}
                   onClick={() => openEmployeeDrawer(member.id)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
@@ -594,6 +654,7 @@ export default function TeamPage() {
                   role="button"
                   tabIndex={0}
                 >
+                  {isYou && <span className="obs-you-badge">You</span>}
                   <div className="obs-team-card-top">
                     <div className="obs-team-avatar">
                       {initials(member.first_name, member.last_name)}
@@ -680,6 +741,34 @@ export default function TeamPage() {
                   </div>
                 </div>
               </div>
+              {canRemoveSelectedMember && (
+                <div className="employee-drawer-menu-wrap">
+                  <button
+                    type="button"
+                    className="wf-row-menu-btn"
+                    aria-label="Member options"
+                    onClick={() => setMemberMenuOpen((open) => !open)}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="16" height="16">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm0 6a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm0 6a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" />
+                    </svg>
+                  </button>
+                  {memberMenuOpen && (
+                    <div className="employee-member-menu" role="menu">
+                      <button
+                        type="button"
+                        className="employee-member-menu-item danger"
+                        onClick={() => {
+                          setMemberMenuOpen(false);
+                          setShowRemoveConfirm(true);
+                        }}
+                      >
+                        Remove Member
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
               <button className="drawer-close-btn" onClick={closeEmployeeDrawer} aria-label="Close employee details">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="18" height="18">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -837,7 +926,72 @@ export default function TeamPage() {
         </div>
       )}
 
-      <InviteDialog isOpen={showInvite} onClose={() => setShowInvite(false)} />
+      <InviteDialog
+        isOpen={showInvite}
+        onClose={() => setShowInvite(false)}
+        onResult={handleInviteResult}
+      />
+
+      {showRemoveConfirm && selectedEmployee && (
+        <div className="invite-overlay" onClick={() => !removeLoading && setShowRemoveConfirm(false)}>
+          <div className="invite-dialog" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 520 }}>
+            <div className="invite-header">
+              <div className="invite-header-text">
+                <h3 className="invite-title">Confirm Member Removal</h3>
+                <p className="invite-subtitle">
+                  This permanently deletes this member's auth records, memberships, role tags, and invitations for this organization.
+                </p>
+              </div>
+              <button
+                className="invite-close"
+                onClick={() => !removeLoading && setShowRemoveConfirm(false)}
+                aria-label="Close"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="18" height="18">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="invite-form" style={{ paddingTop: 8 }}>
+              <div className="employee-inline-feedback error" style={{ marginBottom: 8 }}>
+                Type <strong>remove</strong> to confirm deleting {selectedEmployee.first_name} {selectedEmployee.last_name}.
+              </div>
+              <div className="invite-field">
+                <label className="invite-label">Confirmation</label>
+                <input
+                  type="text"
+                  className="invite-input"
+                  value={removeConfirmText}
+                  onChange={(event) => setRemoveConfirmText(event.target.value)}
+                  placeholder='Type "remove"'
+                  disabled={removeLoading}
+                />
+              </div>
+              <div className="invite-actions">
+                <button
+                  type="button"
+                  className="action-btn action-btn-outline"
+                  onClick={() => setShowRemoveConfirm(false)}
+                  disabled={removeLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="action-btn action-btn-danger"
+                  onClick={removeSelectedMember}
+                  disabled={removeLoading || removeConfirmText.trim().toLowerCase() !== "remove"}
+                >
+                  {removeLoading ? "Removing..." : "Delete Member"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </RoleGate>
   );
 }

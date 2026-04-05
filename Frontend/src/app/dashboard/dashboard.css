@@ -1999,10 +1999,32 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 20px;
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 14px;
   transition: var(--transition);
+}
+
+.obs-team-card-self {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-subtle) inset;
+}
+
+.obs-you-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .obs-team-card:hover {
@@ -3241,6 +3263,13 @@
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
+.step-dot.completed.current {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+  box-shadow: 0 0 0 3px var(--accent-subtle), 0 0 0 1px rgba(255, 255, 255, 0.55) inset;
+}
+
 /* Drawer info grid */
 .drawer-info-grid {
   display: grid;
@@ -3444,6 +3473,46 @@
 
 .employee-drawer-header {
   align-items: flex-start;
+}
+
+.employee-drawer-menu-wrap {
+  position: relative;
+  margin-left: auto;
+  margin-right: 8px;
+}
+
+.employee-member-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 150px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  z-index: 20;
+}
+
+.employee-member-menu-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.employee-member-menu-item:hover {
+  background: var(--surface-alt);
+}
+
+.employee-member-menu-item.danger {
+  color: #dc2626;
 }
 
 .employee-drawer-identity {
