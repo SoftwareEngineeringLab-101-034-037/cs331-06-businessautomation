@@ -312,14 +312,14 @@ func (m *MongoStore) ListInstancesByOrgCompact(orgID string) ([]models.Instance,
 
 func compactInstanceProjection() bson.M {
 	return bson.M{
-		"_id":         0,
-		"id":          1,
-		"org_id":      1,
-		"workflow_id": 1,
-		"status":      1,
+		"_id":          0,
+		"id":           1,
+		"org_id":       1,
+		"workflow_id":  1,
+		"status":       1,
 		"current_node": 1,
-		"node_states": 1,
-		"started_at":  1,
+		"node_states":  1,
+		"started_at":   1,
 		"completed_at": 1,
 	}
 }

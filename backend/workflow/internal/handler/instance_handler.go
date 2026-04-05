@@ -408,15 +408,15 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		WorkflowName string `json:"workflow_name,omitempty"`
 	}
 	type compactInstance struct {
-		ID           string                       `json:"id"`
-		OrgID        string                       `json:"org_id"`
-		WorkflowID   string                       `json:"workflow_id"`
-		WorkflowName string                       `json:"workflow_name,omitempty"`
-		Status       models.InstanceStatus        `json:"status"`
-		CurrentNode  string                       `json:"current_node,omitempty"`
-		NodeStates   map[string]models.NodeState  `json:"node_states,omitempty"`
-		StartedAt    time.Time                    `json:"started_at"`
-		CompletedAt  *time.Time                   `json:"completed_at,omitempty"`
+		ID           string                      `json:"id"`
+		OrgID        string                      `json:"org_id"`
+		WorkflowID   string                      `json:"workflow_id"`
+		WorkflowName string                      `json:"workflow_name,omitempty"`
+		Status       models.InstanceStatus       `json:"status"`
+		CurrentNode  string                      `json:"current_node,omitempty"`
+		NodeStates   map[string]models.NodeState `json:"node_states,omitempty"`
+		StartedAt    time.Time                   `json:"started_at"`
+		CompletedAt  *time.Time                  `json:"completed_at,omitempty"`
 	}
 	workflowIDs := make([]string, 0, len(instances))
 	seenWorkflowIDs := make(map[string]struct{}, len(instances))

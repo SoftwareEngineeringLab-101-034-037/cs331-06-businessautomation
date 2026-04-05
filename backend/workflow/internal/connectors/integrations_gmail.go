@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const maxIntegrationErrorBodyBytes = 16 * 1024
+
 // IntegrationsGmailConnector sends workflow emails through the integrations
 // service Gmail endpoint.
 type IntegrationsGmailConnector struct {
@@ -35,7 +37,7 @@ func (c *IntegrationsGmailConnector) Send(to, subject, body string) error {
 	return fmt.Errorf("org-aware send required for integrations gmail connector")
 }
 
-func (c *IntegrationsGmailConnector) SendForOrg(orgID, to, cc, subject, body, _, fromAccountID string) error {
+func (c *IntegrationsGmailConnector) SendForOrg(orgID, to, cc, subject, body, fromName, fromAccountID string) error {
 	orgID = strings.TrimSpace(orgID)
 	if orgID == "" {
 		return fmt.Errorf("org_id is required")
@@ -51,6 +53,10 @@ func (c *IntegrationsGmailConnector) SendForOrg(orgID, to, cc, subject, body, _,
 		"cc":        parseRecipients(cc),
 		"subject":   strings.TrimSpace(subject),
 		"body_text": body,
+	}
+	trimmedFromName := strings.TrimSpace(fromName)
+	if trimmedFromName != "" {
+		payload["from_name"] = trimmedFromName
 	}
 	if strings.TrimSpace(fromAccountID) != "" {
 		payload["from_account_id"] = strings.TrimSpace(fromAccountID)
@@ -77,8 +83,17 @@ func (c *IntegrationsGmailConnector) SendForOrg(orgID, to, cc, subject, body, _,
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		rawBody, _ := io.ReadAll(resp.Body)
+		limited := io.LimitReader(resp.Body, maxIntegrationErrorBodyBytes+1)
+		rawBody, _ := io.ReadAll(limited)
+		truncated := len(rawBody) > maxIntegrationErrorBodyBytes
+		if truncated {
+			rawBody = rawBody[:maxIntegrationErrorBodyBytes]
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
 		trimmed := strings.TrimSpace(string(rawBody))
+		if truncated && trimmed != "" {
+			trimmed += "... (truncated)"
+		}
 		if message := parseIntegrationErrorMessage(trimmed); message != "" {
 			return fmt.Errorf("integrations gmail send failed status=%d error=%s", resp.StatusCode, message)
 		}

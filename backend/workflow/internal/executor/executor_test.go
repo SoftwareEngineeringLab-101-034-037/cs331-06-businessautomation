@@ -18,7 +18,7 @@ type emailCall struct {
 
 type mockEmail struct {
 	mu      sync.Mutex
-	calls    []emailCall
+	calls   []emailCall
 	sendErr error
 }
 
