@@ -457,6 +457,18 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 		return authorizeOrgAccess(r, orgID)
 	}
 
+	resolveProviderOrDefault := func(rawService string) (string, bool) {
+		rawService = strings.TrimSpace(rawService)
+		if rawService == "" {
+			return providerGoogleForms, false
+		}
+		provider := normalizeProviderID(rawService)
+		if provider == "" {
+			return "", true
+		}
+		return provider, false
+	}
+
 	mux.HandleFunc("/auth/google/connect-url", func(w http.ResponseWriter, r *http.Request) {
 		cookieSecure := r.TLS != nil
 		if !svc.IsConfigured() {
@@ -470,8 +482,8 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 		}
 
 		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
-		provider := normalizeProviderID(r.URL.Query().Get("service"))
-		if provider == "" {
+		provider, invalidProvider := resolveProviderOrDefault(r.URL.Query().Get("service"))
+		if invalidProvider {
 			writeError(w, http.StatusBadRequest, "unsupported service")
 			return
 		}
@@ -523,8 +535,8 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 		}
 
 		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
-		provider := normalizeProviderID(r.URL.Query().Get("service"))
-		if provider == "" {
+		provider, invalidProvider := resolveProviderOrDefault(r.URL.Query().Get("service"))
+		if invalidProvider {
 			writeError(w, http.StatusBadRequest, "unsupported service")
 			return
 		}
@@ -613,8 +625,8 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 		}
 		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 		accountID := r.URL.Query().Get("account_id")
-		provider := normalizeProviderID(r.URL.Query().Get("service"))
-		if provider == "" {
+		provider, invalidProvider := resolveProviderOrDefault(r.URL.Query().Get("service"))
+		if invalidProvider {
 			writeError(w, http.StatusBadRequest, "unsupported service")
 			return
 		}
@@ -642,8 +654,8 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 
 	mux.HandleFunc("/auth/google/status", func(w http.ResponseWriter, r *http.Request) {
 		orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
-		provider := normalizeProviderID(r.URL.Query().Get("service"))
-		if provider == "" {
+		provider, invalidProvider := resolveProviderOrDefault(r.URL.Query().Get("service"))
+		if invalidProvider {
 			writeError(w, http.StatusBadRequest, "unsupported service")
 			return
 		}

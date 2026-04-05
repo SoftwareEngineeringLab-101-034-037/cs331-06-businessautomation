@@ -23,6 +23,8 @@ type Config struct {
 	PollIntervalSeconds int
 }
 
+const defaultMongoDBName = "google_forms_service"
+
 func Load() (*Config, error) {
 	for _, path := range []string{".env", "../../.env", "../../../.env"} {
 		if err := godotenv.Load(path); err == nil {
@@ -38,7 +40,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Port:                getenv("PORT", "8086"),
 		MongoURI:            getenv("MONGO_URI", "mongodb://localhost:27017"),
-		MongoDB:             getenv("MONGO_DB", "integrations_service"),
+		MongoDB:             getenv("MONGO_DB", defaultMongoDBName),
 		GoogleClientID:      strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")),
 		GoogleClientSecret:  strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET")),
 		GoogleRedirectURI:   strings.TrimSpace(os.Getenv("GOOGLE_REDIRECT_URI")),
