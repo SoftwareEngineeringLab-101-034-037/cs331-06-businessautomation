@@ -15,6 +15,7 @@ type Store interface {
 	SaveInstance(models.Instance) (string, error)
 	GetInstance(id string) (models.Instance, bool)
 	FindInstanceByWorkflowAndFormResponse(workflowID, formResponseID string) (models.Instance, bool, error)
+	FindInstanceByWorkflowAndEmailMessageID(workflowID, emailMessageID string) (models.Instance, bool, error)
 	ListInstancesByOrg(orgID string) ([]models.Instance, error)
 	ListInstancesByWorkflow(workflowID string) ([]models.Instance, error)
 

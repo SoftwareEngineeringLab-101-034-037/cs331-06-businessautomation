@@ -94,8 +94,40 @@ func (e *Executor) FindOrStartInstanceByFormResponse(wf models.Workflow, data ma
 
 	instanceID, err := e.StartInstance(wf, data, authHeader)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
+		if isDuplicateKeyError(err) {
 			existingID, lookupErr := e.findInstanceIDByFormResponse(wf.ID, trimmedResponseID)
+			if lookupErr == nil && existingID != "" {
+				return existingID, true, nil
+			}
+		}
+		return "", false, err
+	}
+	return instanceID, false, nil
+}
+
+func (e *Executor) FindOrStartInstanceByEmailMessage(wf models.Workflow, data map[string]interface{}, emailMessageID, authHeader string) (string, bool, error) {
+	trimmedMessageID := strings.TrimSpace(emailMessageID)
+	if trimmedMessageID == "" {
+		id, err := e.StartInstance(wf, data, authHeader)
+		return id, false, err
+	}
+
+	lock := e.instanceLock("email_message:" + wf.ID + ":" + trimmedMessageID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	existingID, err := e.findInstanceIDByEmailMessage(wf.ID, trimmedMessageID)
+	if err != nil {
+		return "", false, err
+	}
+	if existingID != "" {
+		return existingID, true, nil
+	}
+
+	instanceID, err := e.StartInstance(wf, data, authHeader)
+	if err != nil {
+		if isDuplicateKeyError(err) {
+			existingID, lookupErr := e.findInstanceIDByEmailMessage(wf.ID, trimmedMessageID)
 			if lookupErr == nil && existingID != "" {
 				return existingID, true, nil
 			}
@@ -114,6 +146,24 @@ func (e *Executor) findInstanceIDByFormResponse(workflowID, responseID string) (
 		return inst.ID, nil
 	}
 	return "", nil
+}
+
+func (e *Executor) findInstanceIDByEmailMessage(workflowID, emailMessageID string) (string, error) {
+	inst, ok, err := e.store.FindInstanceByWorkflowAndEmailMessageID(workflowID, emailMessageID)
+	if err != nil {
+		return "", err
+	}
+	if ok {
+		return inst.ID, nil
+	}
+	return "", nil
+}
+
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate key")
 }
 
 func (e *Executor) run(instanceID string, wf models.Workflow, data map[string]interface{}, authHeader string) {

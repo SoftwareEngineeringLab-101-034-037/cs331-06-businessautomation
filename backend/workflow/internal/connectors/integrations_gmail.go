@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -100,7 +101,7 @@ func (c *IntegrationsGmailConnector) SendForOrg(orgID, to, cc, subject, body, fr
 		return fmt.Errorf("integrations gmail send failed status=%d body=%s", resp.StatusCode, trimmed)
 	}
 	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-		return fmt.Errorf("read integrations gmail send response: %w", err)
+		log.Printf("integrations gmail send response drain warning org_id=%q: %v", orgID, err)
 	}
 	return nil
 }

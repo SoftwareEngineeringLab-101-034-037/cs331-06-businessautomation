@@ -28,6 +28,12 @@ type compactInstanceLister interface {
 	ListInstancesByWorkflowCompact(workflowID string) ([]models.Instance, error)
 }
 
+type integrationInstanceRequest struct {
+	OrgID      string                 `json:"org_id"`
+	WorkflowID string                 `json:"workflow_id"`
+	Data       map[string]interface{} `json:"data"`
+}
+
 func NewInstanceHandler(store storage.Store, exec *executor.Executor, integrationKey ...string) *InstanceHandler {
 	key := ""
 	if len(integrationKey) > 0 {
@@ -38,33 +44,13 @@ func NewInstanceHandler(store storage.Store, exec *executor.Executor, integratio
 
 // POST /integrations/google-forms/events
 func (h *InstanceHandler) StartFromGoogleForms(c *gin.Context) {
-	if strings.TrimSpace(h.IntegrationKey) == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "integration key not configured"})
-		return
-	}
-
-	header := c.GetHeader("X-Integration-Key")
-	if subtle.ConstantTimeCompare([]byte(header), []byte(h.IntegrationKey)) != 1 {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid integration key"})
-		return
-	}
-
-	var req struct {
-		OrgID      string                 `json:"org_id"`
-		WorkflowID string                 `json:"workflow_id"`
-		Data       map[string]interface{} `json:"data"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
-		return
-	}
-	if req.OrgID == "" || req.WorkflowID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "org_id and workflow_id are required"})
-		return
-	}
-
-	wf, ok := h.Store.GetWorkflow(req.WorkflowID)
+	req, ok := h.requireIntegrationRequest(c)
 	if !ok {
+		return
+	}
+
+	wf, found := h.Store.GetWorkflow(req.WorkflowID)
+	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
 		return
 	}
@@ -176,33 +162,13 @@ func parseFieldMappingCSV(raw string) map[string]string {
 
 // POST /integrations/gmail/events
 func (h *InstanceHandler) StartFromGmail(c *gin.Context) {
-	if strings.TrimSpace(h.IntegrationKey) == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "integration key not configured"})
-		return
-	}
-
-	header := c.GetHeader("X-Integration-Key")
-	if subtle.ConstantTimeCompare([]byte(header), []byte(h.IntegrationKey)) != 1 {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid integration key"})
-		return
-	}
-
-	var req struct {
-		OrgID      string                 `json:"org_id"`
-		WorkflowID string                 `json:"workflow_id"`
-		Data       map[string]interface{} `json:"data"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
-		return
-	}
-	if req.OrgID == "" || req.WorkflowID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "org_id and workflow_id are required"})
-		return
-	}
-
-	wf, ok := h.Store.GetWorkflow(req.WorkflowID)
+	req, ok := h.requireIntegrationRequest(c)
 	if !ok {
+		return
+	}
+
+	wf, found := h.Store.GetWorkflow(req.WorkflowID)
+	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
 		return
 	}
@@ -245,28 +211,48 @@ func (h *InstanceHandler) StartFromGmail(c *gin.Context) {
 	}
 
 	normalizedData := normalizeGmailData(wf.Trigger.Config, req.Data)
-	emailMessageID := extractEmailMessageID(normalizedData)
-	if emailMessageID != "" {
-		existingInstanceID, lookupErr := h.findExistingInstanceByEmailMessageID(req.WorkflowID, emailMessageID)
-		if lookupErr != nil {
-			log.Printf("instance_handler.StartFromGmail dedupe lookup failed workflow_id=%q org_id=%q message_id=%q: %v", wf.ID, wf.OrgID, emailMessageID, lookupErr)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "start failed"})
-			return
-		}
-		if existingInstanceID != "" {
-			c.JSON(http.StatusOK, gin.H{"instance_id": existingInstanceID})
-			return
-		}
-	}
-
-	instID, err := h.Exec.StartInstance(wf, normalizedData, middleware.GetAuthorizationHeader(c))
+	instID, deduped, err := h.Exec.FindOrStartInstanceByEmailMessage(wf, normalizedData, extractEmailMessageID(normalizedData), middleware.GetAuthorizationHeader(c))
 	if err != nil {
 		log.Printf("instance_handler.StartFromGmail failed workflow_id=%q org_id=%q: %v", wf.ID, wf.OrgID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "start failed"})
 		return
 	}
+	if deduped {
+		c.JSON(http.StatusOK, gin.H{"instance_id": instID})
+		return
+	}
 
 	c.JSON(http.StatusCreated, gin.H{"instance_id": instID})
+}
+
+func (h *InstanceHandler) requireIntegrationRequest(c *gin.Context) (integrationInstanceRequest, bool) {
+	if strings.TrimSpace(h.IntegrationKey) == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "integration key not configured"})
+		return integrationInstanceRequest{}, false
+	}
+
+	header := c.GetHeader("X-Integration-Key")
+	if subtle.ConstantTimeCompare([]byte(header), []byte(h.IntegrationKey)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid integration key"})
+		return integrationInstanceRequest{}, false
+	}
+
+	var req integrationInstanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
+		return integrationInstanceRequest{}, false
+	}
+	req.OrgID = strings.TrimSpace(req.OrgID)
+	req.WorkflowID = strings.TrimSpace(req.WorkflowID)
+	if req.OrgID == "" || req.WorkflowID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "org_id and workflow_id are required"})
+		return integrationInstanceRequest{}, false
+	}
+	if req.Data == nil {
+		req.Data = map[string]interface{}{}
+	}
+
+	return req, true
 }
 
 func extractEmailMessageID(data map[string]interface{}) string {
@@ -278,19 +264,6 @@ func extractEmailMessageID(data map[string]interface{}) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(raw))
-}
-
-func (h *InstanceHandler) findExistingInstanceByEmailMessageID(workflowID, emailMessageID string) (string, error) {
-	instances, err := h.Store.ListInstancesByWorkflow(workflowID)
-	if err != nil {
-		return "", err
-	}
-	for _, instance := range instances {
-		if extractEmailMessageID(instance.Data) == emailMessageID {
-			return instance.ID, nil
-		}
-	}
-	return "", nil
 }
 
 func payloadStringValue(payload map[string]interface{}, key string) string {

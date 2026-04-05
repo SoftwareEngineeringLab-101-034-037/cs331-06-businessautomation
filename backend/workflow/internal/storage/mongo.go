@@ -73,6 +73,9 @@ func (m *MongoStore) ensureIndexes(ctx context.Context) error {
 	if err := m.ensureWorkflowFormResponseIndex(ictx); err != nil {
 		return err
 	}
+	if err := m.ensureWorkflowEmailMessageIndex(ictx); err != nil {
+		return err
+	}
 	if _, err := m.taskCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "assigned_role", Value: 1}, {Key: "status", Value: 1}}},
@@ -92,6 +95,32 @@ func (m *MongoStore) ensureWorkflowFormResponseIndex(ctx context.Context) error 
 			SetName(indexName).
 			SetUnique(true).
 			SetPartialFilterExpression(bson.M{"data.form_response_id": bson.M{"$type": "string", "$gt": ""}}),
+	}
+
+	if _, err := m.instCol.Indexes().CreateOne(ctx, model); err == nil {
+		return nil
+	} else if !isIndexConflictError(err) {
+		return err
+	}
+
+	if _, err := m.instCol.Indexes().DropOne(ctx, indexName); err != nil && !isIndexNotFoundError(err) {
+		return fmt.Errorf("drop conflicting index %s: %w", indexName, err)
+	}
+
+	if _, err := m.instCol.Indexes().CreateOne(ctx, model); err != nil {
+		return fmt.Errorf("create index %s after drop: %w", indexName, err)
+	}
+	return nil
+}
+
+func (m *MongoStore) ensureWorkflowEmailMessageIndex(ctx context.Context) error {
+	const indexName = "workflow_id_1_data.email_message_id_1"
+	model := mongo.IndexModel{
+		Keys: bson.D{{Key: "workflow_id", Value: 1}, {Key: "data.email_message_id", Value: 1}},
+		Options: options.Index().
+			SetName(indexName).
+			SetUnique(true).
+			SetPartialFilterExpression(bson.M{"data.email_message_id": bson.M{"$type": "string", "$gt": ""}}),
 	}
 
 	if _, err := m.instCol.Indexes().CreateOne(ctx, model); err == nil {
@@ -232,6 +261,24 @@ func (m *MongoStore) FindInstanceByWorkflowAndFormResponse(workflowID, formRespo
 	err := m.instCol.FindOne(ctx, bson.M{
 		"workflow_id":           workflowID,
 		"data.form_response_id": formResponseID,
+	}).Decode(&inst)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return models.Instance{}, false, nil
+		}
+		return models.Instance{}, false, err
+	}
+	return inst, true, nil
+}
+
+func (m *MongoStore) FindInstanceByWorkflowAndEmailMessageID(workflowID, emailMessageID string) (models.Instance, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var inst models.Instance
+	err := m.instCol.FindOne(ctx, bson.M{
+		"workflow_id":            workflowID,
+		"data.email_message_id": emailMessageID,
 	}).Decode(&inst)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {

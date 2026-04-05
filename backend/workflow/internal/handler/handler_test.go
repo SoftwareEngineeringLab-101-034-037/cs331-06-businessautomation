@@ -148,6 +148,24 @@ func (s *handlerStore) FindInstanceByWorkflowAndFormResponse(workflowID, formRes
 	return models.Instance{}, false, nil
 }
 
+func (s *handlerStore) FindInstanceByWorkflowAndEmailMessageID(workflowID, emailMessageID string) (models.Instance, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, inst := range s.instances {
+		if inst.WorkflowID != workflowID || inst.Data == nil {
+			continue
+		}
+		value, ok := inst.Data["email_message_id"]
+		if !ok || value == nil {
+			continue
+		}
+		if fmt.Sprint(value) == emailMessageID {
+			return inst, true, nil
+		}
+	}
+	return models.Instance{}, false, nil
+}
+
 func (s *handlerStore) ListInstancesByWorkflow(workflowID string) ([]models.Instance, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
