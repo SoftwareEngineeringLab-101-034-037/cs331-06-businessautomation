@@ -173,6 +173,12 @@ func (s *EmployeeService) AcceptInvitationByEmail(email, orgID, userID string) e
 			"department_id":   invitation.DepartmentID,
 			"updated_at":      now,
 		}
+		if invitation.FirstName != "" {
+			userUpdates["first_name"] = invitation.FirstName
+		}
+		if invitation.LastName != "" {
+			userUpdates["last_name"] = invitation.LastName
+		}
 		if invitation.JobTitle != "" {
 			userUpdates["job_title"] = invitation.JobTitle
 		}

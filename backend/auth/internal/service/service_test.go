@@ -180,6 +180,84 @@ func TestListEmployees(t *testing.T) {
 	})
 }
 
+func TestRemoveEmployee(t *testing.T) {
+	t.Run("success removes user and related rows", func(t *testing.T) {
+		db := setupServiceTestDB(t)
+		svc := NewEmployeeService(db, "test_clerk_secret")
+
+		prevDeleteFn := ClerkDeleteUserFunc
+		ClerkDeleteUserFunc = func(_ string, _ string) error { return nil }
+		defer func() { ClerkDeleteUserFunc = prevDeleteFn }()
+
+		now := time.Now()
+		if err := db.Exec(`
+			INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, "user_member", "member@example.com", "Mem", "Ber", "org_1", false, true, now, now).Error; err != nil {
+			t.Fatalf("failed seeding user: %v", err)
+		}
+		if err := db.Exec(`
+			INSERT INTO roles (id, name, organization_id, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+		`, "role_1", "reviewer", "org_1", now, now).Error; err != nil {
+			t.Fatalf("failed seeding role: %v", err)
+		}
+		if err := db.Exec(`
+			INSERT INTO user_role_memberships (id, organization_id, user_id, role_id, assigned_by, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, "urm_1", "org_1", "user_member", "role_1", "admin", now, now).Error; err != nil {
+			t.Fatalf("failed seeding role membership: %v", err)
+		}
+		if err := db.Exec(`
+			INSERT INTO employee_invitations (
+				id, organization_id, department_id, email, first_name, last_name, role_name, job_title, token, status,
+				invited_by, expires_at, accepted_user_id, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			"inv_1", "org_1", "dept_1", "member@example.com", "Mem", "Ber", "", "", "tok_1", "accepted", "admin", now.Add(24*time.Hour), "user_member", now, now,
+		).Error; err != nil {
+			t.Fatalf("failed seeding invitation: %v", err)
+		}
+
+		if err := svc.RemoveEmployee("org_1", "user_member", "admin_actor"); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		var userCount, roleMembershipCount, inviteCount int64
+		if err := db.Table("users").Where("id = ?", "user_member").Count(&userCount).Error; err != nil {
+			t.Fatalf("failed counting users: %v", err)
+		}
+		if err := db.Table("user_role_memberships").Where("user_id = ?", "user_member").Count(&roleMembershipCount).Error; err != nil {
+			t.Fatalf("failed counting role memberships: %v", err)
+		}
+		if err := db.Table("employee_invitations").Where("email = ? OR accepted_user_id = ?", "member@example.com", "user_member").Count(&inviteCount).Error; err != nil {
+			t.Fatalf("failed counting invitations: %v", err)
+		}
+
+		if userCount != 0 || roleMembershipCount != 0 || inviteCount != 0 {
+			t.Fatalf("expected related auth rows removed, got users=%d roles=%d invites=%d", userCount, roleMembershipCount, inviteCount)
+		}
+	})
+
+	t.Run("reject removing admin member", func(t *testing.T) {
+		db := setupServiceTestDB(t)
+		svc := NewEmployeeService(db, "test_clerk_secret")
+
+		now := time.Now()
+		if err := db.Exec(`
+			INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, "user_admin", "admin@example.com", "Ad", "Min", "org_1", true, true, now, now).Error; err != nil {
+			t.Fatalf("failed seeding admin user: %v", err)
+		}
+
+		err := svc.RemoveEmployee("org_1", "user_admin", "admin_actor")
+		if err == nil || !errors.Is(err, ErrCannotRemoveAdmin) {
+			t.Fatalf("expected ErrCannotRemoveAdmin, got %v", err)
+		}
+	})
+}
+
 func TestListInvitations(t *testing.T) {
 	t.Run("success pending only", func(t *testing.T) {
 		db := setupServiceTestDB(t)
@@ -486,7 +564,7 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 		if err := db.Exec(`
 			INSERT INTO users (id, email, first_name, last_name, is_active, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, "user_1", "user1@example.com", "User", "One", true, now, now).Error; err != nil {
+		`, "user_1", "user1@example.com", "Old", "Name", true, now, now).Error; err != nil {
 			t.Fatalf("failed seeding user: %v", err)
 		}
 		if err := db.Exec(`
@@ -525,20 +603,33 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 		}
 
 		var user struct {
-			DepartmentID *string `gorm:"column:department_id"`
-			JobTitle     string  `gorm:"column:job_title"`
+			OrganizationID *string `gorm:"column:organization_id"`
+			DepartmentID   *string `gorm:"column:department_id"`
+			FirstName      string  `gorm:"column:first_name"`
+			LastName       string  `gorm:"column:last_name"`
+			JobTitle       string  `gorm:"column:job_title"`
+			IsAdmin        bool    `gorm:"column:is_admin"`
 		}
 		if err := db.Table("users").
-			Select("department_id, job_title").
+			Select("organization_id, department_id, first_name, last_name, job_title, is_admin").
 			Where("id = ?", "user_1").
 			Take(&user).Error; err != nil {
 			t.Fatalf("failed reading user: %v", err)
 		}
+		if user.OrganizationID == nil || *user.OrganizationID != "org_1" {
+			t.Fatalf("expected organization_id org_1, got %+v", user.OrganizationID)
+		}
 		if user.DepartmentID == nil || *user.DepartmentID != "dept_1" {
 			t.Fatalf("expected department_id dept_1, got %+v", user.DepartmentID)
 		}
+		if user.FirstName != "User" || user.LastName != "One" {
+			t.Fatalf("expected name from invitation User One, got %q %q", user.FirstName, user.LastName)
+		}
 		if user.JobTitle != "Senior Analyst" {
 			t.Fatalf("expected job title update, got %q", user.JobTitle)
+		}
+		if user.IsAdmin {
+			t.Fatal("expected invitation acceptance default dashboard access to member (is_admin=false)")
 		}
 		var membershipCount int64
 		if err := db.Table("user_role_memberships").Where("user_id = ? AND role_id = ?", "user_1", "role_1").Count(&membershipCount).Error; err != nil {
@@ -546,6 +637,58 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 		}
 		if membershipCount != 1 {
 			t.Fatalf("expected 1 role membership for user_1/role_1, got %d", membershipCount)
+		}
+	})
+
+	t.Run("dashboard access follows clerk admin membership", func(t *testing.T) {
+		db := setupServiceTestDB(t)
+		svc := NewEmployeeService(db, "")
+
+		now := time.Now()
+		if err := db.Exec(`
+			INSERT INTO users (id, email, first_name, last_name, is_admin, is_active, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, "user_admin", "admin.invited@example.com", "Admin", "Invitee", true, true, now, now).Error; err != nil {
+			t.Fatalf("failed seeding user: %v", err)
+		}
+		if err := db.Exec(`
+			INSERT INTO employee_invitations (
+				id, organization_id, department_id, email, first_name, last_name, role_name, job_title, token, status,
+				invited_by, expires_at, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			"inv_admin", "org_1", "dept_admin", "admin.invited@example.com", "Admin", "Invitee", "", "Head Ops", "tok_admin", "pending", "admin", now.Add(24*time.Hour), now, now,
+		).Error; err != nil {
+			t.Fatalf("failed seeding invitation: %v", err)
+		}
+
+		if err := svc.AcceptInvitationByEmail("admin.invited@example.com", "org_1", "user_admin"); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		var user struct {
+			OrganizationID *string `gorm:"column:organization_id"`
+			DepartmentID   *string `gorm:"column:department_id"`
+			JobTitle       string  `gorm:"column:job_title"`
+			IsAdmin        bool    `gorm:"column:is_admin"`
+		}
+		if err := db.Table("users").
+			Select("organization_id, department_id, job_title, is_admin").
+			Where("id = ?", "user_admin").
+			Take(&user).Error; err != nil {
+			t.Fatalf("failed reading user: %v", err)
+		}
+		if user.OrganizationID == nil || *user.OrganizationID != "org_1" {
+			t.Fatalf("expected organization_id org_1, got %+v", user.OrganizationID)
+		}
+		if user.DepartmentID == nil || *user.DepartmentID != "dept_admin" {
+			t.Fatalf("expected department_id dept_admin, got %+v", user.DepartmentID)
+		}
+		if user.JobTitle != "Head Ops" {
+			t.Fatalf("expected job_title Head Ops, got %q", user.JobTitle)
+		}
+		if !user.IsAdmin {
+			t.Fatal("expected is_admin=true to be preserved for admin user")
 		}
 	})
 
