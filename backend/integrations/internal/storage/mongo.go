@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -21,6 +22,11 @@ type MongoStore struct {
 	tokens       *mongo.Collection
 	watches      *mongo.Collection
 	gmailWatches *mongo.Collection
+}
+
+var createOneIndex = func(ctx context.Context, collection *mongo.Collection, model mongo.IndexModel) error {
+	_, err := collection.Indexes().CreateOne(ctx, model)
+	return err
 }
 
 func NewMongo(uri, dbName string) (*MongoStore, error) {
@@ -42,42 +48,66 @@ func NewMongo(uri, dbName string) (*MongoStore, error) {
 		watches:      db.Collection("form_watches"),
 		gmailWatches: db.Collection("gmail_watches"),
 	}
-	s.ensureIndexes(ctx)
+	if err := s.ensureIndexes(ctx); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, err
+	}
 	return s, nil
 }
 
-func (s *MongoStore) ensureIndexes(ctx context.Context) {
-	s.tokens.Indexes().CreateOne(ctx, mongo.IndexModel{
+func (s *MongoStore) ensureIndexes(ctx context.Context) error {
+	if err := createOneIndex(ctx, s.tokens, mongo.IndexModel{
 		Keys: bson.D{{Key: "org_id", Value: 1}},
-	})
-	s.tokens.Indexes().CreateOne(ctx, mongo.IndexModel{
+	}); err != nil {
+		return fmt.Errorf("create oauth_tokens org_id index: %w", err)
+	}
+	if err := createOneIndex(ctx, s.tokens, mongo.IndexModel{
 		Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "provider", Value: 1}, {Key: "is_primary", Value: 1}},
-	})
-	s.tokens.Indexes().CreateOne(ctx, mongo.IndexModel{
+	}); err != nil {
+		return fmt.Errorf("create oauth_tokens primary sort index: %w", err)
+	}
+	if err := createOneIndex(ctx, s.tokens, mongo.IndexModel{
 		Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "provider", Value: 1}, {Key: "connected_at", Value: -1}},
-	})
-	s.tokens.Indexes().CreateOne(ctx, mongo.IndexModel{
+	}); err != nil {
+		return fmt.Errorf("create oauth_tokens connected_at index: %w", err)
+	}
+	if err := createOneIndex(ctx, s.tokens, mongo.IndexModel{
 		Keys:    bson.D{{Key: "org_id", Value: 1}, {Key: "provider", Value: 1}, {Key: "account_id", Value: 1}},
 		Options: options.Index().SetUnique(true),
-	})
-	s.watches.Indexes().CreateOne(ctx, mongo.IndexModel{
+	}); err != nil {
+		return fmt.Errorf("create oauth_tokens unique account index: %w", err)
+	}
+	if err := createOneIndex(ctx, s.watches, mongo.IndexModel{
 		Keys: bson.D{{Key: "org_id", Value: 1}},
-	})
-	s.watches.Indexes().CreateOne(ctx, mongo.IndexModel{
+	}); err != nil {
+		return fmt.Errorf("create form_watches org_id index: %w", err)
+	}
+	if err := createOneIndex(ctx, s.watches, mongo.IndexModel{
 		Keys: bson.D{{Key: "active", Value: 1}},
-	})
-	s.watches.Indexes().CreateOne(ctx, mongo.IndexModel{
+	}); err != nil {
+		return fmt.Errorf("create form_watches active index: %w", err)
+	}
+	if err := createOneIndex(ctx, s.watches, mongo.IndexModel{
 		Keys: bson.D{{Key: "provider", Value: 1}},
-	})
-	s.gmailWatches.Indexes().CreateOne(ctx, mongo.IndexModel{
+	}); err != nil {
+		return fmt.Errorf("create form_watches provider index: %w", err)
+	}
+	if err := createOneIndex(ctx, s.gmailWatches, mongo.IndexModel{
 		Keys: bson.D{{Key: "org_id", Value: 1}},
-	})
-	s.gmailWatches.Indexes().CreateOne(ctx, mongo.IndexModel{
+	}); err != nil {
+		return fmt.Errorf("create gmail_watches org_id index: %w", err)
+	}
+	if err := createOneIndex(ctx, s.gmailWatches, mongo.IndexModel{
 		Keys: bson.D{{Key: "active", Value: 1}},
-	})
-	s.gmailWatches.Indexes().CreateOne(ctx, mongo.IndexModel{
+	}); err != nil {
+		return fmt.Errorf("create gmail_watches active index: %w", err)
+	}
+	if err := createOneIndex(ctx, s.gmailWatches, mongo.IndexModel{
 		Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "workflow_id", Value: 1}},
-	})
+	}); err != nil {
+		return fmt.Errorf("create gmail_watches workflow index: %w", err)
+	}
+	return nil
 }
 
 func (s *MongoStore) SaveToken(ctx context.Context, token *models.OAuthToken) error {
