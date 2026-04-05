@@ -73,6 +73,10 @@ export default function TabNav() {
   const pathname = usePathname();
   const { role } = useRole();
 
+  if (!role) {
+    return null;
+  }
+
   return (
     <nav className="tab-nav" role="tablist">
       {DASHBOARD_NAV

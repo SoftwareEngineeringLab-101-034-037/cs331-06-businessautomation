@@ -5,7 +5,7 @@ import { useAuth } from "@clerk/nextjs";
 import type { UserRole } from "@/types/dashboard";
 
 interface RoleContextValue {
-  role: UserRole;
+  role: UserRole | null;
   setRole: (r: UserRole) => void;
   hasAccess: (allowed: UserRole[]) => boolean;
 }
@@ -27,11 +27,11 @@ export function RoleProvider({
   const { orgRole, isLoaded } = useAuth();
   const [manualRole, setManualRole] = useState<UserRole | null>(null);
 
-  const derivedRole = useMemo<UserRole>(() => {
-    if (!isLoaded) return defaultRole;
+  const derivedRole = useMemo<UserRole | null>(() => {
+    if (!isLoaded) return null;
     if (orgRole === "org:admin" || orgRole === "org:owner") return "admin";
     return "employee";
-  }, [defaultRole, isLoaded, orgRole]);
+  }, [isLoaded, orgRole]);
 
   const role = manualRole ?? derivedRole;
 
@@ -40,7 +40,7 @@ export function RoleProvider({
   }, []);
 
   const hasAccess = useCallback(
-    (allowed: UserRole[]) => allowed.includes(role),
+    (allowed: UserRole[]) => role !== null && allowed.includes(role),
     [role],
   );
 
@@ -70,7 +70,8 @@ export function RoleGate({
   children: ReactNode;
   fallback?: ReactNode;
 }) {
-  const { hasAccess } = useRole();
+  const { role, hasAccess } = useRole();
+  if (role === null) return null;
   if (!hasAccess(allowed)) return fallback ?? null;
   return <>{children}</>;
 }

@@ -21,8 +21,9 @@ export default clerkMiddleware(async (auth, req) => {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const landingURL = new URL("/", req.url);
-  landingURL.searchParams.set("auth", "required");
+  const landingURL = new URL("/join", req.url);
+  const destination = `${req.nextUrl.pathname}${req.nextUrl.search}`;
+  landingURL.searchParams.set("redirect_to", destination);
   return NextResponse.redirect(landingURL);
 });
 

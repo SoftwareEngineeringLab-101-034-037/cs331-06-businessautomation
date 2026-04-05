@@ -313,6 +313,12 @@ export default function TeamPage() {
     setRemoveLoading(false);
   }, [selectedEmployeeID]);
 
+  const closeRemoveConfirm = useCallback(() => {
+    if (removeLoading) return;
+    setRemoveConfirmText("");
+    setShowRemoveConfirm(false);
+  }, [removeLoading]);
+
   useEffect(() => {
     let active = true;
 
@@ -394,10 +400,11 @@ export default function TeamPage() {
   }, []);
 
   const closeEmployeeDrawer = useCallback(() => {
+    closeRemoveConfirm();
     setSelectedEmployeeID(null);
     setRoleSaveError(null);
     setRoleSaveSuccess(null);
-  }, []);
+  }, [closeRemoveConfirm]);
 
   const addRoleToDraft = useCallback((roleID: string) => {
     if (!roleID) return;
@@ -490,9 +497,8 @@ export default function TeamPage() {
       }
 
       showToast(payload.message || "Member removed successfully.", "success");
-      setShowRemoveConfirm(false);
+      closeRemoveConfirm();
       setMemberMenuOpen(false);
-      setRemoveConfirmText("");
       closeEmployeeDrawer();
       await fetchEmployeesAndRoles();
     } catch (removeError) {
@@ -500,7 +506,7 @@ export default function TeamPage() {
     } finally {
       setRemoveLoading(false);
     }
-  }, [organization?.id, selectedEmployee, canRemoveSelectedMember, removeConfirmText, authorizedFetch, showToast, closeEmployeeDrawer, fetchEmployeesAndRoles]);
+  }, [organization?.id, selectedEmployee, canRemoveSelectedMember, removeConfirmText, authorizedFetch, showToast, closeRemoveConfirm, closeEmployeeDrawer, fetchEmployeesAndRoles]);
 
   return (
     <RoleGate
@@ -933,7 +939,7 @@ export default function TeamPage() {
       />
 
       {showRemoveConfirm && selectedEmployee && (
-        <div className="invite-overlay" onClick={() => !removeLoading && setShowRemoveConfirm(false)}>
+        <div className="invite-overlay" onClick={closeRemoveConfirm}>
           <div className="invite-dialog" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 520 }}>
             <div className="invite-header">
               <div className="invite-header-text">
@@ -944,7 +950,7 @@ export default function TeamPage() {
               </div>
               <button
                 className="invite-close"
-                onClick={() => !removeLoading && setShowRemoveConfirm(false)}
+                onClick={closeRemoveConfirm}
                 aria-label="Close"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="18" height="18">
@@ -972,7 +978,7 @@ export default function TeamPage() {
                 <button
                   type="button"
                   className="action-btn action-btn-outline"
-                  onClick={() => setShowRemoveConfirm(false)}
+                  onClick={closeRemoveConfirm}
                   disabled={removeLoading}
                 >
                   Cancel

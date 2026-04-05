@@ -24,6 +24,7 @@ function formatShortDate(d: Date): string {
 
 export default function DashboardOverview() {
   const { role } = useRole();
+  const roleLabel = role ? ROLE_LABELS[role] : "Loading role...";
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -177,7 +178,7 @@ export default function DashboardOverview() {
         <div className="overview-welcome">
           <div>
             <h2 className="overview-greeting">Good {getGreeting()}</h2>
-            <p className="overview-role">Viewing as <strong>{ROLE_LABELS[role]}</strong></p>
+            <p className="overview-role">Viewing as <strong>{roleLabel}</strong></p>
           </div>
           <button className="cmd-trigger" onClick={() => setShowSearch(true)}>
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">

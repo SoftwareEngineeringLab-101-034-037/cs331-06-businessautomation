@@ -58,10 +58,14 @@ export default function ProfilePage() {
   const [dbUser, setDbUser] = useState<BackendUser | null>(null);
   const [workflowRoles, setWorkflowRoles] = useState<string[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
+  const [profileSyncError, setProfileSyncError] = useState<string | null>(null);
 
   const fetchProfileData = useCallback(async () => {
     if (!organization?.id || !userId) return;
 
+    setDbUser(null);
+    setWorkflowRoles([]);
+    setProfileSyncError(null);
     setDataLoading(true);
     try {
       const token = await getToken();
@@ -78,6 +82,9 @@ export default function ProfilePage() {
       const assignedRoles = (currentUser.workflow_roles || []).slice().sort((left, right) => left.localeCompare(right));
       setWorkflowRoles(assignedRoles);
     } catch (error) {
+      setDbUser(null);
+      setWorkflowRoles([]);
+      setProfileSyncError(error instanceof Error ? error.message : "Failed to sync profile from database.");
       console.error("Failed to fetch profile data:", error);
     } finally {
       setDataLoading(false);
@@ -131,7 +138,7 @@ export default function ProfilePage() {
   const lastSignIn = formatDateTime(dbUser?.last_sign_in_at || (user?.lastSignInAt ? new Date(user.lastSignInAt).toISOString() : undefined));
   const dashboardRole = dashboardRoleLabel(dbUser?.is_admin);
   const workflowRolesLabel = workflowRoles.length > 0 ? workflowRoles.join(", ") : "No workflow roles assigned";
-  const loadingHint = dataLoading ? "Refreshing from database..." : "Synced with database";
+  const loadingHint = dataLoading ? "Refreshing from database..." : profileSyncError ? "Database sync failed." : "Synced with database.";
 
   return (
     <div className="dashboard-page">

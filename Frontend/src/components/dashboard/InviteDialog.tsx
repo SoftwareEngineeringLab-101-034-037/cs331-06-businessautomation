@@ -8,7 +8,7 @@ type InviteTab = "single" | "bulk";
 interface InviteDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onResult?: (message: string, type: "success" | "error") => void;
+  onResult: (message: string, type: "success" | "error") => void;
 }
 
 interface SingleFormData {
@@ -161,16 +161,16 @@ export default function InviteDialog({ isOpen, onClose, onResult }: InviteDialog
     e.preventDefault();
 
     if (!form.email || !form.first_name || !form.last_name || !form.department) {
-      onResult?.("Please fill in all required fields.", "error");
+      onResult("Please fill in all required fields.", "error");
       return;
     }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(form.email)) {
-      onResult?.("Please enter a valid email address.", "error");
+      onResult("Please enter a valid email address.", "error");
       return;
     }
     if (!organization?.id) {
-      onResult?.("No organisation selected.", "error");
+      onResult("No organisation selected.", "error");
       return;
     }
 
@@ -187,16 +187,14 @@ export default function InviteDialog({ isOpen, onClose, onResult }: InviteDialog
       });
       const data = await res.json();
       if (!res.ok) {
-        onResult?.(data.error || "Failed to send invitation.", "error");
-        onClose();
+        onResult(data.error || "Failed to send invitation.", "error");
       } else {
-        onResult?.(`Invitation sent to ${form.email}!`, "success");
+        onResult(`Invitation sent to ${form.email}!`, "success");
         setForm(INITIAL_FORM);
         onClose();
       }
     } catch {
-      onResult?.("Network error. Please try again.", "error");
-      onClose();
+      onResult("Network error. Please try again.", "error");
     } finally {
       setLoading(false);
     }
@@ -205,11 +203,11 @@ export default function InviteDialog({ isOpen, onClose, onResult }: InviteDialog
   // Bulk invite submit
   const handleBulkSubmit = async () => {
     if (!file) {
-      onResult?.("Please select an Excel file first.", "error");
+      onResult("Please select an Excel file first.", "error");
       return;
     }
     if (!organization?.id) {
-      onResult?.("No organisation selected.", "error");
+      onResult("No organisation selected.", "error");
       return;
     }
     setBulkResult(null);
@@ -226,20 +224,21 @@ export default function InviteDialog({ isOpen, onClose, onResult }: InviteDialog
       });
       const data = await res.json();
       if (!res.ok) {
-        onResult?.(data.error || "Bulk upload failed.", "error");
-        onClose();
+        setBulkResult(data);
+        onResult(data.error || "Bulk upload failed.", "error");
       } else {
         const successCount = Number(data.successful || 0);
         const failCount = Number(data.failed || 0);
         const totalRows = Number(data.total_rows || successCount + failCount);
         const toastType: "success" | "error" = successCount > 0 ? "success" : "error";
-        onResult?.(`Bulk invite finished: ${successCount} successful, ${failCount} failed, ${totalRows} total.`, toastType);
+        onResult(`Bulk invite finished: ${successCount} successful, ${failCount} failed, ${totalRows} total.`, toastType);
         setBulkResult(data);
-        onClose();
+        if (failCount === 0) {
+          onClose();
+        }
       }
     } catch {
-      onResult?.("Network error. Please try again.", "error");
-      onClose();
+      onResult("Network error. Please try again.", "error");
     } finally {
       setLoading(false);
     }
@@ -258,7 +257,7 @@ export default function InviteDialog({ isOpen, onClose, onResult }: InviteDialog
     if (droppedFile && (droppedFile.name.endsWith(".xlsx") || droppedFile.name.endsWith(".xls"))) {
       setFile(droppedFile);
     } else {
-      onResult?.("Please upload a valid Excel file (.xlsx or .xls).", "error");
+      onResult("Please upload a valid Excel file (.xlsx or .xls).", "error");
     }
   };
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {

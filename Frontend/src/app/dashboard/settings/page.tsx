@@ -93,7 +93,7 @@ const SECTION_META: Record<SettingsSection, { label: string; description: string
   },
 };
 
-function canManageSettings(role: UserRole) {
+function canManageSettings(role: UserRole | null) {
   return role === "admin";
 }
 
@@ -112,6 +112,7 @@ export default function SettingsPage() {
   const { getToken } = useAuth();
   const { theme, toggle } = useTheme();
   const { role } = useRole();
+  const roleLabel = role ? ROLE_LABELS[role] : "Loading role...";
 
   const adminMode = canManageSettings(role);
   const [activeSection, setActiveSection] = useState<SettingsSection>(adminMode ? "org" : "appearance");
@@ -286,7 +287,7 @@ export default function SettingsPage() {
                 <div className="settings-row">
                   <div className="settings-row-info">
                     <span className="settings-row-label">Managed Access Role</span>
-                    <span className="settings-row-desc">{ROLE_LABELS[role]}</span>
+                    <span className="settings-row-desc">{roleLabel}</span>
                   </div>
                   <span className="settings-badge settings-badge-muted">Current</span>
                 </div>
@@ -445,7 +446,7 @@ export default function SettingsPage() {
                 <div className="settings-row">
                   <div className="settings-row-info">
                     <span className="settings-row-label">Access Role</span>
-                    <span className="settings-row-desc">{ROLE_LABELS[role]}</span>
+                    <span className="settings-row-desc">{roleLabel}</span>
                   </div>
                 </div>
               </div>
@@ -568,7 +569,7 @@ export default function SettingsPage() {
                 <div className="settings-row">
                   <div className="settings-row-info">
                     <span className="settings-row-label">Current Access Role</span>
-                    <span className="settings-row-desc">{ROLE_LABELS[role]} controls what this user can manage in the dashboard.</span>
+                    <span className="settings-row-desc">{roleLabel} controls what this user can manage in the dashboard.</span>
                   </div>
                   <span className="settings-badge settings-badge-muted">Access</span>
                 </div>
