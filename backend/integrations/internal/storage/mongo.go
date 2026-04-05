@@ -118,23 +118,16 @@ func (s *MongoStore) GetToken(ctx context.Context, orgID string) (*models.OAuthT
 }
 
 func (s *MongoStore) GetTokenByAccount(ctx context.Context, orgID, provider, accountID string) (*models.OAuthToken, error) {
-	filter := bson.M{
-		"org_id": orgID,
-		"$or": []bson.M{
-			{"provider": provider},
-			{"provider": bson.M{"$exists": false}},
-		},
-		"account_id": accountID,
-	}
+	conditions := []bson.M{{"org_id": orgID}, watchProviderFilter(provider)}
 	if accountID == "primary" {
-		filter = bson.M{
-			"org_id": orgID,
-			"$or": []bson.M{
-				{"provider": provider, "account_id": accountID},
-				{"provider": bson.M{"$exists": false}, "account_id": bson.M{"$exists": false}},
-			},
-		}
+		conditions = append(conditions, bson.M{"$or": []bson.M{
+			{"account_id": accountID},
+			{"account_id": bson.M{"$exists": false}},
+		}})
+	} else {
+		conditions = append(conditions, bson.M{"account_id": accountID})
 	}
+	filter := bson.M{"$and": conditions}
 
 	var t models.OAuthToken
 	err := s.tokens.FindOne(ctx, filter).Decode(&t)
@@ -147,13 +140,7 @@ func (s *MongoStore) GetTokenByAccount(ctx context.Context, orgID, provider, acc
 
 func (s *MongoStore) ListTokens(ctx context.Context, orgID, provider string) ([]*models.OAuthToken, error) {
 	cur, err := s.tokens.Find(ctx,
-		bson.M{
-			"org_id": orgID,
-			"$or": []bson.M{
-				{"provider": provider},
-				{"provider": bson.M{"$exists": false}},
-			},
-		},
+		bson.M{"$and": []bson.M{{"org_id": orgID}, watchProviderFilter(provider)}},
 		options.Find().SetSort(bson.D{{Key: "is_primary", Value: -1}, {Key: "connected_at", Value: -1}}),
 	)
 	if err != nil {
@@ -222,13 +209,16 @@ func (s *MongoStore) GetWatch(ctx context.Context, id string) (*models.FormWatch
 }
 
 func (s *MongoStore) ListWatches(ctx context.Context, orgID string) ([]*models.FormWatch, error) {
-	return s.ListWatchesByProvider(ctx, orgID, defaultWatchProvider)
+	return s.ListWatchesByProvider(ctx, orgID, "")
 }
 
 func (s *MongoStore) ListWatchesByProvider(ctx context.Context, orgID, provider string) ([]*models.FormWatch, error) {
 	filter := bson.M{"org_id": orgID}
-	for key, value := range watchProviderFilter(provider) {
-		filter[key] = value
+	trimmedProvider := strings.TrimSpace(provider)
+	if trimmedProvider != "" && !strings.EqualFold(trimmedProvider, "all") {
+		for key, value := range watchProviderFilter(trimmedProvider) {
+			filter[key] = value
+		}
 	}
 
 	cur, err := s.watches.Find(ctx, filter)
@@ -252,13 +242,16 @@ func (s *MongoStore) ListWatchesByProvider(ctx context.Context, orgID, provider 
 }
 
 func (s *MongoStore) ListActiveWatches(ctx context.Context) ([]*models.FormWatch, error) {
-	return s.ListActiveWatchesByProvider(ctx, defaultWatchProvider)
+	return s.ListActiveWatchesByProvider(ctx, "")
 }
 
 func (s *MongoStore) ListActiveWatchesByProvider(ctx context.Context, provider string) ([]*models.FormWatch, error) {
 	filter := bson.M{"active": true}
-	for key, value := range watchProviderFilter(provider) {
-		filter[key] = value
+	trimmedProvider := strings.TrimSpace(provider)
+	if trimmedProvider != "" && !strings.EqualFold(trimmedProvider, "all") {
+		for key, value := range watchProviderFilter(trimmedProvider) {
+			filter[key] = value
+		}
 	}
 
 	cur, err := s.watches.Find(ctx, filter)

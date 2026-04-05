@@ -77,7 +77,7 @@ func (p *GmailPoller) tick(ctx context.Context) {
 }
 
 func (p *GmailPoller) processWatch(ctx context.Context, watch *models.GmailWatch) error {
-	client, err := p.oauthSvc.GetClientForProvider(ctx, watch.OrgID, providergmail.ProviderID)
+	client, err := p.oauthSvc.GetClientForProviderAndAccount(ctx, watch.OrgID, providergmail.ProviderID, strings.TrimSpace(watch.AccountID))
 	if err != nil {
 		if oauth.IsNotConnectedError(err) || oauth.IsReconnectRequiredError(err) {
 			log.Printf("gmail-poller: watch %s paused for org %s until Google reconnect", watch.ID.Hex(), watch.OrgID)

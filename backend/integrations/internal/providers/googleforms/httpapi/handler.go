@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"github.com/example/business-automation/backend/integrations/internal/googleapi"
 	"github.com/example/business-automation/backend/integrations/internal/integrations"
 	"github.com/example/business-automation/backend/integrations/internal/models"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type OrgIDExtractor func(ctx context.Context) string
@@ -407,6 +409,10 @@ func (h *Handler) getWatch(w http.ResponseWriter, r *http.Request, id string) {
 	authorizedOrgID := h.orgID(r.Context())
 	watch, err := h.store.GetWatch(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, primitive.ErrInvalidHex) {
+			writeError(w, http.StatusBadRequest, "invalid watch id")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -429,6 +435,10 @@ func (h *Handler) updateWatch(w http.ResponseWriter, r *http.Request, id string)
 	authorizedOrgID := h.orgID(r.Context())
 	existing, err := h.store.GetWatch(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, primitive.ErrInvalidHex) {
+			writeError(w, http.StatusBadRequest, "invalid watch id")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -476,6 +486,10 @@ func (h *Handler) deleteWatch(w http.ResponseWriter, r *http.Request, id string)
 	authorizedOrgID := h.orgID(r.Context())
 	existing, err := h.store.GetWatch(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, primitive.ErrInvalidHex) {
+			writeError(w, http.StatusBadRequest, "invalid watch id")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -38,6 +38,7 @@ type FormWatch struct {
 type GmailWatch struct {
 	ID                    primitive.ObjectID `bson:"_id,omitempty"             json:"id"`
 	OrgID                 string             `bson:"org_id"                    json:"org_id"`
+	AccountID             string             `bson:"account_id,omitempty"      json:"account_id,omitempty"`
 	WorkflowID            string             `bson:"workflow_id"               json:"workflow_id"`
 	Query                 string             `bson:"query"                     json:"query"`
 	Active                bool               `bson:"active"                    json:"active"`

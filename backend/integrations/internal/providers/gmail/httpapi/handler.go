@@ -98,8 +98,26 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if query == "" {
 		query = "in:inbox"
 	}
-	afterTS, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("after_ts")), 10, 64)
-	maxResults, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("max")))
+	afterTSRaw := strings.TrimSpace(r.URL.Query().Get("after_ts"))
+	afterTS := int64(0)
+	if afterTSRaw != "" {
+		parsedAfterTS, err := strconv.ParseInt(afterTSRaw, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid after_ts")
+			return
+		}
+		afterTS = parsedAfterTS
+	}
+	maxRaw := strings.TrimSpace(r.URL.Query().Get("max"))
+	maxResults := 0
+	if maxRaw != "" {
+		parsedMax, err := strconv.Atoi(maxRaw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid max")
+			return
+		}
+		maxResults = parsedMax
+	}
 
 	client, ok := h.getOAuthClientOrFail(w, r, orgID, "")
 	if !ok {
@@ -164,6 +182,7 @@ func (h *Handler) createWatch(w http.ResponseWriter, r *http.Request) {
 		WorkflowID string `json:"workflow_id"`
 		Query      string `json:"query"`
 		Active     *bool  `json:"active"`
+		AccountID  string `json:"account_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -178,6 +197,7 @@ func (h *Handler) createWatch(w http.ResponseWriter, r *http.Request) {
 		OrgID:      orgID,
 		WorkflowID: strings.TrimSpace(req.WorkflowID),
 		Query:      strings.TrimSpace(req.Query),
+		AccountID:  strings.TrimSpace(req.AccountID),
 		Active:     true,
 	}
 	if watch.Query == "" {
@@ -256,6 +276,7 @@ func (h *Handler) updateWatch(w http.ResponseWriter, r *http.Request, id string)
 		WorkflowID string `json:"workflow_id"`
 		Query      string `json:"query"`
 		Active     *bool  `json:"active"`
+		AccountID  string `json:"account_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -267,6 +288,7 @@ func (h *Handler) updateWatch(w http.ResponseWriter, r *http.Request, id string)
 	if strings.TrimSpace(patch.Query) != "" {
 		watch.Query = strings.TrimSpace(patch.Query)
 	}
+	watch.AccountID = strings.TrimSpace(patch.AccountID)
 	if patch.Active != nil {
 		watch.Active = *patch.Active
 	}
@@ -397,9 +419,25 @@ func classifyGmailSendError(err error) (int, string) {
 }
 
 func isGmailValidationError(message string) bool {
-	return strings.Contains(message, "at least one recipient in to is required") ||
-		strings.Contains(message, "subject is required") ||
-		strings.Contains(message, "body_text or body_html is required")
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "at least one recipient in to is required") ||
+		strings.Contains(lower, "subject is required") ||
+		strings.Contains(lower, "body_text or body_html is required") {
+		return true
+	}
+
+	if strings.Contains(lower, "contains invalid newline") ||
+		strings.Contains(lower, "contains invalid newline characters") {
+		return true
+	}
+
+	for _, field := range []string{"subject", "to", "cc", "bcc"} {
+		if strings.Contains(lower, field) && (strings.Contains(lower, "newline") || strings.Contains(lower, "cr") || strings.Contains(lower, "lf")) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func parseGmailSendFailure(message string) (statusCode int, body string, ok bool) {
