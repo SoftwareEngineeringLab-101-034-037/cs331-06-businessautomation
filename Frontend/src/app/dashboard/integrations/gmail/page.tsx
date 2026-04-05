@@ -81,7 +81,15 @@ export default function GmailIntegrationPage() {
     const requestId = ++loadDataRequestIdRef.current;
     const isLatest = () => loadDataRequestIdRef.current === requestId;
 
-    if (!organization?.id) return;
+    if (!organization?.id) {
+      if (isLatest()) {
+        setStatus(null);
+        setAccounts([]);
+        setError(null);
+        setLoading(false);
+      }
+      return;
+    }
 
     setStatus(null);
     setAccounts([]);

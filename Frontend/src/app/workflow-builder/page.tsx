@@ -274,19 +274,23 @@ export default function WorkflowBuilderPage() {
   }, [authFetch, organization?.id]);
 
   const loadGmailAccounts = useCallback(async () => {
+    const requestID = ++loadGmailAccountsRequestIDRef.current;
+    const isLatest = () => loadGmailAccountsRequestIDRef.current === requestID;
+
     if (!organization?.id) {
-      setGmailAccounts([]);
-      setGmailAccountsLoading(false);
+      if (isLatest()) {
+        setGmailAccounts([]);
+        setGmailAccountsLoading(false);
+      }
       return;
     }
     if (!GF_API) {
-      setGmailAccounts([]);
-      setGmailAccountsLoading(false);
+      if (isLatest()) {
+        setGmailAccounts([]);
+        setGmailAccountsLoading(false);
+      }
       return;
     }
-
-    const requestID = ++loadGmailAccountsRequestIDRef.current;
-    const isLatest = () => loadGmailAccountsRequestIDRef.current === requestID;
 
     setGmailAccountsLoading(true);
 

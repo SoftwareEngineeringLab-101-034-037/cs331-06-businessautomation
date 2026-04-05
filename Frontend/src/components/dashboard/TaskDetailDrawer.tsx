@@ -31,7 +31,7 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
 
   useEffect(() => {
     if (task?.instanceError) {
-      console.error("Workflow instance error detail:", task.instanceError);
+      console.warn(`Workflow instance error occurred for task ${task.id}.`);
     }
   }, [task?.id, task?.instanceError]);
 
