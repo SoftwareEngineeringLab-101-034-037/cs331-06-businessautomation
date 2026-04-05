@@ -744,7 +744,7 @@ func TestDeleteRoleNotFound(t *testing.T) {
 
 func TestDeleteEmployee(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		h, db := newEmployeeHandlerForTest(t)
+		h, db := newEmployeeHandlerForTestWithClerkSecret(t, "test_clerk_secret")
 		r := newEmployeeTestRouter(h)
 
 		prevDeleteFn := service.ClerkDeleteUserFunc
@@ -793,9 +793,13 @@ func TestDeleteEmployee(t *testing.T) {
 }
 
 func newEmployeeHandlerForTest(t *testing.T) (*EmployeeHandler, *gorm.DB) {
+	return newEmployeeHandlerForTestWithClerkSecret(t, "")
+}
+
+func newEmployeeHandlerForTestWithClerkSecret(t *testing.T, clerkSecret string) (*EmployeeHandler, *gorm.DB) {
 	t.Helper()
 	db := setupEmployeeHandlerTestDB(t)
-	svc := service.NewEmployeeService(db, "test_clerk_secret")
+	svc := service.NewEmployeeService(db, clerkSecret)
 	return NewEmployeeHandler(svc), db
 }
 

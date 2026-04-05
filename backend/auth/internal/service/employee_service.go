@@ -251,10 +251,6 @@ func (s *EmployeeService) RemoveEmployee(orgID, employeeID, actorUserID string) 
 		return ErrCannotRemoveAdmin
 	}
 
-	if err := s.deleteFromClerk(user.ID); err != nil {
-		return err
-	}
-
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("organization_id = ? AND user_id = ?", orgID, employeeID).
 			Delete(&models.UserRoleMembership{}).Error; err != nil {
@@ -283,6 +279,10 @@ func (s *EmployeeService) RemoveEmployee(orgID, employeeID, actorUserID string) 
 		return nil
 	}); err != nil {
 		return err
+	}
+
+	if err := s.deleteFromClerk(user.ID); err != nil {
+		return fmt.Errorf("employee removed from database but failed to delete from clerk: %w", err)
 	}
 
 	log.Printf("Employee removed: user=%s org=%s", employeeID, orgID)

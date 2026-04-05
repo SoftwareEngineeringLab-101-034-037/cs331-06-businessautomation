@@ -640,6 +640,61 @@ func TestAcceptInvitationByEmail(t *testing.T) {
 		}
 	})
 
+	t.Run("blank invitation names keep existing user names", func(t *testing.T) {
+		db := setupServiceTestDB(t)
+		svc := NewEmployeeService(db, "")
+
+		now := time.Now()
+		if err := db.Exec(`
+			INSERT INTO users (id, email, first_name, last_name, is_active, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, "user_blank", "blank@example.com", "Existing", "Name", true, now, now).Error; err != nil {
+			t.Fatalf("failed seeding user: %v", err)
+		}
+		if err := db.Exec(`
+			INSERT INTO employee_invitations (
+				id, organization_id, department_id, email, first_name, last_name, role_name, job_title, token, status,
+				invited_by, expires_at, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			"inv_blank", "org_1", "dept_1", "blank@example.com", "", "", "", "", "tok_blank", "pending", "admin", now.Add(24*time.Hour), now, now,
+		).Error; err != nil {
+			t.Fatalf("failed seeding invitation: %v", err)
+		}
+
+		if err := svc.AcceptInvitationByEmail("blank@example.com", "org_1", "user_blank"); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		var invite struct {
+			Status         string
+			AcceptedUserID *string `gorm:"column:accepted_user_id"`
+		}
+		if err := db.Table("employee_invitations").
+			Select("status, accepted_user_id").
+			Where("id = ?", "inv_blank").
+			Take(&invite).Error; err != nil {
+			t.Fatalf("failed reading invitation: %v", err)
+		}
+		if invite.Status != "accepted" || invite.AcceptedUserID == nil || *invite.AcceptedUserID != "user_blank" {
+			t.Fatalf("unexpected invitation values: %+v", invite)
+		}
+
+		var user struct {
+			FirstName string `gorm:"column:first_name"`
+			LastName  string `gorm:"column:last_name"`
+		}
+		if err := db.Table("users").
+			Select("first_name, last_name").
+			Where("id = ?", "user_blank").
+			Take(&user).Error; err != nil {
+			t.Fatalf("failed reading user: %v", err)
+		}
+		if user.FirstName != "Existing" || user.LastName != "Name" {
+			t.Fatalf("expected existing names to be preserved, got %q %q", user.FirstName, user.LastName)
+		}
+	})
+
 	t.Run("dashboard access follows clerk admin membership", func(t *testing.T) {
 		db := setupServiceTestDB(t)
 		svc := NewEmployeeService(db, "")
