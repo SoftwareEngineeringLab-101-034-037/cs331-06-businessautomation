@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from "react";
+import { useAuth } from "@clerk/nextjs";
 import type { UserRole } from "@/types/dashboard";
 
 interface RoleContextValue {
@@ -18,12 +19,25 @@ const RoleContext = createContext<RoleContextValue | null>(null);
  */
 export function RoleProvider({
   children,
-  defaultRole = "admin",
+  defaultRole = "employee",
 }: {
   children: ReactNode;
   defaultRole?: UserRole;
 }) {
-  const [role, setRole] = useState<UserRole>(defaultRole);
+  const { orgRole, isLoaded } = useAuth();
+  const [manualRole, setManualRole] = useState<UserRole | null>(null);
+
+  const derivedRole = useMemo<UserRole>(() => {
+    if (!isLoaded) return defaultRole;
+    if (orgRole === "org:admin" || orgRole === "org:owner") return "admin";
+    return "employee";
+  }, [defaultRole, isLoaded, orgRole]);
+
+  const role = manualRole ?? derivedRole;
+
+  const setRole = useCallback((nextRole: UserRole) => {
+    setManualRole(nextRole);
+  }, []);
 
   const hasAccess = useCallback(
     (allowed: UserRole[]) => allowed.includes(role),

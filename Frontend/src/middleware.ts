@@ -1,6 +1,30 @@
-import { clerkMiddleware } from '@clerk/nextjs/server';
+import { NextResponse } from "next/server";
+import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
-export default clerkMiddleware();
+const isPublicRoute = createRouteMatcher([
+  "/",
+  "/join(.*)",
+  "/create-org(.*)",
+]);
+
+export default clerkMiddleware(async (auth, req) => {
+  if (isPublicRoute(req)) {
+    return NextResponse.next();
+  }
+
+  const { userId } = await auth();
+  if (userId) {
+    return NextResponse.next();
+  }
+
+  if (req.nextUrl.pathname.startsWith("/api") || req.nextUrl.pathname.startsWith("/trpc")) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const landingURL = new URL("/", req.url);
+  landingURL.searchParams.set("auth", "required");
+  return NextResponse.redirect(landingURL);
+});
 
 export const config = {
   matcher: [

@@ -10,7 +10,7 @@ export default function WorkflowBuilderLayout({
   children: React.ReactNode;
 }) {
   return (
-    <RoleProvider defaultRole="admin">
+    <RoleProvider>
       <Suspense fallback={null}>
         {children}
       </Suspense>
