@@ -253,14 +253,16 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 }
 
 func (e *Executor) walkNext(instanceID string, node *models.WorkflowNode, result string, wf *models.Workflow, data map[string]interface{}, authHeader string) {
-	if e.isInstanceTerminal(instanceID) {
+	isTerminal := e.isInstanceTerminal(instanceID)
+	if isTerminal {
 		return
 	}
 	for _, nextID := range node.NextIDs(result) {
-		if e.isInstanceTerminal(instanceID) {
+		if isTerminal {
 			return
 		}
 		e.walkNode(instanceID, nextID, wf, data, authHeader)
+		isTerminal = e.isInstanceTerminal(instanceID)
 	}
 }
 

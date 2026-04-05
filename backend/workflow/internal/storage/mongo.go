@@ -412,6 +412,28 @@ func (m *MongoStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignmen
 	return out, nil
 }
 
+func (m *MongoStore) ListTasksByRoles(orgID string, roles []string) ([]models.TaskAssignment, error) {
+	if len(roles) == 0 {
+		return []models.TaskAssignment{}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := m.taskCol.Find(ctx, bson.M{
+		"org_id":        orgID,
+		"assigned_role": bson.M{"$in": roles},
+		"status":        string(models.TaskPending),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var out []models.TaskAssignment
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (m *MongoStore) ListTasksByInstance(instanceID string) ([]models.TaskAssignment, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -282,6 +282,31 @@ func (s *handlerStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignm
 	return out, nil
 }
 
+func (s *handlerStore) ListTasksByRoles(orgID string, roles []string) ([]models.TaskAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.listTasksByRoleErr != nil {
+		return nil, s.listTasksByRoleErr
+	}
+	if len(roles) == 0 {
+		return []models.TaskAssignment{}, nil
+	}
+	allowed := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		allowed[role] = struct{}{}
+	}
+	out := make([]models.TaskAssignment, 0)
+	for _, task := range s.tasks {
+		if task.OrgID != orgID {
+			continue
+		}
+		if _, ok := allowed[task.AssignedRole]; ok {
+			out = append(out, task)
+		}
+	}
+	return out, nil
+}
+
 func (s *handlerStore) ListTasksByInstance(instanceID string) ([]models.TaskAssignment, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -22,6 +22,11 @@ type mockEmail struct {
 	sendErr error
 }
 
+type mockOrgEmail struct {
+	mockEmail
+	sendForOrgErr error
+}
+
 func (m *mockEmail) Send(to, subject, body string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -45,6 +50,20 @@ func (m *mockEmail) first() emailCall {
 		return emailCall{}
 	}
 	return m.calls[0]
+}
+
+func (m *mockOrgEmail) SendForOrg(orgID, to, cc, subject, body, fromName, fromAccountID string) error {
+	_ = orgID
+	_ = cc
+	_ = fromName
+	_ = fromAccountID
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, emailCall{to: to, subject: subject, body: body})
+	if m.sendForOrgErr != nil {
+		return m.sendForOrgErr
+	}
+	return nil
 }
 
 type mockStore struct {
@@ -271,6 +290,31 @@ func (m *mockStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignment
 	var out []models.TaskAssignment
 	for _, task := range m.tasks {
 		if task.OrgID == orgID && task.AssignedRole == role {
+			out = append(out, task)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStore) ListTasksByRoles(orgID string, roles []string) ([]models.TaskAssignment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.listTaskErr != nil {
+		return nil, m.listTaskErr
+	}
+	if len(roles) == 0 {
+		return []models.TaskAssignment{}, nil
+	}
+	allowed := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		allowed[role] = struct{}{}
+	}
+	var out []models.TaskAssignment
+	for _, task := range m.tasks {
+		if task.OrgID != orgID {
+			continue
+		}
+		if _, ok := allowed[task.AssignedRole]; ok {
 			out = append(out, task)
 		}
 	}
@@ -914,6 +958,54 @@ func TestRunActionSendErrorMarksFailedAndDoesNotAdvance(t *testing.T) {
 						"to":            "alice@example.com",
 						"subject":       "Subject",
 						"body_template": "Body",
+					},
+				},
+				Next: "end",
+			},
+			{ID: "end", Type: models.NodeEnd, Title: "End"},
+		},
+	}
+
+	instanceID := seedInstance(t, store, wf, map[string]interface{}{})
+
+	exec.run(instanceID, wf, map[string]interface{}{}, "")
+
+	inst, _ := store.GetInstance(instanceID)
+	if inst.Status != models.InstanceFailed {
+		t.Fatalf("expected failed status, got %s", inst.Status)
+	}
+	if got := countAuditAction(inst, "action_failed"); got != 1 {
+		t.Fatalf("expected one action_failed audit event, got %d", got)
+	}
+	if got := countAuditAction(inst, "instance_failed"); got != 1 {
+		t.Fatalf("expected one instance_failed audit event, got %d", got)
+	}
+	if _, ok := inst.NodeStates["end"]; ok {
+		t.Fatalf("expected execution not to reach end node")
+	}
+}
+
+func TestRunActionSendForOrgErrorMarksFailedAndDoesNotAdvance(t *testing.T) {
+	store := newMockStore()
+	email := &mockOrgEmail{sendForOrgErr: errors.New("gmail org send denied")}
+	exec := NewExecutor(store, email, nil)
+
+	wf := models.Workflow{
+		ID:    "wf-action-sendfororg-fail",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{
+			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "email"},
+			{
+				ID:    "email",
+				Type:  models.NodeAction,
+				Title: "Send Email",
+				Connector: &models.ConnectorConfig{
+					Type: models.ConnectorEmail,
+					Params: map[string]interface{}{
+						"to":            "alice@example.com",
+						"subject":       "Subject",
+						"body_template": "Body",
+						"from_name":     "Workflow Bot",
 					},
 				},
 				Next: "end",

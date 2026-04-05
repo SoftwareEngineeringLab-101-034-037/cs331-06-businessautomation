@@ -245,6 +245,20 @@ func (h *InstanceHandler) StartFromGmail(c *gin.Context) {
 	}
 
 	normalizedData := normalizeGmailData(wf.Trigger.Config, req.Data)
+	emailMessageID := extractEmailMessageID(normalizedData)
+	if emailMessageID != "" {
+		existingInstanceID, lookupErr := h.findExistingInstanceByEmailMessageID(req.WorkflowID, emailMessageID)
+		if lookupErr != nil {
+			log.Printf("instance_handler.StartFromGmail dedupe lookup failed workflow_id=%q org_id=%q message_id=%q: %v", wf.ID, wf.OrgID, emailMessageID, lookupErr)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "start failed"})
+			return
+		}
+		if existingInstanceID != "" {
+			c.JSON(http.StatusOK, gin.H{"instance_id": existingInstanceID})
+			return
+		}
+	}
+
 	instID, err := h.Exec.StartInstance(wf, normalizedData, middleware.GetAuthorizationHeader(c))
 	if err != nil {
 		log.Printf("instance_handler.StartFromGmail failed workflow_id=%q org_id=%q: %v", wf.ID, wf.OrgID, err)
@@ -253,6 +267,30 @@ func (h *InstanceHandler) StartFromGmail(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"instance_id": instID})
+}
+
+func extractEmailMessageID(data map[string]interface{}) string {
+	if data == nil {
+		return ""
+	}
+	raw, ok := data["email_message_id"]
+	if !ok || raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(raw))
+}
+
+func (h *InstanceHandler) findExistingInstanceByEmailMessageID(workflowID, emailMessageID string) (string, error) {
+	instances, err := h.Store.ListInstancesByWorkflow(workflowID)
+	if err != nil {
+		return "", err
+	}
+	for _, instance := range instances {
+		if extractEmailMessageID(instance.Data) == emailMessageID {
+			return instance.ID, nil
+		}
+	}
+	return "", nil
 }
 
 func payloadStringValue(payload map[string]interface{}, key string) string {

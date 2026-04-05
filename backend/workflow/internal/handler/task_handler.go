@@ -65,22 +65,18 @@ func (h *TaskHandler) List(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "roles cannot be empty"})
 			return
 		}
-		byID := make(map[string]models.TaskAssignment)
-		for _, roleName := range roles {
-			roleTasks, e := h.Store.ListTasksByRole(orgId, roleName)
-			if e != nil {
-				err = e
-				break
-			}
-			for _, t := range roleTasks {
-				byID[t.ID] = t
-			}
+		roleTasks, e := h.Store.ListTasksByRoles(orgId, roles)
+		if e != nil {
+			err = e
+			break
 		}
-		if err == nil {
-			tasks = make([]models.TaskAssignment, 0, len(byID))
-			for _, task := range byID {
-				tasks = append(tasks, task)
-			}
+		byID := make(map[string]models.TaskAssignment)
+		for _, t := range roleTasks {
+			byID[t.ID] = t
+		}
+		tasks = make([]models.TaskAssignment, 0, len(byID))
+		for _, task := range byID {
+			tasks = append(tasks, task)
 		}
 	case role != "":
 		tasks, err = h.Store.ListTasksByRole(orgId, role)
