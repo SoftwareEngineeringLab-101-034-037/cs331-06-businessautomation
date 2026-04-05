@@ -318,8 +318,71 @@ function prettifyDataKey(key: string): string {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function toUserSafeInstanceError(_rawError: string): string {
-  return "Workflow execution failed. Please contact your administrator.";
+function toUserSafeInstanceError(rawError: string): string {
+  const fallback = "Workflow execution failed.";
+  let raw = String(rawError || "").trim();
+  if (!raw) return fallback;
+
+  // Handle JSON-string payloads before free-form parsing.
+  if ((raw.startsWith("{") && raw.endsWith("}")) || (raw.startsWith("[") && raw.endsWith("]"))) {
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof parsed.error === "string" && parsed.error.trim()) {
+        raw = parsed.error.trim();
+      } else if (typeof parsed.message === "string" && parsed.message.trim()) {
+        raw = parsed.message.trim();
+      }
+    } catch {
+      // Keep raw text when payload is not valid JSON.
+    }
+  }
+
+  const bodyMarker = " body=";
+  const markerIndex = raw.indexOf(bodyMarker);
+  if (markerIndex >= 0) {
+    const prefix = raw.slice(0, markerIndex).trim();
+    const bodyRaw = raw.slice(markerIndex + bodyMarker.length).trim();
+    try {
+      const parsedBody = JSON.parse(bodyRaw) as Record<string, unknown>;
+      const nested = typeof parsedBody.error === "string"
+        ? parsedBody.error.trim()
+        : typeof parsedBody.message === "string"
+          ? parsedBody.message.trim()
+          : "";
+      if (nested) {
+        raw = prefix ? `${prefix}: ${nested}` : nested;
+      }
+    } catch {
+      // Keep raw when body is not parsable JSON.
+    }
+  }
+
+  const gmailErr = raw.match(/^integrations gmail send failed status=(\d+) error=(.+)$/i);
+  if (gmailErr) {
+    return `Gmail send failed (HTTP ${gmailErr[1]}): ${gmailErr[2].trim()}`;
+  }
+
+  const gmailBodyErr = raw.match(/^integrations gmail send failed status=(\d+) body=(.+)$/i);
+  if (gmailBodyErr) {
+    return `Gmail send failed (HTTP ${gmailBodyErr[1]}): ${gmailBodyErr[2].trim()}`;
+  }
+
+  const taskNodeErr = raw.match(/^task node\s+([^\s]+)\s+failed:\s*(.+)$/i);
+  if (taskNodeErr) {
+    raw = `Task step ${taskNodeErr[1]} failed: ${taskNodeErr[2].trim()}`;
+  }
+
+  const actionNodeErr = raw.match(/^action node\s+([^\s]+)\s+failed:\s*(.+)$/i);
+  if (actionNodeErr) {
+    raw = `Action step ${actionNodeErr[1]} failed: ${actionNodeErr[2].trim()}`;
+  }
+
+  raw = raw.replace(/\s+/g, " ").trim();
+  if (!raw) return fallback;
+  if (raw.length > 260) {
+    return `${raw.slice(0, 257)}...`;
+  }
+  return raw;
 }
 
 function ValueRenderer({ value }: { value: unknown }) {

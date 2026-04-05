@@ -12,6 +12,8 @@ import { PRIORITY_CONFIG } from "@/types/dashboard";
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
 const DEMO_TASKS_ENABLED = process.env.NEXT_PUBLIC_ENABLE_DEMO_TASKS === "true";
+const ROLE_CACHE_TTL_MS = 2 * 60 * 1000;
+const WORKFLOW_CACHE_TTL_MS = 2 * 60 * 1000;
 
 type FilterPriority = "all" | TaskPriority;
 
@@ -121,12 +123,49 @@ function computeInstanceProgress(instance: BackendInstance | undefined, workflow
 
 function unknownToErrorString(value: unknown): string {
   if (typeof value === "string") {
-    return value.trim();
+    const raw = value.trim();
+    if (!raw) return "";
+    const bodyMarker = " body=";
+    const markerIndex = raw.indexOf(bodyMarker);
+    if (markerIndex >= 0) {
+      const prefix = raw.slice(0, markerIndex).trim();
+      const bodyRaw = raw.slice(markerIndex + bodyMarker.length).trim();
+      try {
+        const parsed = JSON.parse(bodyRaw) as Record<string, unknown>;
+        const nested = typeof parsed.error === "string"
+          ? parsed.error.trim()
+          : typeof parsed.message === "string"
+            ? parsed.message.trim()
+            : "";
+        if (nested) {
+          return prefix ? `${prefix} - ${nested}` : nested;
+        }
+      } catch {
+        // Keep original string when body is not JSON.
+      }
+    }
+    return raw;
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
   if (value && typeof value === "object") {
+    const payload = value as Record<string, unknown>;
+    if (typeof payload.error === "string" && payload.error.trim()) {
+      return payload.error.trim();
+    }
+    if (typeof payload.message === "string" && payload.message.trim()) {
+      return payload.message.trim();
+    }
+    if (typeof payload.reason === "string" && payload.reason.trim()) {
+      return payload.reason.trim();
+    }
+    if (typeof payload.body === "string" && payload.body.trim()) {
+      return unknownToErrorString(payload.body);
+    }
+    if (payload.body && typeof payload.body === "object") {
+      return unknownToErrorString(payload.body);
+    }
     try {
       return JSON.stringify(value);
     } catch {
@@ -339,6 +378,8 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestVersionRef = useRef(0);
+  const roleCacheRef = useRef<{ orgId: string; userId: string; roles: string[]; fetchedAt: number } | null>(null);
+  const workflowCacheRef = useRef<{ orgId: string; workflows: BackendWorkflow[]; fetchedAt: number } | null>(null);
 
   const authFetch = useCallback(async (
     input: string,
@@ -362,11 +403,66 @@ export default function TasksPage() {
     }
   }, [getToken]);
 
+  const loadMyRoles = useCallback(async (orgId: string, currentUserId: string): Promise<string[]> => {
+    const cached = roleCacheRef.current;
+    const now = Date.now();
+    if (
+      cached
+      && cached.orgId === orgId
+      && cached.userId === currentUserId
+      && (now - cached.fetchedAt) < ROLE_CACHE_TTL_MS
+    ) {
+      return cached.roles;
+    }
+
+    const roleRes = await authFetch(`${AUTH_API}/api/orgs/${orgId}/roles`);
+    if (!roleRes.ok) {
+      return [];
+    }
+
+    const roles = (await roleRes.json()) as BackendRoleSummary[];
+    const myRoleNames = (roles || [])
+      .filter((role) => (role.members || []).some((member) => member.id === currentUserId))
+      .map((role) => role.name)
+      .filter(Boolean);
+
+    roleCacheRef.current = {
+      orgId,
+      userId: currentUserId,
+      roles: myRoleNames,
+      fetchedAt: now,
+    };
+
+    return myRoleNames;
+  }, [authFetch]);
+
+  const loadWorkflowsCached = useCallback(async (orgId: string): Promise<BackendWorkflow[]> => {
+    const cached = workflowCacheRef.current;
+    const now = Date.now();
+    if (cached && cached.orgId === orgId && (now - cached.fetchedAt) < WORKFLOW_CACHE_TTL_MS) {
+      return cached.workflows;
+    }
+
+    const workflowRes = await authFetch(`${WF_API}/api/orgs/${orgId}/workflows`);
+    if (!workflowRes.ok) {
+      throw new Error(`Failed to load workflows (${workflowRes.status})`);
+    }
+    const workflows = (await workflowRes.json()) as BackendWorkflow[];
+    const normalized = workflows || [];
+    workflowCacheRef.current = {
+      orgId,
+      workflows: normalized,
+      fetchedAt: now,
+    };
+    return normalized;
+  }, [authFetch]);
+
   const loadTasks = useCallback(async () => {
     const requestVersion = requestVersionRef.current + 1;
     requestVersionRef.current = requestVersion;
 
-    if (!organization?.id || !userId) {
+    const orgId = organization?.id;
+    if (!orgId || !userId) {
       if (requestVersion === requestVersionRef.current) {
         setTasks(DEMO_TASKS_ENABLED ? MOCK_TASKS : []);
         setLoading(false);
@@ -379,19 +475,17 @@ export default function TasksPage() {
       setError(null);
     }
     try {
-      const [taskRes, workflowRes] = await Promise.all([
-        authFetch(`${WF_API}/api/orgs/${organization.id}/tasks?assigned_user=${encodeURIComponent(userId)}`),
-        authFetch(`${WF_API}/api/orgs/${organization.id}/workflows`),
+      const [taskRes, instanceRes, workflows] = await Promise.all([
+        authFetch(`${WF_API}/api/orgs/${orgId}/tasks?assigned_user=${encodeURIComponent(userId)}`),
+        authFetch(`${WF_API}/api/orgs/${orgId}/instances?compact=true`),
+        loadWorkflowsCached(orgId),
       ]);
 
-      const instanceRes = await authFetch(`${WF_API}/api/orgs/${organization.id}/instances`);
-
-      if (!taskRes.ok || !workflowRes.ok || !instanceRes.ok) {
-        throw new Error(`Failed to load tasks (${taskRes.status}/${workflowRes.status}/${instanceRes.status})`);
+      if (!taskRes.ok || !instanceRes.ok) {
+        throw new Error(`Failed to load tasks (${taskRes.status}/${instanceRes.status})`);
       }
 
       const backendTasks = (await taskRes.json()) as BackendTask[];
-      const workflows = (await workflowRes.json()) as BackendWorkflow[];
       const instances = (await instanceRes.json()) as BackendInstance[];
       const wfMap = new Map(workflows.map((w) => [w.id, w]));
       const instanceMap = new Map(instances.map((inst) => [inst.id, inst]));
@@ -402,42 +496,23 @@ export default function TasksPage() {
       }
 
       try {
-        const roleRes = await authFetch(`${AUTH_API}/api/orgs/${organization.id}/roles`);
+        const myRoleNames = await loadMyRoles(orgId, userId);
         if (requestVersion !== requestVersionRef.current) {
           return;
         }
-        if (roleRes.ok) {
-          const roles = (await roleRes.json()) as BackendRoleSummary[];
-          const myRoleNames = (roles || [])
-            .filter((role) => (role.members || []).some((member) => member.id === userId))
-            .map((role) => role.name)
-            .filter(Boolean);
 
-          if (myRoleNames.length > 0) {
-            const roleTaskResponses = await Promise.allSettled(
-              myRoleNames.map(async (roleName) => {
-                const response = await authFetch(`${WF_API}/api/orgs/${organization.id}/tasks?role=${encodeURIComponent(roleName)}`);
-                if (!response.ok) {
-                  throw new Error(`Failed to load role tasks for ${roleName}`);
-                }
-                return await response.json() as BackendTask[];
-              }),
-            );
-
-            if (requestVersion !== requestVersionRef.current) {
-              return;
-            }
-
-            for (const result of roleTaskResponses) {
-              if (result.status !== "fulfilled") {
+        if (myRoleNames.length > 0) {
+          const roleTaskRes = await authFetch(`${WF_API}/api/orgs/${orgId}/tasks?roles=${encodeURIComponent(myRoleNames.join(","))}`);
+          if (requestVersion !== requestVersionRef.current) {
+            return;
+          }
+          if (roleTaskRes.ok) {
+            const roleTasks = (await roleTaskRes.json()) as BackendTask[];
+            for (const task of roleTasks || []) {
+              if (task.assigned_user && task.assigned_user !== userId) {
                 continue;
               }
-              for (const task of result.value || []) {
-                if (task.assigned_user && task.assigned_user !== userId) {
-                  continue;
-                }
-                taskMap.set(task.id, task);
-              }
+              taskMap.set(task.id, task);
             }
           }
         }
@@ -459,7 +534,7 @@ export default function TasksPage() {
         setLoading(false);
       }
     }
-  }, [authFetch, organization?.id, userId]);
+  }, [authFetch, organization?.id, userId, loadMyRoles, loadWorkflowsCached]);
 
   useEffect(() => {
     loadTasks();

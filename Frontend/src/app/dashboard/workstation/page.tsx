@@ -278,6 +278,27 @@ function formatEmployeeName(employee?: BackendEmployee): string {
   return name || employee.email || employee.id;
 }
 
+function mergeSignals(signals: Array<AbortSignal | null | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter(Boolean) as AbortSignal[];
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      controller.abort();
+      break;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+  }
+  return controller.signal;
+}
+
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
 
 export default function WorkstationPage() {
@@ -290,15 +311,22 @@ export default function WorkstationPage() {
 
   const orgApiBase = `${WF_API}/api/orgs/${organization?.id}`;
 
-  const authFetch = useCallback(async (input: string, init: RequestInit = {}): Promise<Response> => {
+  const authFetch = useCallback(async (input: string, init: RequestInit = {}, timeoutMs = 10000): Promise<Response> => {
     const token = await getToken();
-    return fetch(input, {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    const controller = new AbortController();
+    const timeoutID = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(input, {
+        ...init,
+        signal: mergeSignals([init.signal, controller.signal]),
+        headers: {
+          ...(init.headers ?? {}),
+          Authorization: `Bearer ${token}`,
+        },
+      });
+    } finally {
+      clearTimeout(timeoutID);
+    }
   }, [getToken]);
 
   /* Show toast passed via URL query (from workflow-builder redirects) */
@@ -329,6 +357,8 @@ export default function WorkstationPage() {
   const [instanceDrawerLoading, setInstanceDrawerLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshingWorkflows, setRefreshingWorkflows] = useState(false);
+  const [refreshingInstances, setRefreshingInstances] = useState(false);
   const instanceRequestControllerRef = useRef<AbortController | null>(null);
   const instanceRequestIdRef = useRef(0);
 
@@ -404,22 +434,33 @@ export default function WorkstationPage() {
     setLoading(true);
     setError(null);
     try {
-      const [wfRes, instRes, employeeRes] = await Promise.all([
+      const [wfRes, instRes] = await Promise.all([
         authFetch(`${orgApiBase}/workflows`),
-        authFetch(`${orgApiBase}/instances`),
-        authFetch(`${AUTH_API}/api/orgs/${organization.id}/employees`),
+        authFetch(`${orgApiBase}/instances?compact=true`),
       ]);
       if (!wfRes.ok || !instRes.ok) throw new Error(`HTTP ${wfRes.status}/${instRes.status}`);
 
-      const [wfData, instData, employeeData] = await Promise.all([
+      const [wfData, instData] = await Promise.all([
         wfRes.json() as Promise<BackendWorkflow[]>,
         instRes.json() as Promise<BackendInstance[]>,
-        employeeRes.ok ? employeeRes.json() as Promise<BackendEmployee[]> : Promise.resolve([]),
       ]);
 
       setWorkflows(wfData ?? []);
       setInstances(instData ?? []);
-      setEmployees(employeeData ?? []);
+
+      // Load directory data in the background so the table renders faster.
+      void (async () => {
+        try {
+          const employeeRes = await authFetch(`${AUTH_API}/api/orgs/${organization.id}/employees`, {}, 8000);
+          if (!employeeRes.ok) {
+            return;
+          }
+          const employeeData = (await employeeRes.json()) as BackendEmployee[];
+          setEmployees(employeeData ?? []);
+        } catch (employeeErr) {
+          console.warn("Failed to load employee directory", employeeErr);
+        }
+      })();
     } catch (err: any) {
       console.error("Failed to load workflows:", err);
       setError(err.message || "Could not reach workflow service");
@@ -429,6 +470,36 @@ export default function WorkstationPage() {
   }, [organization?.id, orgApiBase, authFetch]);
 
   useEffect(() => { fetchWorkflows(); }, [fetchWorkflows]);
+
+  const refreshWorkflowList = useCallback(async () => {
+  if (!organization?.id) return;
+  setRefreshingWorkflows(true);
+  try {
+    const wfRes = await authFetch(`${orgApiBase}/workflows`);
+    if (!wfRes.ok) throw new Error(`HTTP ${wfRes.status}`);
+    const wfData = (await wfRes.json()) as BackendWorkflow[];
+    setWorkflows(wfData ?? []);
+  } catch (err: any) {
+    showToast(`Failed to refresh workflows: ${err?.message || err}`, "error");
+  } finally {
+    setRefreshingWorkflows(false);
+  }
+  }, [organization?.id, orgApiBase, authFetch, showToast]);
+
+  const refreshInstanceList = useCallback(async () => {
+  if (!organization?.id) return;
+  setRefreshingInstances(true);
+  try {
+    const instRes = await authFetch(`${orgApiBase}/instances?compact=true`);
+    if (!instRes.ok) throw new Error(`HTTP ${instRes.status}`);
+    const instData = (await instRes.json()) as BackendInstance[];
+    setInstances(instData ?? []);
+  } catch (err: any) {
+    showToast(`Failed to refresh instances: ${err?.message || err}`, "error");
+  } finally {
+    setRefreshingInstances(false);
+  }
+  }, [organization?.id, orgApiBase, authFetch, showToast]);
 
   /* 3-dot dropdown: open id + fixed position */
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -584,14 +655,14 @@ export default function WorkstationPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       showToast(`"${triggerTarget.name}" triggered successfully. Instance: ${data.instance_id}`, "success");
-      setTimeout(() => fetchWorkflows(), 500);
+      setTimeout(() => { void refreshInstanceList(); }, 500);
     } catch (err: any) {
       showToast("Failed to trigger workflow: " + (err.message || err), "error");
     } finally {
       setTriggerTarget(null);
       setTriggeringWorkflow(false);
     }
-  }, [triggerTarget, orgApiBase, authFetch, showToast, fetchWorkflows]);
+  }, [triggerTarget, orgApiBase, authFetch, showToast, refreshInstanceList]);
 
   const openActiveDialog = useCallback((wf: BackendWorkflow) => {
     setOpenMenuId(null);
@@ -673,6 +744,17 @@ export default function WorkstationPage() {
       });
   }, [instances, workflowByID, instanceStatusFilter, instanceTimeFilter]);
 
+  const instanceViewRows = useMemo(() => {
+    return filteredInstances.map((instance) => {
+      const workflow = workflowByID.get(instance.workflow_id);
+      return {
+        instance,
+        displayStatus: deriveInstanceStatus(instance, workflow),
+        progress: computeInstanceProgress(instance, workflow),
+      };
+    });
+  }, [filteredInstances, workflowByID]);
+
   return (
     <>
     <RoleGate
@@ -716,7 +798,9 @@ export default function WorkstationPage() {
                   Clear
                 </button>
               )}
-              <button className="action-btn action-btn-outline action-btn-sm" onClick={fetchWorkflows}>Refresh</button>
+              <button className="action-btn action-btn-outline action-btn-sm" onClick={refreshWorkflowList} disabled={refreshingWorkflows}>
+                {refreshingWorkflows ? "Refreshing..." : "Refresh Workflows"}
+              </button>
               <Link href="/workflow-builder" className="action-btn action-btn-primary action-btn-sm">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="18" height="18">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -814,6 +898,9 @@ export default function WorkstationPage() {
                   Clear
                 </button>
               )}
+              <button className="action-btn action-btn-outline action-btn-sm" onClick={refreshInstanceList} disabled={refreshingInstances}>
+                {refreshingInstances ? "Refreshing..." : "Refresh Instances"}
+              </button>
             </div>
           </div>
 
@@ -829,7 +916,7 @@ export default function WorkstationPage() {
             </div>
           )}
 
-          {!loading && !error && filteredInstances.length > 0 && (
+          {!loading && !error && instanceViewRows.length > 0 && (
             <div className="table-container" style={{ maxHeight: `${10 * 48 + 72}px`, overflowY: "auto" }}>
               <table className="data-table">
                 <thead>
@@ -838,10 +925,7 @@ export default function WorkstationPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredInstances.map((inst) => {
-                    const workflow = workflowByID.get(inst.workflow_id);
-                    const displayStatus = deriveInstanceStatus(inst, workflow);
-                    const progress = computeInstanceProgress(inst, workflow);
+                  {instanceViewRows.map(({ instance: inst, displayStatus, progress }) => {
                     return (
                       <tr key={inst.id}>
                         <td className="font-medium">
