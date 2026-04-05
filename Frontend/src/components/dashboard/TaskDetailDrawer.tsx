@@ -30,10 +30,10 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
   }, [isOpen, onClose]);
 
   useEffect(() => {
-    if (task?.instanceError) {
+    if (isOpen && task?.instanceError) {
       console.warn(`Workflow instance error occurred for task ${task.id}.`);
     }
-  }, [task?.id, task?.instanceError]);
+  }, [isOpen, task?.id, task?.instanceError]);
 
   if (!isOpen || !task) return null;
 
@@ -141,7 +141,7 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
           )}
 
           {task.instanceError && (
-            <div className="detail-notice danger">
+          <div className="detail-notice danger" role="alert">
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="20" height="20">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
               </svg>
@@ -321,6 +321,7 @@ function prettifyDataKey(key: string): string {
 function toUserSafeInstanceError(rawError: string): string {
   const fallback = "Workflow execution failed.";
   let raw = String(rawError || "").trim();
+  let matchedFriendly = false;
   if (!raw) return fallback;
 
   // Handle JSON-string payloads before free-form parsing.
@@ -359,26 +360,30 @@ function toUserSafeInstanceError(rawError: string): string {
 
   const gmailErr = raw.match(/^integrations gmail send failed status=(\d+) error=(.+)$/i);
   if (gmailErr) {
+    matchedFriendly = true;
     return `Gmail send failed (HTTP ${gmailErr[1]}): ${gmailErr[2].trim()}`;
   }
 
   const gmailBodyErr = raw.match(/^integrations gmail send failed status=(\d+) body=(.+)$/i);
   if (gmailBodyErr) {
+    matchedFriendly = true;
     return `Gmail send failed (HTTP ${gmailBodyErr[1]}): ${gmailBodyErr[2].trim()}`;
   }
 
   const taskNodeErr = raw.match(/^task node\s+([^\s]+)\s+failed:\s*(.+)$/i);
   if (taskNodeErr) {
+    matchedFriendly = true;
     raw = `Task step ${taskNodeErr[1]} failed: ${taskNodeErr[2].trim()}`;
   }
 
   const actionNodeErr = raw.match(/^action node\s+([^\s]+)\s+failed:\s*(.+)$/i);
   if (actionNodeErr) {
+    matchedFriendly = true;
     raw = `Action step ${actionNodeErr[1]} failed: ${actionNodeErr[2].trim()}`;
   }
 
   raw = raw.replace(/\s+/g, " ").trim();
-  if (!raw) return fallback;
+  if (!raw || !matchedFriendly) return fallback;
   if (raw.length > 260) {
     return `${raw.slice(0, 257)}...`;
   }

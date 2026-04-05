@@ -224,15 +224,33 @@ export default function InviteDialog({ isOpen, onClose, onResult }: InviteDialog
       });
       const data = await res.json();
       if (!res.ok) {
-        setBulkResult(data);
-        onResult(data.error || "Bulk upload failed.", "error");
+        const fallbackMessage = data?.error || "Bulk upload failed.";
+        const normalized: BulkResult = {
+          total_rows: Number(data?.total_rows || 0),
+          successful: Number(data?.successful || 0),
+          failed: Number(data?.failed || 1),
+          errors: Array.isArray(data?.errors) && data.errors.length > 0
+            ? data.errors.map((entry: any, index: number) => ({
+              row: Number(entry?.row || index + 1),
+              email: String(entry?.email || ""),
+              message: String(entry?.message || fallbackMessage),
+            }))
+            : [{ row: 0, email: "", message: fallbackMessage }],
+        };
+        setBulkResult(normalized);
+        onResult(fallbackMessage, "error");
       } else {
         const successCount = Number(data.successful || 0);
         const failCount = Number(data.failed || 0);
         const totalRows = Number(data.total_rows || successCount + failCount);
         const toastType: "success" | "error" = successCount > 0 ? "success" : "error";
         onResult(`Bulk invite finished: ${successCount} successful, ${failCount} failed, ${totalRows} total.`, toastType);
-        setBulkResult(data);
+        setBulkResult({
+          total_rows: totalRows,
+          successful: successCount,
+          failed: failCount,
+          errors: Array.isArray(data?.errors) ? data.errors : [],
+        });
         if (failCount === 0) {
           onClose();
         }

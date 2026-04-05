@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useOrganization, useUser } from "@clerk/nextjs";
 
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
@@ -59,35 +59,57 @@ export default function ProfilePage() {
   const [workflowRoles, setWorkflowRoles] = useState<string[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
   const [profileSyncError, setProfileSyncError] = useState<string | null>(null);
+  const fetchSeqRef = useRef(0);
 
   const fetchProfileData = useCallback(async () => {
-    if (!organization?.id || !userId) return;
+    const requestID = ++fetchSeqRef.current;
+    const isLatest = () => fetchSeqRef.current === requestID;
 
-    setDbUser(null);
-    setWorkflowRoles([]);
-    setProfileSyncError(null);
-    setDataLoading(true);
+    if (!organization?.id || !userId) {
+      if (isLatest()) {
+        setDbUser(null);
+        setWorkflowRoles([]);
+        setProfileSyncError(null);
+        setDataLoading(false);
+      }
+      return;
+    }
+
+    if (isLatest()) {
+      setDbUser(null);
+      setWorkflowRoles([]);
+      setProfileSyncError(null);
+      setDataLoading(true);
+    }
     try {
       const token = await getToken();
-      const headers = { Authorization: `Bearer ${token}` };
+      const headers = new Headers();
+      if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
 
       const profileRes = await fetch(`${AUTH_API}/api/orgs/${organization.id}/me/profile`, { headers });
+      if (!isLatest()) return;
       if (!profileRes.ok) {
         throw new Error(`Failed to load profile data (${profileRes.status})`);
       }
 
       const currentUser = await profileRes.json() as BackendUser;
+      if (!isLatest()) return;
       setDbUser(currentUser);
 
       const assignedRoles = (currentUser.workflow_roles || []).slice().sort((left, right) => left.localeCompare(right));
       setWorkflowRoles(assignedRoles);
     } catch (error) {
+      if (!isLatest()) return;
       setDbUser(null);
       setWorkflowRoles([]);
       setProfileSyncError(error instanceof Error ? error.message : "Failed to sync profile from database.");
       console.error("Failed to fetch profile data:", error);
     } finally {
-      setDataLoading(false);
+      if (isLatest()) {
+        setDataLoading(false);
+      }
     }
   }, [getToken, organization?.id, userId]);
 
@@ -136,8 +158,20 @@ export default function ProfilePage() {
   const departmentName = dbUser?.department?.name || "-";
   const jobTitle = dbUser?.job_title || "-";
   const lastSignIn = formatDateTime(dbUser?.last_sign_in_at || (user?.lastSignInAt ? new Date(user.lastSignInAt).toISOString() : undefined));
-  const dashboardRole = dashboardRoleLabel(dbUser?.is_admin);
-  const workflowRolesLabel = workflowRoles.length > 0 ? workflowRoles.join(", ") : "No workflow roles assigned";
+  const dashboardRole = dbUser
+    ? dashboardRoleLabel(dbUser.is_admin)
+    : dataLoading
+      ? "Loading..."
+      : profileSyncError
+        ? "Unknown"
+        : "Unknown";
+  const workflowRolesLabel = dbUser
+    ? (workflowRoles.length > 0 ? workflowRoles.join(", ") : "No workflow roles assigned")
+    : dataLoading
+      ? "Loading..."
+      : profileSyncError
+        ? "Unknown"
+        : "Unknown";
   const loadingHint = dataLoading ? "Refreshing from database..." : profileSyncError ? "Database sync failed." : "Synced with database.";
 
   return (

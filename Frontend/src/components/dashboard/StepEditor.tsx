@@ -391,6 +391,7 @@ interface StepEditorProps {
     is_primary?: boolean;
   }>;
   gmailAccountsLoading?: boolean;
+  gmailAccountsError?: string | null;
   onRefreshGmailAccounts?: () => void;
 }
 
@@ -406,6 +407,7 @@ export function StepEditor({
   onRefreshForms,
   availableGmailAccounts = [],
   gmailAccountsLoading = false,
+  gmailAccountsError = null,
   onRefreshGmailAccounts,
 }: StepEditorProps) {
   const [roleSearch, setRoleSearch] = useState("");
@@ -906,6 +908,11 @@ export function StepEditor({
                         >
                           {gmailAccountsLoading ? "Refreshing accounts..." : "Refresh sender accounts"}
                         </button>
+                        {gmailAccountsError && (
+                          <span className="wf-field-hint" style={{ color: "#b45309", display: "block", marginTop: 6 }}>
+                            {gmailAccountsError}
+                          </span>
+                        )}
                       </>
                     ) : field.options ? (
                       <select
