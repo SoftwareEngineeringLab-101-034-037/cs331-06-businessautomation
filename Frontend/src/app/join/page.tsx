@@ -55,6 +55,10 @@ export default function JoinPage() {
         <div className="flex justify-center">
           <SignIn
             routing="hash"
+            forceRedirectUrl="/dashboard"
+            fallbackRedirectUrl="/dashboard"
+            signUpForceRedirectUrl="/dashboard"
+            signUpFallbackRedirectUrl="/dashboard"
             appearance={{
               elements: {
                 rootBox: "w-full max-w-[400px]",
