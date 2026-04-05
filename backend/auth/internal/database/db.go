@@ -3,6 +3,8 @@ package database
 import (
 	"errors"
 	"log"
+	"os"
+	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -14,11 +16,21 @@ import (
 var DB *gorm.DB
 
 var openDatabase = func(databaseURL string) (*gorm.DB, error) {
+	gormLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             time.Second,
+			LogLevel:                  logger.Error,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  false,
+		},
+	)
+
 	return gorm.Open(postgres.New(postgres.Config{
 		DSN:                  databaseURL,
 		PreferSimpleProtocol: true, // disables prepared statement caching
 	}), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Error),
+		Logger: gormLogger,
 	})
 }
 

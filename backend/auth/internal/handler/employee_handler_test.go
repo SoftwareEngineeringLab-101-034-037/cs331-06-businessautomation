@@ -742,10 +742,60 @@ func TestDeleteRoleNotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteEmployee(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		h, db := newEmployeeHandlerForTest(t)
+		r := newEmployeeTestRouter(h)
+
+		prevDeleteFn := service.ClerkDeleteUserFunc
+		service.ClerkDeleteUserFunc = func(_ string, _ string) error { return nil }
+		defer func() { service.ClerkDeleteUserFunc = prevDeleteFn }()
+
+		now := time.Now()
+		if err := db.Exec(`
+			INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, "user_member", "member@example.com", "Mem", "Ber", "org_1", false, true, now, now).Error; err != nil {
+			t.Fatalf("failed seeding user: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/orgs/org_1/employees/user_member", nil)
+		req.Header.Set("X-User-ID", "admin_actor")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("admin target rejected", func(t *testing.T) {
+		h, db := newEmployeeHandlerForTest(t)
+		r := newEmployeeTestRouter(h)
+
+		now := time.Now()
+		if err := db.Exec(`
+			INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, "user_admin", "admin@example.com", "Ad", "Min", "org_1", true, true, now, now).Error; err != nil {
+			t.Fatalf("failed seeding user: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/orgs/org_1/employees/user_admin", nil)
+		req.Header.Set("X-User-ID", "admin_actor")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+}
+
 func newEmployeeHandlerForTest(t *testing.T) (*EmployeeHandler, *gorm.DB) {
 	t.Helper()
 	db := setupEmployeeHandlerTestDB(t)
-	svc := service.NewEmployeeService(db, "")
+	svc := service.NewEmployeeService(db, "test_clerk_secret")
 	return NewEmployeeHandler(svc), db
 }
 
@@ -768,6 +818,7 @@ func newEmployeeTestRouter(h *EmployeeHandler) *gin.Engine {
 	r.DELETE("/api/orgs/:orgId/invitations/:invitationId", h.RevokeInvitation)
 	r.POST("/api/orgs/:orgId/employees/invite/bulk", h.InviteBulk)
 	r.GET("/api/orgs/:orgId/employees", h.ListEmployees)
+	r.DELETE("/api/orgs/:orgId/employees/:employeeId", h.DeleteEmployee)
 	r.POST("/api/orgs/:orgId/roles", h.CreateRole)
 	r.GET("/api/orgs/:orgId/roles", h.ListRoles)
 	r.PUT("/api/orgs/:orgId/roles/:roleID", h.UpdateRole)
