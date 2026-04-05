@@ -338,6 +338,28 @@ func (h *EmployeeHandler) ListEmployees(c *gin.Context) {
 	c.JSON(http.StatusOK, employees)
 }
 
+// DELETE /api/orgs/:orgId/employees/:employeeId
+func (h *EmployeeHandler) DeleteEmployee(c *gin.Context) {
+	orgID := c.Param("orgId")
+	employeeID := c.Param("employeeId")
+	actorUserID := c.GetString("user_id")
+
+	if err := h.Service.RemoveEmployee(orgID, employeeID, actorUserID); err != nil {
+		switch {
+		case errors.Is(err, service.ErrNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrCannotRemoveAdmin), errors.Is(err, service.ErrCannotRemoveSelf):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			log.Printf("DeleteEmployee error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Employee removed"})
+}
+
 // GET /api/orgs/:orgId/departments/:deptID
 func (h *EmployeeHandler) GetDepartment(c *gin.Context) {
 	orgID := c.Param("orgId")
@@ -376,4 +398,24 @@ func (h *EmployeeHandler) AcceptInvitation(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Invitation accepted successfully"})
+}
+
+// GET /api/orgs/:orgId/me/profile
+func (h *EmployeeHandler) GetMyProfile(c *gin.Context) {
+	orgID := c.Param("orgId")
+	userID := c.GetString("user_id")
+
+	profile, err := h.Service.GetMemberProfile(orgID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		default:
+			log.Printf("GetMyProfile error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, profile)
 }

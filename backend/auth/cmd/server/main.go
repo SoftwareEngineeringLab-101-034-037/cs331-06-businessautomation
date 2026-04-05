@@ -86,6 +86,7 @@ func main() {
 		memberOrgAPI := api.Group("/orgs/:orgId")
 		memberOrgAPI.Use(middleware.OrgMemberOnly())
 		{
+			memberOrgAPI.GET("/me/profile", employeeHandler.GetMyProfile)
 			// Workflow callers that depend on role lookup must forward the original user
 			// Authorization header into StartInstance()/downstream execution. This route
 			// requires a user JWT, so non-user-initiated workflows need a separate
@@ -108,6 +109,7 @@ func main() {
 			orgApi.POST("/employees/invite", employeeHandler.InviteSingle)
 			orgApi.POST("/employees/invite/bulk", employeeHandler.InviteBulk)
 			orgApi.GET("/employees", employeeHandler.ListEmployees)
+			orgApi.DELETE("/employees/:employeeId", employeeHandler.DeleteEmployee)
 			orgApi.GET("/invitations", employeeHandler.ListInvitations)
 			orgApi.DELETE("/invitations/:invitationId", employeeHandler.RevokeInvitation)
 		}
