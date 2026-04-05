@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 import { useToast, ToastContainer } from "@/components/Toast";
+import { authFetch as authFetchWithToken } from "@/lib/auth-fetch";
 import { formatInstanceLabel } from "@/lib/instance-label";
 import { computeHeightBasedProgress, type WorkflowProgressNode } from "@/lib/workflow-progress";
 
@@ -278,27 +279,6 @@ function formatEmployeeName(employee?: BackendEmployee): string {
   return name || employee.email || employee.id;
 }
 
-function mergeSignals(signals: Array<AbortSignal | null | undefined>): AbortSignal | undefined {
-  const activeSignals = signals.filter(Boolean) as AbortSignal[];
-  if (activeSignals.length === 0) {
-    return undefined;
-  }
-  if (activeSignals.length === 1) {
-    return activeSignals[0];
-  }
-
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  for (const signal of activeSignals) {
-    if (signal.aborted) {
-      controller.abort();
-      break;
-    }
-    signal.addEventListener("abort", abort, { once: true });
-  }
-  return controller.signal;
-}
-
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
 
 export default function WorkstationPage() {
@@ -312,21 +292,7 @@ export default function WorkstationPage() {
   const orgApiBase = `${WF_API}/api/orgs/${organization?.id}`;
 
   const authFetch = useCallback(async (input: string, init: RequestInit = {}, timeoutMs = 10000): Promise<Response> => {
-    const token = await getToken();
-    const controller = new AbortController();
-    const timeoutID = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      return await fetch(input, {
-        ...init,
-        signal: mergeSignals([init.signal, controller.signal]),
-        headers: {
-          ...(init.headers ?? {}),
-          Authorization: `Bearer ${token}`,
-        },
-      });
-    } finally {
-      clearTimeout(timeoutID);
-    }
+    return authFetchWithToken(getToken, input, init, timeoutMs);
   }, [getToken]);
 
   /* Show toast passed via URL query (from workflow-builder redirects) */
@@ -361,6 +327,7 @@ export default function WorkstationPage() {
   const [refreshingInstances, setRefreshingInstances] = useState(false);
   const instanceRequestControllerRef = useRef<AbortController | null>(null);
   const instanceRequestIdRef = useRef(0);
+  const workflowsRequestIdRef = useRef(0);
 
   const closeInstanceDrawer = useCallback(() => {
     instanceRequestIdRef.current += 1;
@@ -431,6 +398,8 @@ export default function WorkstationPage() {
 
   const fetchWorkflows = useCallback(async () => {
     if (!organization?.id) return;
+    const requestID = ++workflowsRequestIdRef.current;
+    const isLatest = () => workflowsRequestIdRef.current === requestID;
     setLoading(true);
     setError(null);
     try {
@@ -445,6 +414,7 @@ export default function WorkstationPage() {
         instRes.json() as Promise<BackendInstance[]>,
       ]);
 
+      if (!isLatest()) return;
       setWorkflows(wfData ?? []);
       setInstances(instData ?? []);
 
@@ -456,34 +426,49 @@ export default function WorkstationPage() {
             return;
           }
           const employeeData = (await employeeRes.json()) as BackendEmployee[];
-          setEmployees(employeeData ?? []);
+          if (isLatest()) {
+            setEmployees(employeeData ?? []);
+          }
         } catch (employeeErr) {
-          console.warn("Failed to load employee directory", employeeErr);
+          if (isLatest()) {
+            console.warn("Failed to load employee directory", employeeErr);
+          }
         }
       })();
     } catch (err: any) {
+      if (!isLatest()) return;
       console.error("Failed to load workflows:", err);
       setError(err.message || "Could not reach workflow service");
     } finally {
-      setLoading(false);
+      if (isLatest()) {
+        setLoading(false);
+      }
     }
   }, [organization?.id, orgApiBase, authFetch]);
 
   useEffect(() => { fetchWorkflows(); }, [fetchWorkflows]);
 
   const refreshWorkflowList = useCallback(async () => {
-  if (!organization?.id) return;
-  setRefreshingWorkflows(true);
-  try {
-    const wfRes = await authFetch(`${orgApiBase}/workflows`);
-    if (!wfRes.ok) throw new Error(`HTTP ${wfRes.status}`);
-    const wfData = (await wfRes.json()) as BackendWorkflow[];
-    setWorkflows(wfData ?? []);
-  } catch (err: any) {
-    showToast(`Failed to refresh workflows: ${err?.message || err}`, "error");
-  } finally {
-    setRefreshingWorkflows(false);
-  }
+    if (!organization?.id) return;
+    const requestID = ++workflowsRequestIdRef.current;
+    const isLatest = () => workflowsRequestIdRef.current === requestID;
+    setRefreshingWorkflows(true);
+    try {
+      const wfRes = await authFetch(`${orgApiBase}/workflows`);
+      if (!wfRes.ok) throw new Error(`HTTP ${wfRes.status}`);
+      const wfData = (await wfRes.json()) as BackendWorkflow[];
+      if (isLatest()) {
+        setWorkflows(wfData ?? []);
+      }
+    } catch (err: any) {
+      if (isLatest()) {
+        showToast(`Failed to refresh workflows: ${err?.message || err}`, "error");
+      }
+    } finally {
+      if (isLatest()) {
+        setRefreshingWorkflows(false);
+      }
+    }
   }, [organization?.id, orgApiBase, authFetch, showToast]);
 
   const refreshInstanceList = useCallback(async () => {

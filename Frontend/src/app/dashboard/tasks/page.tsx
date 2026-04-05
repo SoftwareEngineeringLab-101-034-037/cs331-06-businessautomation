@@ -5,6 +5,7 @@ import { useAuth, useOrganization } from "@clerk/nextjs";
 import { ToastContainer, useToast } from "@/components/Toast";
 import TaskDetailDrawer from "@/components/dashboard/TaskDetailDrawer";
 import { MOCK_TASKS } from "@/lib/mock-data";
+import { authFetch as authFetchWithToken } from "@/lib/auth-fetch";
 import { computeHeightBasedProgress, type WorkflowProgressNode } from "@/lib/workflow-progress";
 import type { Task, TaskStatus, TaskPriority } from "@/types/dashboard";
 import { PRIORITY_CONFIG } from "@/types/dashboard";
@@ -345,27 +346,6 @@ function TaskCard({
   );
 }
 
-function mergeSignals(signals: Array<AbortSignal | null | undefined>): AbortSignal | undefined {
-  const activeSignals = signals.filter(Boolean) as AbortSignal[];
-  if (activeSignals.length === 0) {
-    return undefined;
-  }
-  if (activeSignals.length === 1) {
-    return activeSignals[0];
-  }
-
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  for (const signal of activeSignals) {
-    if (signal.aborted) {
-      controller.abort();
-      break;
-    }
-    signal.addEventListener("abort", abort, { once: true });
-  }
-  return controller.signal;
-}
-
 export default function TasksPage() {
   const { getToken, userId } = useAuth();
   const { organization } = useOrganization();
@@ -386,21 +366,7 @@ export default function TasksPage() {
     init: RequestInit = {},
     timeoutMs = 10000,
   ): Promise<Response> => {
-    const token = await getToken();
-    const controller = new AbortController();
-    const timeoutID = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      return await fetch(input, {
-        ...init,
-        signal: mergeSignals([init.signal, controller.signal]),
-        headers: {
-          ...(init.headers ?? {}),
-          Authorization: `Bearer ${token}`,
-        },
-      });
-    } finally {
-      clearTimeout(timeoutID);
-    }
+    return authFetchWithToken(getToken, input, init, timeoutMs);
   }, [getToken]);
 
   const loadMyRoles = useCallback(async (orgId: string, currentUserId: string): Promise<string[]> => {
