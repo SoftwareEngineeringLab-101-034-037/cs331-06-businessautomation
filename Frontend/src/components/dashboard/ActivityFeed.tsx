@@ -4,9 +4,6 @@ const ACTIVITY_ICONS: Record<string, { icon: string; color: string }> = {
   task_assigned: { icon: "📋", color: "#3b82f6" },
   task_completed: { icon: "✅", color: "#22c55e" },
   task_escalated: { icon: "⚠️", color: "#f97316" },
-  request_submitted: { icon: "📤", color: "#8b5cf6" },
-  request_approved: { icon: "👍", color: "#22c55e" },
-  request_rejected: { icon: "❌", color: "#ef4444" },
   member_joined: { icon: "👋", color: "#06b6d4" },
   workflow_published: { icon: "🚀", color: "#4f46e5" },
 };

@@ -76,50 +76,11 @@ export const PRIORITY_CONFIG: Record<
   critical: { label: "Critical", color: "#ef4444", bg: "rgba(239,68,68,0.12)" },
 };
 
-// ─── Workflow Request Types ────────────────────────────────────
-export type RequestStatus =
-  | "submitted"
-  | "in_progress"
-  | "approved"
-  | "rejected"
-  | "cancelled"
-  | "completed";
-
-export interface WorkflowRequest {
-  id: string;
-  title: string;
-  workflowName: string;
-  status: RequestStatus;
-  submittedBy: string;
-  submittedByName: string;
-  submittedAt: string;
-  currentStep: string;
-  totalSteps: number;
-  completedSteps: number;
-  lastUpdated: string;
-  approver?: string;
-}
-
-export const REQUEST_STATUS_CONFIG: Record<
-  RequestStatus,
-  { label: string; color: string; bg: string }
-> = {
-  submitted: { label: "Submitted", color: "#3b82f6", bg: "rgba(59,130,246,0.12)" },
-  in_progress: { label: "In Progress", color: "#f59e0b", bg: "rgba(245,158,11,0.12)" },
-  approved: { label: "Approved", color: "#22c55e", bg: "rgba(34,197,94,0.12)" },
-  rejected: { label: "Rejected", color: "#ef4444", bg: "rgba(239,68,68,0.12)" },
-  cancelled: { label: "Cancelled", color: "#6b7280", bg: "rgba(107,114,128,0.12)" },
-  completed: { label: "Completed", color: "#06b6d4", bg: "rgba(6,182,212,0.12)" },
-};
-
 // ─── Activity Feed ─────────────────────────────────────────────
 export type ActivityType =
   | "task_assigned"
   | "task_completed"
   | "task_escalated"
-  | "request_submitted"
-  | "request_approved"
-  | "request_rejected"
   | "member_joined"
   | "workflow_published";
 
@@ -183,12 +144,6 @@ export const DASHBOARD_NAV: NavItem[] = [
     label: "My Tasks",
     href: "/dashboard/tasks",
     icon: "tasks",
-    roles: ["admin", "employee"],
-  },
-  {
-    label: "Requests",
-    href: "/dashboard/requests",
-    icon: "requests",
     roles: ["admin", "employee"],
   },
   {
