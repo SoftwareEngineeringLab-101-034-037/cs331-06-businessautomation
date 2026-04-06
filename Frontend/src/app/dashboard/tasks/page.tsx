@@ -4,7 +4,6 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { ToastContainer, useToast } from "@/components/Toast";
 import TaskDetailDrawer from "@/components/dashboard/TaskDetailDrawer";
-import { MOCK_TASKS } from "@/lib/mock-data";
 import { authFetch as authFetchWithToken } from "@/lib/auth-fetch";
 import { computeHeightBasedProgress, type WorkflowProgressNode } from "@/lib/workflow-progress";
 import type { Task, TaskStatus, TaskPriority } from "@/types/dashboard";
@@ -12,7 +11,6 @@ import { PRIORITY_CONFIG } from "@/types/dashboard";
 
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
-const DEMO_TASKS_ENABLED = process.env.NEXT_PUBLIC_ENABLE_DEMO_TASKS === "true";
 const ROLE_CACHE_TTL_MS = 2 * 60 * 1000;
 const WORKFLOW_CACHE_TTL_MS = 2 * 60 * 1000;
 
@@ -82,7 +80,7 @@ const KANBAN_COLUMNS: { key: "pending" | "in_progress" | "completed"; label: str
 ];
 
 function mapBackendStatus(status: string): TaskStatus {
-  switch (status) {
+  switch (status.trim().toLowerCase()) {
     case "pending":
       return "pending";
     case "in_progress":
@@ -430,7 +428,7 @@ export default function TasksPage() {
     const orgId = organization?.id;
     if (!orgId || !userId) {
       if (requestVersion === requestVersionRef.current) {
-        setTasks(DEMO_TASKS_ENABLED ? MOCK_TASKS : []);
+        setTasks([]);
         setLoading(false);
       }
       return;
@@ -493,7 +491,7 @@ export default function TasksPage() {
     } catch (err: any) {
       if (requestVersion === requestVersionRef.current) {
         setError(err?.message || "Could not load tasks");
-        setTasks(DEMO_TASKS_ENABLED ? MOCK_TASKS : []);
+        setTasks([]);
       }
     } finally {
       if (requestVersion === requestVersionRef.current) {

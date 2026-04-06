@@ -486,6 +486,17 @@ export default function WorkstationPage() {
   }
   }, [organization?.id, orgApiBase, authFetch, showToast]);
 
+  useEffect(() => {
+    if (!organization?.id) return;
+
+    const timer = window.setInterval(() => {
+      void refreshWorkflowList();
+      void refreshInstanceList();
+    }, 20000);
+
+    return () => window.clearInterval(timer);
+  }, [organization?.id, refreshWorkflowList, refreshInstanceList]);
+
   /* 3-dot dropdown: open id + fixed position */
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);

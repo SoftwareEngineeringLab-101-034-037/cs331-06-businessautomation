@@ -211,9 +211,6 @@ func (h *TaskHandler) Action(c *gin.Context) {
 }
 
 func sanitizeTaskForResponse(task models.TaskAssignment) models.TaskAssignment {
-	if task.Status != models.TaskInProgress && task.Status != models.TaskCompleted {
-		task.VisibleData = nil
-	}
 	return task
 }
 
