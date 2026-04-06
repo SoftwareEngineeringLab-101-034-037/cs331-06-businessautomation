@@ -10,6 +10,9 @@ func TestIsAllowedOrigin(t *testing.T) {
 	if !isAllowedOrigin("http://localhost:3000", []string{"http://localhost:3000"}) {
 		t.Fatalf("expected origin allowed")
 	}
+	if isAllowedOrigin("http://evil.example", []string{"http://localhost:3000"}) {
+		t.Fatalf("unexpected non-allowlisted origin")
+	}
 	if isAllowedOrigin("", []string{"http://localhost:3000"}) {
 		t.Fatalf("empty origin must not be allowed")
 	}

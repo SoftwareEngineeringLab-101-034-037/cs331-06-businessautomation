@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ func TestOAuthTokenJSONHidesSecrets(t *testing.T) {
 		t.Fatalf("marshal failed: %v", err)
 	}
 	js := string(b)
-	if contains(js, "secret-access") || contains(js, "secret-refresh") {
+	if strings.Contains(js, "secret-access") || strings.Contains(js, "secret-refresh") {
 		t.Fatalf("sensitive tokens leaked in JSON: %s", js)
 	}
 }
@@ -32,20 +33,28 @@ func TestOAuthTokenJSONHidesSecrets(t *testing.T) {
 func TestFormWatchAndGmailWatchFieldRoundTrip(t *testing.T) {
 	fw := FormWatch{OrgID: "org_1", FormID: "f1", WorkflowID: "wf1", Active: true}
 	gw := GmailWatch{OrgID: "org_1", WorkflowID: "wf2", Query: "in:inbox", Active: true}
-	if fw.OrgID == "" || gw.WorkflowID == "" {
-		t.Fatalf("unexpected zero-value critical fields")
-	}
-}
 
-func contains(s, sub string) bool {
-	return len(sub) > 0 && len(s) >= len(sub) && (func() bool { return json.Valid([]byte("\""+sub+"\"")) || true })() && (stringIndex(s, sub) >= 0)
-}
-
-func stringIndex(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
+	fwJSON, err := json.Marshal(fw)
+	if err != nil {
+		t.Fatalf("marshal form watch failed: %v", err)
 	}
-	return -1
+	var fwDecoded FormWatch
+	if err := json.Unmarshal(fwJSON, &fwDecoded); err != nil {
+		t.Fatalf("unmarshal form watch failed: %v", err)
+	}
+	if fwDecoded.OrgID != fw.OrgID || fwDecoded.FormID != fw.FormID || fwDecoded.WorkflowID != fw.WorkflowID || fwDecoded.Active != fw.Active {
+		t.Fatalf("form watch round-trip mismatch: got=%+v want=%+v", fwDecoded, fw)
+	}
+
+	gwJSON, err := json.Marshal(gw)
+	if err != nil {
+		t.Fatalf("marshal gmail watch failed: %v", err)
+	}
+	var gwDecoded GmailWatch
+	if err := json.Unmarshal(gwJSON, &gwDecoded); err != nil {
+		t.Fatalf("unmarshal gmail watch failed: %v", err)
+	}
+	if gwDecoded.OrgID != gw.OrgID || gwDecoded.WorkflowID != gw.WorkflowID || gwDecoded.Query != gw.Query || gwDecoded.Active != gw.Active {
+		t.Fatalf("gmail watch round-trip mismatch: got=%+v want=%+v", gwDecoded, gw)
+	}
 }

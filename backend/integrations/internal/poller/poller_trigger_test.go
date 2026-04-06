@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/example/business-automation/backend/integrations/internal/models"
 )
@@ -22,15 +23,20 @@ func (noopStore) ListActiveGmailWatches(context.Context) ([]*models.GmailWatch, 
 func (noopStore) UpdateGmailWatch(context.Context, *models.GmailWatch) error { return nil }
 
 func TestPollerTriggerWorkflowPostsToEngine(t *testing.T) {
-	var gotPath string
-	var gotKey string
+	type requestMeta struct {
+		path string
+		key  string
+	}
+	reqCh := make(chan requestMeta, 1)
+	errCh := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotKey = r.Header.Get("X-Integration-Key")
 		var body map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode body: %v", err)
+			errCh <- err
+			w.WriteHeader(http.StatusBadRequest)
+			return
 		}
+		reqCh <- requestMeta{path: r.URL.Path, key: r.Header.Get("X-Integration-Key")}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -39,17 +45,27 @@ func TestPollerTriggerWorkflowPostsToEngine(t *testing.T) {
 	if err := p.triggerWorkflow("org_1", "wf_1", map[string]string{"x": "y"}); err != nil {
 		t.Fatalf("triggerWorkflow failed: %v", err)
 	}
-	if gotPath != "/trigger" || gotKey != "shared-key" {
-		t.Fatalf("unexpected request path/key: %q %q", gotPath, gotKey)
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("decode body: %v", err)
+	case req := <-reqCh:
+		if req.path != "/trigger" || req.key != "shared-key" {
+			t.Fatalf("unexpected request path/key: %q %q", req.path, req.key)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for trigger request")
 	}
 }
 
 func TestGmailPollerTriggerWorkflowPostsToEngine(t *testing.T) {
-	var gotPath string
-	var gotKey string
+	type requestMeta struct {
+		path string
+		key  string
+	}
+	reqCh := make(chan requestMeta, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotKey = r.Header.Get("X-Integration-Key")
+		reqCh <- requestMeta{path: r.URL.Path, key: r.Header.Get("X-Integration-Key")}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -58,7 +74,13 @@ func TestGmailPollerTriggerWorkflowPostsToEngine(t *testing.T) {
 	if err := p.triggerWorkflow("org_1", "wf_1", map[string]interface{}{"id": "1"}); err != nil {
 		t.Fatalf("triggerWorkflow failed: %v", err)
 	}
-	if gotPath != "/gmail-trigger" || gotKey != "gmail-key" {
-		t.Fatalf("unexpected request path/key: %q %q", gotPath, gotKey)
+
+	select {
+	case req := <-reqCh:
+		if req.path != "/gmail-trigger" || req.key != "gmail-key" {
+			t.Fatalf("unexpected request path/key: %q %q", req.path, req.key)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for gmail trigger request")
 	}
 }

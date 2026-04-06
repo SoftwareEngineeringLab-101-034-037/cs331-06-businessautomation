@@ -38,6 +38,9 @@ func NewMongo(uri, dbName string) (*MongoStore, error) {
 		return nil, err
 	}
 	if err := client.Ping(ctx, nil); err != nil {
+		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer disconnectCancel()
+		_ = client.Disconnect(disconnectCtx)
 		return nil, err
 	}
 
@@ -49,7 +52,9 @@ func NewMongo(uri, dbName string) (*MongoStore, error) {
 		gmailWatches: db.Collection("gmail_watches"),
 	}
 	if err := s.ensureIndexes(ctx); err != nil {
-		_ = client.Disconnect(ctx)
+		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer disconnectCancel()
+		_ = client.Disconnect(disconnectCtx)
 		return nil, err
 	}
 	return s, nil
@@ -118,10 +123,12 @@ func (s *MongoStore) SaveToken(ctx context.Context, token *models.OAuthToken) er
 		token.AccountID = "primary"
 	}
 	if token.IsPrimary {
-		_, _ = s.tokens.UpdateMany(ctx,
+		if _, err := s.tokens.UpdateMany(ctx,
 			bson.M{"org_id": token.OrgID, "provider": token.Provider},
 			bson.M{"$set": bson.M{"is_primary": false}},
-		)
+		); err != nil {
+			return fmt.Errorf("demote existing primary tokens: %w", err)
+		}
 	}
 
 	filter := bson.M{"org_id": token.OrgID, "provider": token.Provider, "account_id": token.AccountID}
@@ -207,7 +214,26 @@ func (s *MongoStore) DeleteToken(ctx context.Context, orgID string) error {
 }
 
 func (s *MongoStore) DeleteTokenByAccount(ctx context.Context, orgID, provider, accountID string) error {
-	_, err := s.tokens.DeleteOne(ctx, bson.M{"org_id": orgID, "provider": provider, "account_id": accountID})
+	trimmedProvider := strings.TrimSpace(provider)
+	if trimmedProvider == "" {
+		trimmedProvider = defaultWatchProvider
+	}
+	trimmedAccountID := strings.TrimSpace(accountID)
+	if trimmedAccountID == "" {
+		trimmedAccountID = "primary"
+	}
+
+	conditions := []bson.M{{"org_id": orgID}, watchProviderFilter(trimmedProvider)}
+	if trimmedAccountID == "primary" {
+		conditions = append(conditions, bson.M{"$or": []bson.M{
+			{"account_id": "primary"},
+			{"account_id": bson.M{"$exists": false}},
+		}})
+	} else {
+		conditions = append(conditions, bson.M{"account_id": trimmedAccountID})
+	}
+
+	_, err := s.tokens.DeleteOne(ctx, bson.M{"$and": conditions})
 	return err
 }
 

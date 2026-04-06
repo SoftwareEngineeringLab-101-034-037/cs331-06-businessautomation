@@ -373,6 +373,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 	orgID := c.Param("orgId")
 	workflowID := c.Query("workflow_id")
 	compact := strings.EqualFold(strings.TrimSpace(c.Query("compact")), "true")
+	includeNodeState := strings.EqualFold(strings.TrimSpace(c.Query("include_node_state")), "true")
 
 	var (
 		instances []models.Instance
@@ -458,6 +459,10 @@ func (h *InstanceHandler) List(c *gin.Context) {
 			wfName = wf.Name
 		}
 		if compact {
+			var nodeStates map[string]models.NodeState
+			if includeNodeState {
+				nodeStates = inst.NodeStates
+			}
 			compactOut = append(compactOut, compactInstance{
 				ID:           inst.ID,
 				OrgID:        inst.OrgID,
@@ -465,7 +470,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 				WorkflowName: wfName,
 				Status:       inst.Status,
 				CurrentNode:  inst.CurrentNode,
-				NodeStates:   inst.NodeStates,
+				NodeStates:   nodeStates,
 				StartedAt:    inst.StartedAt,
 				CompletedAt:  inst.CompletedAt,
 			})

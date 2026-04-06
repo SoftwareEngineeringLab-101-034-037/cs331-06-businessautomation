@@ -21,6 +21,15 @@ func TestGmailAPIHelpers(t *testing.T) {
 			}
 			return jsonResponse(http.StatusOK, `{"id":"msg_1","threadId":"thr_1"}`), nil
 		case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/messages"):
+			if req.URL.Query().Get("q") != "in:inbox" {
+				t.Fatalf("expected q=in:inbox, got %q", req.URL.Query().Get("q"))
+			}
+			if req.URL.Query().Get("maxResults") != "10" {
+				t.Fatalf("expected maxResults=10, got %q", req.URL.Query().Get("maxResults"))
+			}
+			if req.URL.Query().Get("pageToken") != "" {
+				t.Fatalf("expected empty pageToken, got %q", req.URL.Query().Get("pageToken"))
+			}
 			return jsonResponse(http.StatusOK, `{"messages":[{"id":"msg_1","threadId":"thr_1"}]}`), nil
 		case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/messages/msg_1"):
 			return jsonResponse(http.StatusOK, `{"id":"msg_1","threadId":"thr_1","snippet":"hello","labelIds":["INBOX"],"internalDate":"1712361600000","payload":{"headers":[{"name":"From","value":"sender@example.com"},{"name":"To","value":"me@example.com"},{"name":"Subject","value":"Hello"},{"name":"Date","value":"Mon, 06 Apr 2026 00:00:00 +0000"}]}}`), nil

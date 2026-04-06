@@ -36,6 +36,9 @@ func TestReconnectAndAutoDisableHeuristics(t *testing.T) {
 	if !p.shouldAutoDisableTestWatch(&models.FormWatch{OrgID: "test-org"}, errString("no google connection for org")) {
 		t.Fatalf("expected auto-disable for test org")
 	}
+	if p.shouldAutoDisableTestWatch(&models.FormWatch{OrgID: "org_1"}, errString("no google connection for org")) {
+		t.Fatalf("did not expect auto-disable for non-test org")
+	}
 }
 
 func TestPauseMapHelpers(t *testing.T) {
