@@ -20,11 +20,15 @@ func TestMapFieldsIncludesMappedAndEmail(t *testing.T) {
 		RespondentEmail: "u@example.com",
 		Answers: map[string]googleapi.Answer{
 			"q1": {TextAnswers: &googleapi.TextAnswers{Answers: []googleapi.TextAnswer{{Value: "v1"}}}},
+			"q_upload": {FileUploadAnswers: &googleapi.FileUploadAnswers{Answers: []googleapi.FileUploadAnswer{{FileID: "abc123"}}}},
 		},
 	}
-	data := p.mapFields(resp, map[string]string{"q1": "name", "_respondent_email": "email"})
+	data := p.mapFields(resp, map[string]string{"q1": "name", "q_upload": "resume_links", "_respondent_email": "email"})
 	if data["name"] != "v1" || data["email"] != "u@example.com" {
 		t.Fatalf("unexpected mapped data: %#v", data)
+	}
+	if data["resume_links"] != "Drive file abc123|https://drive.google.com/file/d/abc123/view" {
+		t.Fatalf("expected named drive link for upload field, got %#v", data["resume_links"])
 	}
 }
 

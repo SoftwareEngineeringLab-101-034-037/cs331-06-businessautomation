@@ -16,8 +16,9 @@ type FormResponse struct {
 }
 
 type Answer struct {
-	QuestionID  string       `json:"questionId"`
-	TextAnswers *TextAnswers `json:"textAnswers,omitempty"`
+	QuestionID         string             `json:"questionId"`
+	TextAnswers        *TextAnswers       `json:"textAnswers,omitempty"`
+	FileUploadAnswers  *FileUploadAnswers `json:"fileUploadAnswers,omitempty"`
 }
 
 type TextAnswers struct {
@@ -26,6 +27,16 @@ type TextAnswers struct {
 
 type TextAnswer struct {
 	Value string `json:"value"`
+}
+
+type FileUploadAnswers struct {
+	Answers []FileUploadAnswer `json:"answers"`
+}
+
+type FileUploadAnswer struct {
+	FileID   string `json:"fileId"`
+	FileName string `json:"fileName,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
 }
 
 type listResponsesReply struct {

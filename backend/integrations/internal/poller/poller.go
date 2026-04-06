@@ -161,6 +161,26 @@ func (p *Poller) mapFields(resp googleapi.FormResponse, mapping map[string]strin
 		}
 		if answer.TextAnswers != nil && len(answer.TextAnswers.Answers) > 0 {
 			data[key] = answer.TextAnswers.Answers[0].Value
+			continue
+		}
+
+		if answer.FileUploadAnswers != nil && len(answer.FileUploadAnswers.Answers) > 0 {
+			entries := make([]string, 0, len(answer.FileUploadAnswers.Answers))
+			for _, uploaded := range answer.FileUploadAnswers.Answers {
+				fileID := strings.TrimSpace(uploaded.FileID)
+				if fileID == "" {
+					continue
+				}
+				url := "https://drive.google.com/file/d/" + fileID + "/view"
+				name := strings.TrimSpace(uploaded.FileName)
+				if name == "" {
+					name = "Drive file " + fileID
+				}
+				entries = append(entries, name+"|"+url)
+			}
+			if len(entries) > 0 {
+				data[key] = strings.Join(entries, ", ")
+			}
 		}
 	}
 

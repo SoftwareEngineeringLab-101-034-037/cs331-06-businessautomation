@@ -42,6 +42,7 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
   const progress = (task.stepNumber / task.totalSteps) * 100;
   const completedSteps = Math.min(task.totalSteps, Math.max(0, task.stepNumber));
   const remainingSteps = Math.max(0, task.totalSteps - completedSteps);
+  const uploadedFiles = extractUploadedFiles(task.visibleData);
 
   function handleAction(action: string, data?: Record<string, string>) {
     if (onAction) {
@@ -243,11 +244,9 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
             </section>
           )}
 
-          {(task.status === "in_progress" || task.status === "completed") && task.visibleData && Object.keys(task.visibleData).length > 0 && (
+          {task.status === "in_progress" && task.visibleData && Object.keys(task.visibleData).length > 0 && (
             <section className="detail-section">
-              <h3 className="detail-section-title">
-                {task.status === "in_progress" ? "Visible Workflow Data (Live)" : "Visible Workflow Data"}
-              </h3>
+              <h3 className="detail-section-title">Visible Workflow Data (Live)</h3>
               <div className="workflow-data-panel">
                 <div className="workflow-data-header">
                   <span>Fields available to assignee</span>
@@ -268,6 +267,25 @@ export default function TaskDetailDrawer({ task, isOpen, onClose, onAction }: Ta
                       </div>
                     ))}
                 </div>
+                {uploadedFiles.length > 0 && (
+                  <div className="workflow-uploaded-files">
+                    <h4 className="workflow-uploaded-files-title">Uploaded Files</h4>
+                    <div className="workflow-uploaded-files-list">
+                      {uploadedFiles.map((file, idx) => (
+                        <a
+                          key={`${file.url}-${idx}`}
+                          className="workflow-data-chip workflow-data-chip-link"
+                          href={file.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={file.url}
+                        >
+                          {file.name}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </section>
           )}
@@ -404,6 +422,34 @@ function ValueRenderer({ value }: { value: unknown }) {
   }
 
   if (typeof value === "number" || typeof value === "string") {
+    if (typeof value === "string") {
+      const parsedLinks = parseNamedLinks(value);
+      if (parsedLinks.length > 0) {
+        return (
+          <div className="workflow-data-chip-list">
+            {parsedLinks.map((entry, idx) => (
+              <a
+                key={`${entry.url}-${idx}`}
+                className="workflow-data-chip workflow-data-chip-link"
+                href={entry.url}
+                target="_blank"
+                rel="noreferrer"
+                title={entry.url}
+              >
+                {entry.name}
+              </a>
+            ))}
+          </div>
+        );
+      }
+    }
+    if (typeof value === "string" && isLikelyUrl(value)) {
+      return (
+        <a className="workflow-data-link" href={value} target="_blank" rel="noreferrer" title={value}>
+          {value}
+        </a>
+      );
+    }
     return <span className="workflow-data-text">{String(value)}</span>;
   }
 
@@ -419,11 +465,37 @@ function ValueRenderer({ value }: { value: unknown }) {
     if (allPrimitive) {
       return (
         <div className="workflow-data-chip-list">
-          {value.map((entry, index) => (
-            <span key={`${String(entry)}-${index}`} className="workflow-data-chip">
-              {entry == null ? "null" : String(entry)}
-            </span>
-          ))}
+          {value.map((entry, index) => {
+            if (typeof entry === "string") {
+              const parsedLinks = parseNamedLinks(entry);
+              if (parsedLinks.length > 0) {
+                return parsedLinks.map((parsed, parsedIndex) => (
+                  <a
+                    key={`${parsed.url}-${index}-${parsedIndex}`}
+                    className="workflow-data-chip workflow-data-chip-link"
+                    href={parsed.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={parsed.url}
+                  >
+                    {parsed.name}
+                  </a>
+                ));
+              }
+              if (isLikelyUrl(entry)) {
+                return (
+                  <a key={`${entry}-${index}`} className="workflow-data-chip workflow-data-chip-link" href={entry} target="_blank" rel="noreferrer" title={entry}>
+                    {entry}
+                  </a>
+                );
+              }
+            }
+            return (
+              <span key={`${String(entry)}-${index}`} className="workflow-data-chip">
+                {entry == null ? "null" : String(entry)}
+              </span>
+            );
+          })}
         </div>
       );
     }
@@ -476,4 +548,92 @@ function ValueRenderer({ value }: { value: unknown }) {
   }
 
   return <span className="workflow-data-text">{String(value)}</span>;
+}
+
+function isLikelyUrl(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function parseNamedLinks(value: string): Array<{ name: string; url: string }> {
+  const out: Array<{ name: string; url: string }> = [];
+  const seen = new Set<string>();
+  for (const rawPart of value.split(",")) {
+    const part = rawPart.trim();
+    if (!part) {
+      continue;
+    }
+
+    let name = "";
+    let url = "";
+    if (part.includes("|")) {
+      const [left, right] = part.split("|", 2);
+      name = left.trim();
+      url = right.trim();
+    } else if (isLikelyUrl(part)) {
+      url = part;
+    } else {
+      continue;
+    }
+
+    if (!isLikelyUrl(url) || seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+    out.push({ name: name || deriveLinkLabel(url), url });
+  }
+  return out;
+}
+
+function deriveLinkLabel(url: string): string {
+  const fileIDMatch = url.match(/\/file\/d\/([^/]+)/);
+  if (fileIDMatch?.[1]) {
+    return `Drive file ${fileIDMatch[1]}`;
+  }
+  try {
+    const parsed = new URL(url);
+    const leaf = parsed.pathname.split("/").filter(Boolean).pop();
+    return leaf || parsed.hostname;
+  } catch {
+    return url;
+  }
+}
+
+function extractUploadedFiles(visibleData?: Record<string, unknown>): Array<{ name: string; url: string }> {
+  if (!visibleData) {
+    return [];
+  }
+
+  const raw = visibleData["form_submission_files"];
+  const aggregate: Array<{ name: string; url: string }> = [];
+  const seen = new Set<string>();
+  const append = (entries: Array<{ name: string; url: string }>) => {
+    for (const entry of entries) {
+      if (seen.has(entry.url)) {
+        continue;
+      }
+      seen.add(entry.url);
+      aggregate.push(entry);
+    }
+  };
+
+  if (typeof raw === "string") {
+    append(parseNamedLinks(raw));
+  } else if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === "string") {
+        append(parseNamedLinks(item));
+      }
+    }
+  }
+
+  return aggregate;
 }

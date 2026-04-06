@@ -907,14 +907,22 @@ func extractFormFileRefs(value interface{}) []string {
 		case string:
 			for _, part := range strings.Split(x, ",") {
 				candidate := strings.TrimSpace(part)
-				if !isLikelyFileURL(candidate) {
+				if candidate == "" {
 					continue
 				}
-				if _, exists := seen[candidate]; exists {
+				resolvedURL := candidate
+				if strings.Contains(candidate, "|") {
+					parts := strings.SplitN(candidate, "|", 2)
+					resolvedURL = strings.TrimSpace(parts[1])
+				}
+				if !isLikelyFileURL(resolvedURL) {
 					continue
 				}
-				seen[candidate] = struct{}{}
-				out = append(out, candidate)
+				if _, exists := seen[resolvedURL]; exists {
+					continue
+				}
+				seen[resolvedURL] = struct{}{}
+				out = append(out, resolvedURL)
 			}
 		}
 	}

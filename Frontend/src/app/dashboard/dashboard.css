@@ -3075,6 +3075,24 @@
   word-break: normal;
 }
 
+.workflow-data-link {
+  display: inline-block;
+  max-width: 100%;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+}
+
+.workflow-data-link:hover {
+  color: color-mix(in srgb, var(--accent) 80%, black 20%);
+}
+
 .workflow-data-empty {
   font-size: 0.8rem;
   color: var(--text-muted);
@@ -3124,6 +3142,18 @@
   hyphens: auto;
 }
 
+.workflow-data-chip-link {
+  max-width: min(100%, 280px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
+}
+
+.workflow-data-chip-link:hover {
+  text-decoration: underline;
+}
+
 .workflow-data-subgrid {
   display: grid;
   gap: 6px;
@@ -3151,6 +3181,28 @@
 .workflow-data-details {
   border-top: 1px dashed var(--border);
   padding-top: 6px;
+}
+
+.workflow-uploaded-files {
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.workflow-uploaded-files-title {
+  margin: 0;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.workflow-uploaded-files-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .workflow-data-details summary {
