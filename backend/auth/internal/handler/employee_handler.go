@@ -227,6 +227,8 @@ func (h *EmployeeHandler) InviteSingle(c *gin.Context) {
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrAccountExists):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		case errors.Is(err, service.ErrDuplicateInvite):
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		case errors.Is(err, service.ErrNotFound):

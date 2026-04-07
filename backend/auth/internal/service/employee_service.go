@@ -201,6 +201,18 @@ func (s *EmployeeService) ListInvitations(orgID string) ([]models.EmployeeInvita
 
 // RevokeInvitation marks a pending invitation as revoked.
 func (s *EmployeeService) RevokeInvitation(invitationID, orgID string) error {
+	var invitation models.EmployeeInvitation
+	if err := s.db.Where("id = ? AND organization_id = ? AND status = ?", invitationID, orgID, "pending").First(&invitation).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w: invitation %s not found or already processed", ErrNotFound, invitationID)
+		}
+		return fmt.Errorf("failed to load invitation for revoke: %w", err)
+	}
+
+	if err := ClerkRevokeOrgInvitationsByEmailFunc(s.clerkSecretKey, orgID, invitation.Email); err != nil {
+		return fmt.Errorf("failed to revoke Clerk invite link: %w", err)
+	}
+
 	result := s.db.Model(&models.EmployeeInvitation{}).
 		Where("id = ? AND organization_id = ? AND status = ?", invitationID, orgID, "pending").
 		Updates(map[string]interface{}{
@@ -213,6 +225,7 @@ func (s *EmployeeService) RevokeInvitation(invitationID, orgID string) error {
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("%w: invitation %s not found or already processed", ErrNotFound, invitationID)
 	}
+
 	log.Printf("Invitation %s revoked", invitationID)
 	return nil
 }

@@ -150,6 +150,10 @@ func TestListEmployees(t *testing.T) {
 		db := setupServiceTestDB(t)
 		svc := NewEmployeeService(db, "")
 
+		prevRevokeFn := ClerkRevokeOrgInvitationsByEmailFunc
+		ClerkRevokeOrgInvitationsByEmailFunc = func(_ string, _ string, _ string) error { return nil }
+		defer func() { ClerkRevokeOrgInvitationsByEmailFunc = prevRevokeFn }()
+
 		now := time.Now()
 		if err := db.Exec(`
 			INSERT INTO users (id, email, first_name, last_name, organization_id, is_active, created_at, updated_at)
@@ -309,6 +313,10 @@ func TestRevokeInvitation(t *testing.T) {
 		db := setupServiceTestDB(t)
 		svc := NewEmployeeService(db, "")
 
+		prevRevokeFn := ClerkRevokeOrgInvitationsByEmailFunc
+		ClerkRevokeOrgInvitationsByEmailFunc = func(_ string, _ string, _ string) error { return nil }
+		defer func() { ClerkRevokeOrgInvitationsByEmailFunc = prevRevokeFn }()
+
 		now := time.Now()
 		if err := db.Exec(`
 			INSERT INTO employee_invitations (
@@ -347,7 +355,7 @@ func TestRevokeInvitation(t *testing.T) {
 		db := setupEmptyServiceTestDB(t)
 		svc := NewEmployeeService(db, "")
 		err := svc.RevokeInvitation("inv_1", "org_1")
-		if err == nil || !strings.Contains(err.Error(), "failed to revoke invitation") {
+		if err == nil || !strings.Contains(err.Error(), "failed to load invitation for revoke") {
 			t.Fatalf("expected revoke db error, got %v", err)
 		}
 	})
@@ -443,8 +451,38 @@ func TestInviteAndNotify(t *testing.T) {
 			DepartmentID: "dept_1",
 			InvitedBy:    "admin",
 		})
-		if err == nil || !strings.Contains(err.Error(), "database lookup failed") {
+		if err == nil || !strings.Contains(err.Error(), "user lookup failed") {
 			t.Fatalf("expected database lookup error, got %v", err)
+		}
+	})
+
+	t.Run("existing account returns conflict error", func(t *testing.T) {
+		db := setupServiceTestDB(t)
+		svc := NewEmployeeService(db, "")
+
+		now := time.Now().UTC().Truncate(time.Second)
+		if err := db.Exec(`
+			INSERT INTO users (
+				id, email, first_name, last_name, organization_id, department_id,
+				is_admin, is_active, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, "user_exists", "exists@example.com", "Ex", "Ist", "org_1", "dept_1", false, true, now, now).Error; err != nil {
+			t.Fatalf("failed seeding existing user: %v", err)
+		}
+
+		_, err := svc.InviteAndNotify(InviteInput{
+			OrgID:        "org_1",
+			Email:        "exists@example.com",
+			FirstName:    "Ex",
+			LastName:     "Ist",
+			DepartmentID: "dept_1",
+			InvitedBy:    "admin",
+		})
+		if err == nil {
+			t.Fatal("expected existing account error")
+		}
+		if !errors.Is(err, ErrAccountExists) {
+			t.Fatalf("expected ErrAccountExists, got %v", err)
 		}
 	})
 

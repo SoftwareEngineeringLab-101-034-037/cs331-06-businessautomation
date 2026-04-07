@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -21,8 +22,10 @@ import (
 const clerkBaseURL = "https://api.clerk.com/v1"
 
 var (
-	ErrDuplicateInvite = errors.New("duplicate invitation")
-	ErrNotFound        = errors.New("not found")
+	ErrDuplicateInvite                   = errors.New("duplicate invitation")
+	ErrAccountExists                     = errors.New("account already exists")
+	ErrNotFound                          = errors.New("not found")
+	ClerkRevokeOrgInvitationsByEmailFunc = revokeClerkOrgInvitationsByEmail
 )
 
 // InviteInput holds the parameters for creating a single employee invitation.
@@ -43,8 +46,20 @@ type InviteResult struct {
 }
 
 func (s *EmployeeService) InviteAndNotify(input InviteInput) (*InviteResult, error) {
-	var existing models.EmployeeInvitation
+	var existingUser models.User
 	err := s.db.Where(
+		"organization_id = ? AND lower(email) = lower(?)",
+		input.OrgID, input.Email,
+	).First(&existingUser).Error
+	if err == nil {
+		return nil, fmt.Errorf("%w: employee account already exists for %s", ErrAccountExists, input.Email)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("user lookup failed for %s in org %s: %w", input.Email, input.OrgID, err)
+	}
+
+	var existing models.EmployeeInvitation
+	err = s.db.Where(
 		"email = ? AND organization_id = ? AND status = ?",
 		input.Email, input.OrgID, "pending",
 	).First(&existing).Error
@@ -133,6 +148,96 @@ func (s *EmployeeService) sendClerkOrgInvitation(orgID, email string) error {
 	}
 
 	return nil
+}
+
+type clerkOrgInvitation struct {
+	ID           string `json:"id"`
+	EmailAddress string `json:"email_address"`
+	Status       string `json:"status"`
+}
+
+func revokeClerkOrgInvitationsByEmail(clerkSecretKey, orgID, email string) error {
+	if clerkSecretKey == "" {
+		return fmt.Errorf("clerk secret key not configured")
+	}
+
+	listURL := fmt.Sprintf("%s/organizations/%s/invitations?limit=100", clerkBaseURL, orgID)
+	listReq, err := http.NewRequest(http.MethodGet, listURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create Clerk list-invitations request: %w", err)
+	}
+	listReq.Header.Set("Authorization", "Bearer "+clerkSecretKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	listResp, err := client.Do(listReq)
+	if err != nil {
+		return fmt.Errorf("clerk list invitations request failed: %w", err)
+	}
+	defer listResp.Body.Close()
+
+	if listResp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(listResp.Body)
+		return fmt.Errorf("clerk list invitations returned status %d: %s", listResp.StatusCode, string(respBody))
+	}
+
+	payload, err := io.ReadAll(listResp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read clerk invitations response: %w", err)
+	}
+
+	var invites []clerkOrgInvitation
+	if err := json.Unmarshal(payload, &invites); err != nil {
+		var wrapped struct {
+			Data []clerkOrgInvitation `json:"data"`
+		}
+		if err2 := json.Unmarshal(payload, &wrapped); err2 != nil {
+			return fmt.Errorf("failed to decode clerk invitations payload: %w", err)
+		}
+		invites = wrapped.Data
+	}
+
+	revokedCount := 0
+	for _, invitation := range invites {
+		if !strings.EqualFold(strings.TrimSpace(invitation.EmailAddress), strings.TrimSpace(email)) {
+			continue
+		}
+		if invitation.Status != "pending" && invitation.Status != "" {
+			continue
+		}
+
+		if err := revokeSingleClerkInvitation(client, clerkSecretKey, orgID, invitation.ID); err != nil {
+			return err
+		}
+		revokedCount++
+	}
+
+	if revokedCount == 0 {
+		return fmt.Errorf("no pending Clerk invitation found for %s in org %s", email, orgID)
+	}
+
+	return nil
+}
+
+func revokeSingleClerkInvitation(client *http.Client, clerkSecretKey, orgID, invitationID string) error {
+	revokeURL := fmt.Sprintf("%s/organizations/%s/invitations/%s/revoke", clerkBaseURL, orgID, invitationID)
+	req, err := http.NewRequest(http.MethodPost, revokeURL, bytes.NewBufferString("{}"))
+	if err != nil {
+		return fmt.Errorf("failed to create Clerk revoke request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+clerkSecretKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("clerk revoke invitation request failed: %w", err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode < 300 {
+		return nil
+	}
+
+	return fmt.Errorf("clerk revoke invitation %s returned status %d: %s", invitationID, resp.StatusCode, string(respBody))
 }
 
 // AcceptInvitationByEmail finds a pending invitation matching the email and

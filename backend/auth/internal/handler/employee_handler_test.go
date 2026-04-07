@@ -799,6 +799,9 @@ func newEmployeeHandlerForTest(t *testing.T) (*EmployeeHandler, *gorm.DB) {
 func newEmployeeHandlerForTestWithClerkSecret(t *testing.T, clerkSecret string) (*EmployeeHandler, *gorm.DB) {
 	t.Helper()
 	db := setupEmployeeHandlerTestDB(t)
+	prevRevokeFn := service.ClerkRevokeOrgInvitationsByEmailFunc
+	service.ClerkRevokeOrgInvitationsByEmailFunc = func(_ string, _ string, _ string) error { return nil }
+	t.Cleanup(func() { service.ClerkRevokeOrgInvitationsByEmailFunc = prevRevokeFn })
 	svc := service.NewEmployeeService(db, clerkSecret)
 	return NewEmployeeHandler(svc), db
 }

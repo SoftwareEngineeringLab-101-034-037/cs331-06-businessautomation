@@ -366,16 +366,12 @@ func (h *WebhookHandler) handleMembershipCreated(data json.RawMessage) error {
 	orgID := memberData.Organization.ID
 	isAdmin := memberData.IsAdmin()
 
-	updates := map[string]interface{}{
-		"organization_id": orgID,
-		"is_admin":        isAdmin,
-		"updated_at":      time.Now(),
-	}
-	if !isAdmin {
-		updates["department_id"] = nil
-	}
-
 	if isAdmin {
+		updates := map[string]interface{}{
+			"organization_id": orgID,
+			"is_admin":        true,
+			"updated_at":      time.Now(),
+		}
 		userLinked := false
 		err := database.DB.Transaction(func(tx *gorm.DB) error {
 			adminDeptID, err := ensureAdminDepartment(tx, orgID, userID)
@@ -403,6 +399,32 @@ func (h *WebhookHandler) handleMembershipCreated(data json.RawMessage) error {
 			return nil
 		}
 	} else {
+		var user models.User
+		if err := database.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				log.Printf("User %s not found for membership linking (user.created webhook may not have arrived yet)", userID)
+				h.enqueueUserReconciliation(userID, orgID, memberData.ID, "membership_created_user_missing")
+				return nil
+			}
+			log.Printf("Failed to load user %s for membership linking: %v", userID, err)
+			return err
+		}
+
+		if h.employeeService != nil {
+			if err := h.employeeService.AcceptInvitationByEmail(user.Email, orgID, userID); err != nil {
+				log.Printf("Ignoring non-admin membership without valid local invitation for user %s in org %s: %v", userID, orgID, err)
+				return nil
+			}
+			log.Printf("Membership created: user %s joined org %s via local invitation", userID, orgID)
+			return nil
+		}
+
+		updates := map[string]interface{}{
+			"organization_id": orgID,
+			"department_id":   nil,
+			"is_admin":        false,
+			"updated_at":      time.Now(),
+		}
 		result := database.DB.Model(&models.User{}).Where("id = ?", userID).Updates(updates)
 		if result.Error != nil {
 			log.Printf("Error updating user %s with org membership: %v", userID, result.Error)
@@ -413,24 +435,9 @@ func (h *WebhookHandler) handleMembershipCreated(data json.RawMessage) error {
 			h.enqueueUserReconciliation(userID, orgID, memberData.ID, "membership_created_user_missing")
 			return nil
 		}
-	}
 
-	// 2. Look up user's email to match against pending invitations
-	var user models.User
-	if err := database.DB.Where("id = ?", userID).First(&user).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			h.enqueueUserReconciliation(userID, orgID, memberData.ID, "membership_created_user_lookup_missing")
-			return nil
-		}
-		log.Printf("User %s not found for invitation matching: %v", userID, err)
+		log.Printf("Membership created: user %s joined org %s (fallback non-admin link)", userID, orgID)
 		return nil
-	}
-
-	// 3. Try to auto-accept a matching invitation (assigns department + role)
-	if h.employeeService != nil {
-		if err := h.employeeService.AcceptInvitationByEmail(user.Email, orgID, userID); err != nil {
-			log.Printf("Invitation auto-accept note: %v", err)
-		}
 	}
 
 	log.Printf("Membership created: user %s joined org %s (is_admin=%v)", userID, orgID, isAdmin)
@@ -486,22 +493,29 @@ func (h *WebhookHandler) handleInvitationAccepted(data json.RawMessage) error {
 			return err
 		}
 	} else {
-		updates := map[string]interface{}{
-			"organization_id": orgID,
-			"department_id":   nil,
-			"is_admin":        false,
-			"updated_at":      time.Now(),
-		}
-		if err := database.DB.Model(&models.User{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
-			log.Printf("Error updating user %s with org: %v", user.ID, err)
-			return err
-		}
-	}
-
-	// Auto-accept matching local employee invitation
-	if h.employeeService != nil {
-		if err := h.employeeService.AcceptInvitationByEmail(email, orgID, user.ID); err != nil {
-			log.Printf("Local invitation auto-accept note: %v", err)
+		if h.employeeService != nil {
+			if err := h.employeeService.AcceptInvitationByEmail(email, orgID, user.ID); err != nil {
+				log.Printf("Rejected invitation.accepted without valid local invitation for %s in org %s: %v", email, orgID, err)
+				if user.OrganizationID == nil || *user.OrganizationID == "" {
+					if delErr := database.DB.Where("id = ? AND (organization_id IS NULL OR organization_id = '')", user.ID).Delete(&models.User{}).Error; delErr != nil {
+						log.Printf("Failed to cleanup orphan user %s after rejected invitation.accepted: %v", user.ID, delErr)
+					} else {
+						log.Printf("Removed orphan user %s created from invalid/revoked invite acceptance", user.ID)
+					}
+				}
+				return nil
+			}
+		} else {
+			updates := map[string]interface{}{
+				"organization_id": orgID,
+				"department_id":   nil,
+				"is_admin":        false,
+				"updated_at":      time.Now(),
+			}
+			if err := database.DB.Model(&models.User{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
+				log.Printf("Error updating user %s with org: %v", user.ID, err)
+				return err
+			}
 		}
 	}
 
