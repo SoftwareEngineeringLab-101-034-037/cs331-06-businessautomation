@@ -49,11 +49,11 @@ func TestFormsAPIHelpers(t *testing.T) {
 			return jsonResponse(http.StatusOK, `{"files":[]}`), nil
 		case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/responses"):
 			if req.URL.Query().Get("pageToken") == "" {
-				return jsonResponse(http.StatusOK, `{"responses":[{"responseId":"resp_1","respondentEmail":"u@example.com","createTime":"2026-04-06T00:00:00Z","lastSubmittedTime":"2026-04-06T00:00:00Z","answers":{"q1":{"questionId":"q1","textAnswers":{"answers":[{"value":"yes"}]}}}}],"nextPageToken":"next"}`), nil
+				return jsonResponse(http.StatusOK, `{"responses":[{"responseId":"resp_1","respondentEmail":"u@example.com","createTime":"2026-04-06T00:00:00Z","lastSubmittedTime":"2026-04-06T00:00:00Z","answers":{"q1":{"questionId":"q1","textAnswers":{"answers":[{"value":"yes"}]}},"q_upload":{"questionId":"q_upload","fileUploadAnswers":{"answers":[{"fileId":"file_1","fileName":"resume.pdf","mimeType":"application/pdf"}]}}}}],"nextPageToken":"next"}`), nil
 			}
 			return jsonResponse(http.StatusOK, `{"responses":[]}`), nil
 		case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/responses/resp_1"):
-			return jsonResponse(http.StatusOK, `{"responseId":"resp_1","respondentEmail":"u@example.com","createTime":"2026-04-06T00:00:00Z","lastSubmittedTime":"2026-04-06T00:00:00Z","answers":{"q1":{"questionId":"q1","textAnswers":{"answers":[{"value":"yes"}]}}}}`), nil
+			return jsonResponse(http.StatusOK, `{"responseId":"resp_1","respondentEmail":"u@example.com","createTime":"2026-04-06T00:00:00Z","lastSubmittedTime":"2026-04-06T00:00:00Z","answers":{"q1":{"questionId":"q1","textAnswers":{"answers":[{"value":"yes"}]}},"q_upload":{"questionId":"q_upload","fileUploadAnswers":{"answers":[{"fileId":"file_1","fileName":"resume.pdf","mimeType":"application/pdf"}]}}}}`), nil
 		default:
 			return jsonResponse(http.StatusNotFound, `{}`), nil
 		}
@@ -92,6 +92,12 @@ func TestFormsAPIHelpers(t *testing.T) {
 	if len(responses) != 1 || responses[0].ResponseID != "resp_1" {
 		t.Fatalf("unexpected responses: %#v", responses)
 	}
+	if responses[0].RespondentEmail != "u@example.com" {
+		t.Fatalf("unexpected respondent email in list response: %#v", responses[0].RespondentEmail)
+	}
+	if responses[0].Answers["q_upload"].FileUploadAnswers == nil || len(responses[0].Answers["q_upload"].FileUploadAnswers.Answers) != 1 {
+		t.Fatalf("expected file upload answers in list response, got %#v", responses[0].Answers["q_upload"])
+	}
 
 	resp, err := GetResponse(client, "form_1", "resp_1")
 	if err != nil {
@@ -99,5 +105,11 @@ func TestFormsAPIHelpers(t *testing.T) {
 	}
 	if resp.ResponseID != "resp_1" || resp.Answers["q1"].TextAnswers.Answers[0].Value != "yes" {
 		t.Fatalf("unexpected response payload: %#v", resp)
+	}
+	if resp.RespondentEmail != "u@example.com" {
+		t.Fatalf("unexpected respondent email in single response: %#v", resp.RespondentEmail)
+	}
+	if resp.Answers["q_upload"].FileUploadAnswers == nil || len(resp.Answers["q_upload"].FileUploadAnswers.Answers) != 1 {
+		t.Fatalf("expected file upload answers in single response, got %#v", resp.Answers["q_upload"])
 	}
 }

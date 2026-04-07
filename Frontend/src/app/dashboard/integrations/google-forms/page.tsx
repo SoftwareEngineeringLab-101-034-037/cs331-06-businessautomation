@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 
-const GF_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
+const GF_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "";
 const GF_API_MISSING_ERROR = "NEXT_PUBLIC_INTEGRATIONS_API (or NEXT_PUBLIC_GOOGLE_FORMS_API) is not configured.";
 
 type IntegrationStatus = {
@@ -89,7 +89,7 @@ export default function GoogleFormsIntegrationPage() {
 
     try {
       const [statusRes, accountsRes] = await Promise.all([
-        authFetch(`${gfApiBase}/integrations/google_forms/status?org_id=${encodeURIComponent(organization.id)}`),
+        authFetch(`${gfApiBase}/integration/status?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
         authFetch(`${gfApiBase}/integration/accounts?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
       ]);
 

@@ -16,9 +16,9 @@ type FormResponse struct {
 }
 
 type Answer struct {
-	QuestionID         string             `json:"questionId"`
-	TextAnswers        *TextAnswers       `json:"textAnswers,omitempty"`
-	FileUploadAnswers  *FileUploadAnswers `json:"fileUploadAnswers,omitempty"`
+	QuestionID        string             `json:"questionId"`
+	TextAnswers       *TextAnswers       `json:"textAnswers,omitempty"`
+	FileUploadAnswers *FileUploadAnswers `json:"fileUploadAnswers,omitempty"`
 }
 
 type TextAnswers struct {

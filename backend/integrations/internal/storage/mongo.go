@@ -116,63 +116,50 @@ func (s *MongoStore) ensureIndexes(ctx context.Context) error {
 }
 
 func (s *MongoStore) SaveToken(ctx context.Context, token *models.OAuthToken) error {
-	if token.Provider == "" {
-		token.Provider = "google_forms"
-	}
-	if token.AccountID == "" {
-		token.AccountID = "primary"
-	}
+	token.Provider = normalizeTokenProvider(token.Provider)
+	token.AccountID = normalizeTokenAccountID(token.AccountID)
 	if token.IsPrimary {
 		if _, err := s.tokens.UpdateMany(ctx,
-			bson.M{"org_id": token.OrgID, "provider": token.Provider},
+			tokenProviderSelector(token.OrgID, token.Provider),
 			bson.M{"$set": bson.M{"is_primary": false}},
 		); err != nil {
 			return fmt.Errorf("demote existing primary tokens: %w", err)
 		}
 	}
 
-	filter := bson.M{"org_id": token.OrgID, "provider": token.Provider, "account_id": token.AccountID}
+	filter := tokenProviderAccountSelector(token.OrgID, token.Provider, token.AccountID)
 	update := bson.M{"$set": token}
 	_, err := s.tokens.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true))
 	return err
 }
 
 func (s *MongoStore) GetToken(ctx context.Context, orgID string) (*models.OAuthToken, error) {
-	filter := bson.M{
-		"org_id": orgID,
-		"$or": []bson.M{
-			{"provider": "google_forms"},
-			{"provider": bson.M{"$exists": false}},
-		},
-	}
+	filter := tokenProviderSelector(orgID, defaultWatchProvider)
 	var t models.OAuthToken
 	err := s.tokens.FindOne(ctx, filter, options.FindOne().SetSort(bson.D{{Key: "is_primary", Value: -1}, {Key: "connected_at", Value: -1}})).Decode(&t)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
 	s.normalizeTokenDefaults(ctx, &t)
-	return &t, err
+	return &t, nil
 }
 
 func (s *MongoStore) GetTokenByAccount(ctx context.Context, orgID, provider, accountID string) (*models.OAuthToken, error) {
-	conditions := []bson.M{{"org_id": orgID}, watchProviderFilter(provider)}
-	if accountID == "primary" {
-		conditions = append(conditions, bson.M{"$or": []bson.M{
-			{"account_id": accountID},
-			{"account_id": bson.M{"$exists": false}},
-		}})
-	} else {
-		conditions = append(conditions, bson.M{"account_id": accountID})
-	}
-	filter := bson.M{"$and": conditions}
+	filter := tokenProviderAccountSelector(orgID, provider, accountID)
 
 	var t models.OAuthToken
 	err := s.tokens.FindOne(ctx, filter).Decode(&t)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
 	s.normalizeTokenDefaults(ctx, &t)
-	return &t, err
+	return &t, nil
 }
 
 func (s *MongoStore) ListTokens(ctx context.Context, orgID, provider string) ([]*models.OAuthToken, error) {
@@ -203,37 +190,12 @@ func (s *MongoStore) ListTokens(ctx context.Context, orgID, provider string) ([]
 }
 
 func (s *MongoStore) DeleteToken(ctx context.Context, orgID string) error {
-	_, err := s.tokens.DeleteMany(ctx, bson.M{
-		"org_id": orgID,
-		"$or": []bson.M{
-			{"provider": "google_forms"},
-			{"provider": bson.M{"$exists": false}},
-		},
-	})
+	_, err := s.tokens.DeleteMany(ctx, tokenProviderSelector(orgID, defaultWatchProvider))
 	return err
 }
 
 func (s *MongoStore) DeleteTokenByAccount(ctx context.Context, orgID, provider, accountID string) error {
-	trimmedProvider := strings.TrimSpace(provider)
-	if trimmedProvider == "" {
-		trimmedProvider = defaultWatchProvider
-	}
-	trimmedAccountID := strings.TrimSpace(accountID)
-	if trimmedAccountID == "" {
-		trimmedAccountID = "primary"
-	}
-
-	conditions := []bson.M{{"org_id": orgID}, watchProviderFilter(trimmedProvider)}
-	if trimmedAccountID == "primary" {
-		conditions = append(conditions, bson.M{"$or": []bson.M{
-			{"account_id": "primary"},
-			{"account_id": bson.M{"$exists": false}},
-		}})
-	} else {
-		conditions = append(conditions, bson.M{"account_id": trimmedAccountID})
-	}
-
-	_, err := s.tokens.DeleteOne(ctx, bson.M{"$and": conditions})
+	_, err := s.tokens.DeleteOne(ctx, tokenProviderAccountSelector(orgID, provider, accountID))
 	return err
 }
 
@@ -430,6 +392,52 @@ func (s *MongoStore) normalizeTokenDefaults(ctx context.Context, tok *models.OAu
 	if len(update) > 0 {
 		_, _ = s.tokens.UpdateByID(ctx, tok.ID, bson.M{"$set": update})
 	}
+}
+
+func normalizeTokenProvider(provider string) string {
+	trimmed := strings.TrimSpace(provider)
+	if trimmed == "" {
+		return defaultWatchProvider
+	}
+	return trimmed
+}
+
+func normalizeTokenAccountID(accountID string) string {
+	trimmed := strings.TrimSpace(accountID)
+	if trimmed == "" {
+		return "primary"
+	}
+	return trimmed
+}
+
+func tokenProviderSelector(orgID, provider string) bson.M {
+	resolvedProvider := normalizeTokenProvider(provider)
+	return bson.M{"$and": []bson.M{
+		{"org_id": orgID},
+		{"$or": []bson.M{
+			{"provider": resolvedProvider},
+			{"provider": ""},
+			{"provider": bson.M{"$exists": false}},
+		}},
+	}}
+}
+
+func tokenProviderAccountSelector(orgID, provider, accountID string) bson.M {
+	resolvedProvider := normalizeTokenProvider(provider)
+	resolvedAccountID := normalizeTokenAccountID(accountID)
+	return bson.M{"$and": []bson.M{
+		{"org_id": orgID},
+		{"$or": []bson.M{
+			{"provider": resolvedProvider},
+			{"provider": ""},
+			{"provider": bson.M{"$exists": false}},
+		}},
+		{"$or": []bson.M{
+			{"account_id": resolvedAccountID},
+			{"account_id": ""},
+			{"account_id": bson.M{"$exists": false}},
+		}},
+	}}
 }
 
 func watchProviderFilter(provider string) bson.M {

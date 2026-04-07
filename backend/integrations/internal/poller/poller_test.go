@@ -19,7 +19,7 @@ func TestMapFieldsIncludesMappedAndEmail(t *testing.T) {
 	resp := googleapi.FormResponse{
 		RespondentEmail: "u@example.com",
 		Answers: map[string]googleapi.Answer{
-			"q1": {TextAnswers: &googleapi.TextAnswers{Answers: []googleapi.TextAnswer{{Value: "v1"}}}},
+			"q1":       {TextAnswers: &googleapi.TextAnswers{Answers: []googleapi.TextAnswer{{Value: "v1"}}}},
 			"q_upload": {FileUploadAnswers: &googleapi.FileUploadAnswers{Answers: []googleapi.FileUploadAnswer{{FileID: "abc123"}}}},
 		},
 	}

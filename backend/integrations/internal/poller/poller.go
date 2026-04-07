@@ -32,14 +32,16 @@ type Poller struct {
 }
 
 func New(store storage.Store, oauthSvc *oauth.Service, workflowURL, triggerPath, workflowKey string, intervalSeconds int) *Poller {
+	resolvedWorkflowURL := strings.TrimRight(strings.TrimSpace(workflowURL), "/")
 	resolvedTriggerPath := strings.TrimSpace(triggerPath)
 	if resolvedTriggerPath == "" {
 		resolvedTriggerPath = providergoogleforms.TriggerEventPath
 	}
+	resolvedTriggerPath = "/" + strings.Trim(resolvedTriggerPath, "/")
 	return &Poller{
 		store:       store,
 		oauthSvc:    oauthSvc,
-		workflowURL: workflowURL,
+		workflowURL: resolvedWorkflowURL,
 		triggerPath: resolvedTriggerPath,
 		workflowKey: workflowKey,
 		interval:    time.Duration(intervalSeconds) * time.Second,

@@ -345,15 +345,19 @@ func (h *Handler) createWatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(watch.Provider) == "" {
+	watch.Provider = strings.TrimSpace(watch.Provider)
+	watch.OrgID = strings.TrimSpace(watch.OrgID)
+	watch.FormID = strings.TrimSpace(watch.FormID)
+	watch.WorkflowID = strings.TrimSpace(watch.WorkflowID)
+	if watch.Provider == "" {
 		watch.Provider = h.provider.ID()
 	}
-	if strings.TrimSpace(watch.Provider) != h.provider.ID() {
+	if watch.Provider != h.provider.ID() {
 		writeError(w, http.StatusBadRequest, "provider mismatch")
 		return
 	}
 	if authorizedOrgID != "" {
-		if strings.TrimSpace(watch.OrgID) != "" && strings.TrimSpace(watch.OrgID) != authorizedOrgID {
+		if watch.OrgID != "" && watch.OrgID != authorizedOrgID {
 			writeError(w, http.StatusForbidden, "forbidden for org")
 			return
 		}
@@ -468,7 +472,31 @@ func (h *Handler) updateWatch(w http.ResponseWriter, r *http.Request, id string)
 		existing.FieldMapping = patch.FieldMapping
 	}
 	if patch.WorkflowID != "" {
-		existing.WorkflowID = patch.WorkflowID
+		trimmedWorkflowID := strings.TrimSpace(patch.WorkflowID)
+		if trimmedWorkflowID == "" {
+			writeError(w, http.StatusBadRequest, "workflow_id cannot be empty")
+			return
+		}
+		existing.WorkflowID = trimmedWorkflowID
+	}
+
+	existing.Provider = strings.TrimSpace(existing.Provider)
+	if existing.Provider == "" {
+		existing.Provider = h.provider.ID()
+	}
+	existing.OrgID = strings.TrimSpace(existing.OrgID)
+	existing.FormID = strings.TrimSpace(existing.FormID)
+	existing.WorkflowID = strings.TrimSpace(existing.WorkflowID)
+	if existing.Provider != h.provider.ID() {
+		writeError(w, http.StatusBadRequest, "provider mismatch")
+		return
+	}
+	if existing.FormID == "" || existing.WorkflowID == "" {
+		writeError(w, http.StatusBadRequest, "form_id and workflow_id are required")
+		return
+	}
+	if authorizedOrgID != "" {
+		existing.OrgID = authorizedOrgID
 	}
 
 	if err := h.store.UpdateWatch(r.Context(), existing); err != nil {
