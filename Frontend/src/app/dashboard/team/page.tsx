@@ -77,6 +77,26 @@ interface WorkflowTask {
   completed_at?: string;
 }
 
+interface BackendInvitation {
+  id: string;
+  organization_id: string;
+  department_id?: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  role_name?: string;
+  role_names?: unknown;
+  job_title?: string;
+  status: string;
+  invited_by?: string;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+  department?: BackendDepartment;
+}
+
+type TeamView = "employees" | "invites";
+
 function initials(first: string, last: string): string {
   return ((first?.[0] || "") + (last?.[0] || "")).toUpperCase() || "?";
 }
@@ -123,12 +143,36 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
 }
 
+function invitationRoleNames(invitation: BackendInvitation): string[] {
+  const raw = invitation.role_names;
+  if (Array.isArray(raw)) {
+    return uniqueStrings(raw.filter((value): value is string => typeof value === "string").map((value) => value.trim()));
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return uniqueStrings(parsed.filter((value): value is string => typeof value === "string").map((value) => value.trim()));
+      }
+    } catch {
+      const split = raw.split(",").map((value) => value.trim()).filter(Boolean);
+      if (split.length > 0) return uniqueStrings(split);
+    }
+  }
+  if (invitation.role_name) {
+    return [invitation.role_name];
+  }
+  return [];
+}
+
 export default function TeamPage() {
+  const [view, setView] = useState<TeamView>("employees");
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState<string>("all");
   const [showInvite, setShowInvite] = useState(false);
 
   const [employees, setEmployees] = useState<BackendUser[]>([]);
+  const [invitations, setInvitations] = useState<BackendInvitation[]>([]);
   const [roles, setRoles] = useState<BackendRoleSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -146,6 +190,9 @@ export default function TeamPage() {
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
   const [removeConfirmText, setRemoveConfirmText] = useState("");
   const [removeLoading, setRemoveLoading] = useState(false);
+  const [selectedInviteID, setSelectedInviteID] = useState<string | null>(null);
+  const [inviteActionLoading, setInviteActionLoading] = useState(false);
+  const [inviteActionError, setInviteActionError] = useState<string | null>(null);
 
   const { getToken, userId } = useAuth();
   const { organization } = useOrganization();
@@ -163,28 +210,31 @@ export default function TeamPage() {
     });
   }, [getToken]);
 
-  const fetchEmployeesAndRoles = useCallback(async () => {
+  const fetchTeamData = useCallback(async () => {
     if (!organization?.id) return;
     setLoading(true);
     setError(null);
 
     try {
-      const [employeeRes, roleRes] = await Promise.all([
+      const [employeeRes, roleRes, invitationRes] = await Promise.all([
         authorizedFetch(`${AUTH_API}/api/orgs/${organization.id}/employees`),
         authorizedFetch(`${AUTH_API}/api/orgs/${organization.id}/roles`),
+        authorizedFetch(`${AUTH_API}/api/orgs/${organization.id}/invitations`),
       ]);
 
-      if (!employeeRes.ok || !roleRes.ok) {
-        throw new Error(`Failed to load team data (${employeeRes.status}/${roleRes.status})`);
+      if (!employeeRes.ok || !roleRes.ok || !invitationRes.ok) {
+        throw new Error(`Failed to load team data (${employeeRes.status}/${roleRes.status}/${invitationRes.status})`);
       }
 
-      const [employeeData, roleData] = await Promise.all([
+      const [employeeData, roleData, invitationData] = await Promise.all([
         employeeRes.json() as Promise<BackendUser[]>,
         roleRes.json() as Promise<BackendRoleSummary[]>,
+        invitationRes.json() as Promise<BackendInvitation[]>,
       ]);
 
       setEmployees(Array.isArray(employeeData) ? employeeData : []);
       setRoles(Array.isArray(roleData) ? roleData : []);
+      setInvitations(Array.isArray(invitationData) ? invitationData : []);
     } catch (fetchError) {
       console.error("Failed to load team data:", fetchError);
       setError(normalizeError(fetchError, "Could not reach auth service"));
@@ -194,8 +244,8 @@ export default function TeamPage() {
   }, [organization?.id, authorizedFetch]);
 
   useEffect(() => {
-    fetchEmployeesAndRoles();
-  }, [fetchEmployeesAndRoles]);
+    fetchTeamData();
+  }, [fetchTeamData]);
 
   const roleAssignmentsByUser = useMemo(() => {
     const assignments = new Map<string, BackendRoleSummary[]>();
@@ -210,12 +260,15 @@ export default function TeamPage() {
     return assignments;
   }, [roles]);
 
-  const departments = useMemo(
-    () => [...new Set(employees.map((employee) => employee.department?.name).filter(Boolean) as string[])].sort(),
-    [employees]
-  );
+  const departments = useMemo(() => {
+    const values = [
+      ...employees.map((employee) => employee.department?.name || "").filter(Boolean),
+      ...invitations.map((invitation) => invitation.department?.name || "").filter(Boolean),
+    ];
+    return [...new Set(values)].sort();
+  }, [employees, invitations]);
 
-  const filtered = useMemo(() => {
+  const filteredEmployees = useMemo(() => {
     return employees.filter((employee) => {
       const deptName = employee.department?.name || "";
       if (deptFilter !== "all" && deptName !== deptFilter) return false;
@@ -227,34 +280,44 @@ export default function TeamPage() {
   }, [employees, deptFilter, search]);
 
   const orderedMembers = useMemo(() => {
-    return [...filtered].sort((left, right) => {
+    return [...filteredEmployees].sort((left, right) => {
       const leftIsYou = left.id === userId;
       const rightIsYou = right.id === userId;
       if (leftIsYou && !rightIsYou) return -1;
       if (!leftIsYou && rightIsYou) return 1;
       return `${left.first_name} ${left.last_name}`.localeCompare(`${right.first_name} ${right.last_name}`);
     });
-  }, [filtered, userId]);
+  }, [filteredEmployees, userId]);
+
+  const filteredInvitations = useMemo(() => {
+    return invitations.filter((invitation) => {
+      const deptName = invitation.department?.name || "";
+      if (deptFilter !== "all" && deptName !== deptFilter) return false;
+      if (!search) return true;
+      const query = search.toLowerCase();
+      const fullName = `${invitation.first_name} ${invitation.last_name}`.toLowerCase();
+      return fullName.includes(query) || invitation.email.toLowerCase().includes(query);
+    });
+  }, [invitations, deptFilter, search]);
+
+  const orderedInvitations = useMemo(() => {
+    return [...filteredInvitations].sort((left, right) => {
+      return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+    });
+  }, [filteredInvitations]);
 
   const totalMembers = employees.length;
   const activeMembers = employees.filter((employee) => employee.is_active).length;
   const unassignedMembers = employees.filter((employee) => !employee.department?.name).length;
 
-  const deptBreakdown = useMemo(() => {
-    const map = new Map<string, { count: number; active: number }>();
-    employees.forEach((employee) => {
-      const departmentName = employee.department?.name || "Unassigned";
-      const entry = map.get(departmentName) || { count: 0, active: 0 };
-      entry.count += 1;
-      if (employee.is_active) entry.active += 1;
-      map.set(departmentName, entry);
-    });
-    return Array.from(map.entries()).map(([dept, data]) => ({ dept, ...data }));
-  }, [employees]);
-
   const selectedEmployee = useMemo(
     () => employees.find((employee) => employee.id === selectedEmployeeID) || null,
     [employees, selectedEmployeeID]
+  );
+
+  const selectedInvitation = useMemo(
+    () => invitations.find((invitation) => invitation.id === selectedInviteID) || null,
+    [invitations, selectedInviteID]
   );
 
   const selectedEmployeeRoles = useMemo(
@@ -306,6 +369,34 @@ export default function TeamPage() {
       setSelectedEmployeeID(null);
     }
   }, [selectedEmployee, selectedEmployeeID]);
+
+  useEffect(() => {
+    if (selectedInviteID && !selectedInvitation) {
+      setSelectedInviteID(null);
+      setInviteActionError(null);
+      setInviteActionLoading(false);
+    }
+  }, [selectedInvitation, selectedInviteID]);
+
+  useEffect(() => {
+    setSearch("");
+    setDeptFilter("all");
+    setInviteActionError(null);
+    setMemberMenuOpen(false);
+    setShowRemoveConfirm(false);
+    setRemoveConfirmText("");
+    if (view === "employees") {
+      setSelectedInviteID(null);
+    } else {
+      setSelectedEmployeeID(null);
+      setSelectedRoleIDs([]);
+      setRoleSaveError(null);
+      setRoleSaveSuccess(null);
+      setTasks([]);
+      setTaskError(null);
+      setTaskLoading(false);
+    }
+  }, [view]);
 
   useEffect(() => {
     setMemberMenuOpen(false);
@@ -397,6 +488,7 @@ export default function TeamPage() {
   }, [selectedEmployeeID, selectedEmployeeRoles, organization?.id, authorizedFetch]);
 
   const openEmployeeDrawer = useCallback((employeeID: string) => {
+    setSelectedInviteID(null);
     setSelectedEmployeeID(employeeID);
   }, []);
 
@@ -406,6 +498,18 @@ export default function TeamPage() {
     setRoleSaveError(null);
     setRoleSaveSuccess(null);
   }, [closeRemoveConfirm]);
+
+  const openInviteDrawer = useCallback((invitationID: string) => {
+    setSelectedEmployeeID(null);
+    setSelectedInviteID(invitationID);
+    setInviteActionError(null);
+  }, []);
+
+  const closeInviteDrawer = useCallback(() => {
+    if (inviteActionLoading) return;
+    setSelectedInviteID(null);
+    setInviteActionError(null);
+  }, [inviteActionLoading]);
 
   const addRoleToDraft = useCallback((roleID: string) => {
     if (!roleID) return;
@@ -465,21 +569,21 @@ export default function TeamPage() {
         }
       }));
 
-      await fetchEmployeesAndRoles();
+      await fetchTeamData();
       setRoleSaveSuccess("Workflow roles updated for this employee.");
     } catch (saveError) {
       setRoleSaveError(normalizeError(saveError, "Failed to update employee roles"));
     } finally {
       setRoleSaving(false);
     }
-  }, [organization?.id, selectedEmployeeID, selectedRoleIDs, roles, authorizedFetch, fetchEmployeesAndRoles]);
+  }, [organization?.id, selectedEmployeeID, selectedRoleIDs, roles, authorizedFetch, fetchTeamData]);
 
   const handleInviteResult = useCallback((message: string, type: "success" | "error") => {
     showToast(message, type);
     if (type === "success") {
-      void fetchEmployeesAndRoles();
+      void fetchTeamData();
     }
-  }, [showToast, fetchEmployeesAndRoles]);
+  }, [showToast, fetchTeamData]);
 
   const canRemoveSelectedMember = !!selectedEmployee && !selectedEmployee.is_admin && selectedEmployee.id !== userId;
 
@@ -501,13 +605,35 @@ export default function TeamPage() {
       closeRemoveConfirm();
       setMemberMenuOpen(false);
       closeEmployeeDrawer();
-      await fetchEmployeesAndRoles();
+      await fetchTeamData();
     } catch (removeError) {
       showToast(normalizeError(removeError, "Failed to remove member"), "error");
     } finally {
       setRemoveLoading(false);
     }
-  }, [organization?.id, selectedEmployee, canRemoveSelectedMember, removeConfirmText, authorizedFetch, showToast, closeRemoveConfirm, closeEmployeeDrawer, fetchEmployeesAndRoles]);
+  }, [organization?.id, selectedEmployee, canRemoveSelectedMember, removeConfirmText, authorizedFetch, showToast, closeRemoveConfirm, closeEmployeeDrawer, fetchTeamData]);
+
+  const revokeSelectedInvitation = useCallback(async () => {
+    if (!organization?.id || !selectedInvitation) return;
+    setInviteActionLoading(true);
+    setInviteActionError(null);
+    try {
+      const res = await authorizedFetch(`${AUTH_API}/api/orgs/${organization.id}/invitations/${selectedInvitation.id}`, {
+        method: "DELETE",
+      });
+      const payload = await res.json().catch(() => ({} as { error?: string; message?: string }));
+      if (!res.ok) {
+        throw new Error(payload.error || `Failed to revoke invitation (${res.status})`);
+      }
+      showToast(payload.message || "Invitation revoked.", "success");
+      closeInviteDrawer();
+      await fetchTeamData();
+    } catch (revokeError) {
+      setInviteActionError(normalizeError(revokeError, "Failed to revoke invitation"));
+    } finally {
+      setInviteActionLoading(false);
+    }
+  }, [organization?.id, selectedInvitation, authorizedFetch, showToast, closeInviteDrawer, fetchTeamData]);
 
   return (
     <RoleGate
@@ -598,6 +724,27 @@ export default function TeamPage() {
           </div>
         </div>
 
+        <div className="team-view-tabs" role="tablist" aria-label="Team views">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "employees"}
+            className={`team-view-tab ${view === "employees" ? "active" : ""}`}
+            onClick={() => setView("employees")}
+          >
+            Employees ({employees.length})
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "invites"}
+            className={`team-view-tab ${view === "invites" ? "active" : ""}`}
+            onClick={() => setView("invites")}
+          >
+            Invites ({invitations.length})
+          </button>
+        </div>
+
         <div className="filters-bar" style={{ marginBottom: 16 }}>
           <div className="filter-search">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
@@ -624,25 +771,25 @@ export default function TeamPage() {
               ))}
             </select>
           </div>
-          <button className="action-btn action-btn-outline action-btn-sm" onClick={fetchEmployeesAndRoles} style={{ marginLeft: "auto" }}>
+          <button className="action-btn action-btn-outline action-btn-sm" onClick={fetchTeamData} style={{ marginLeft: "auto" }}>
             Refresh
           </button>
         </div>
 
         {loading && (
           <div className="empty-state" style={{ padding: "40px 0" }}>
-            <p className="table-muted">Loading team members…</p>
+            <p className="table-muted">{view === "employees" ? "Loading team members…" : "Loading invitations…"}</p>
           </div>
         )}
 
         {error && !loading && (
           <div className="empty-state" style={{ padding: "40px 0" }}>
             <p style={{ color: "#ef4444" }}>⚠ {error}</p>
-            <button className="action-btn action-btn-outline action-btn-sm" style={{ marginTop: 12 }} onClick={fetchEmployeesAndRoles}>Retry</button>
+            <button className="action-btn action-btn-outline action-btn-sm" style={{ marginTop: 12 }} onClick={fetchTeamData}>Retry</button>
           </div>
         )}
 
-        {!loading && !error && (
+        {!loading && !error && view === "employees" && (
           <div className="obs-team-grid">
             {orderedMembers.map((member) => {
               const memberRoles = roleAssignmentsByUser.get(member.id) || [];
@@ -663,16 +810,12 @@ export default function TeamPage() {
                 >
                   {isYou && <span className="obs-you-badge">You</span>}
                   <div className="obs-team-card-top">
-                    <div className="obs-team-avatar">
-                      {initials(member.first_name, member.last_name)}
-                    </div>
+                    <div className="obs-team-avatar">{initials(member.first_name, member.last_name)}</div>
                     <div className="obs-team-info">
                       <h4 className="obs-team-name">{member.first_name} {member.last_name}</h4>
                       <p className="obs-team-email">{member.email}</p>
                     </div>
-                    <span className={`status-dot ${member.is_active ? "active" : "inactive"}`}>
-                      {member.is_active ? "Active" : "Inactive"}
-                    </span>
+                    <span className={`status-dot ${member.is_active ? "active" : "inactive"}`}>{member.is_active ? "Active" : "Inactive"}</span>
                   </div>
 
                   <div className="obs-team-details">
@@ -686,18 +829,16 @@ export default function TeamPage() {
                     </div>
                   </div>
 
-                  {member.job_title && (
-                    <div className="obs-team-details">
-                      <div className="obs-team-detail">
-                        <span className="obs-team-detail-label">Job Title</span>
-                        <span className="obs-team-detail-value">{member.job_title}</span>
-                      </div>
-                      <div className="obs-team-detail">
-                        <span className="obs-team-detail-label">Workflow Roles</span>
-                        <span className="obs-team-detail-value">{memberRoles.length}</span>
-                      </div>
+                  <div className="obs-team-details">
+                    <div className="obs-team-detail">
+                      <span className="obs-team-detail-label">Job Title</span>
+                      <span className="obs-team-detail-value">{member.job_title || "—"}</span>
                     </div>
-                  )}
+                    <div className="obs-team-detail">
+                      <span className="obs-team-detail-label">Workflow Roles</span>
+                      <span className="obs-team-detail-value">{memberRoles.length}</span>
+                    </div>
+                  </div>
 
                   <div className="obs-team-role-list">
                     {memberRoles.length > 0 ? (
@@ -705,25 +846,96 @@ export default function TeamPage() {
                         {memberRoles.slice(0, 2).map((role) => (
                           <span key={role.id} className="obs-role-chip">{workflowRoleLabel(role)}</span>
                         ))}
-                        {memberRoles.length > 2 && (
-                          <span className="obs-role-chip obs-role-chip-count">+{memberRoles.length - 2} more</span>
-                        )}
+                        {memberRoles.length > 2 && <span className="obs-role-chip obs-role-chip-count">+{memberRoles.length - 2} more</span>}
                       </>
                     ) : (
                       <span className="obs-role-chip obs-role-chip-muted">No workflow roles</span>
                     )}
                   </div>
-
                 </div>
               );
             })}
           </div>
         )}
 
-        {!loading && !error && filtered.length === 0 && (
+        {!loading && !error && view === "invites" && (
+          <div className="obs-team-grid">
+            {orderedInvitations.map((invitation) => {
+              const inviteRoles = invitationRoleNames(invitation);
+              return (
+                <div
+                  key={invitation.id}
+                  className="obs-team-card obs-team-card-interactive"
+                  onClick={() => openInviteDrawer(invitation.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      openInviteDrawer(invitation.id);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <div className="obs-team-card-top">
+                    <div className="obs-team-avatar">{initials(invitation.first_name, invitation.last_name)}</div>
+                    <div className="obs-team-info">
+                      <h4 className="obs-team-name">{invitation.first_name} {invitation.last_name}</h4>
+                      <p className="obs-team-email">{invitation.email}</p>
+                    </div>
+                    <span className="status-dot pending">Pending</span>
+                  </div>
+
+                  <div className="obs-team-details">
+                    <div className="obs-team-detail">
+                      <span className="obs-team-detail-label">Department</span>
+                      <span className="obs-team-detail-value">{invitation.department?.name || "—"}</span>
+                    </div>
+                    <div className="obs-team-detail">
+                      <span className="obs-team-detail-label">Invited</span>
+                      <span className="obs-team-detail-value">{formatDateTime(invitation.created_at)}</span>
+                    </div>
+                  </div>
+
+                  <div className="obs-team-details">
+                    <div className="obs-team-detail">
+                      <span className="obs-team-detail-label">Expires</span>
+                      <span className="obs-team-detail-value">{formatDateTime(invitation.expires_at)}</span>
+                    </div>
+                    <div className="obs-team-detail">
+                      <span className="obs-team-detail-label">Job Title</span>
+                      <span className="obs-team-detail-value">{invitation.job_title || "—"}</span>
+                    </div>
+                  </div>
+
+                  <div className="obs-team-role-list">
+                    {inviteRoles.length > 0 ? (
+                      <>
+                        {inviteRoles.slice(0, 2).map((roleName) => (
+                          <span key={`${invitation.id}-${roleName}`} className="obs-role-chip">{roleName}</span>
+                        ))}
+                        {inviteRoles.length > 2 && <span className="obs-role-chip obs-role-chip-count">+{inviteRoles.length - 2} more</span>}
+                      </>
+                    ) : (
+                      <span className="obs-role-chip obs-role-chip-muted">No workflow roles</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {!loading && !error && view === "employees" && filteredEmployees.length === 0 && (
           <div className="empty-state">
             <h3>No team members found</h3>
             <p>{employees.length === 0 ? "Invite employees to get started." : "Try adjusting your search or department filter."}</p>
+          </div>
+        )}
+
+        {!loading && !error && view === "invites" && filteredInvitations.length === 0 && (
+          <div className="empty-state">
+            <h3>No invitations found</h3>
+            <p>{invitations.length === 0 ? "No pending invites right now." : "Try adjusting your search or department filter."}</p>
           </div>
         )}
       </div>
@@ -927,6 +1139,93 @@ export default function TeamPage() {
                     ))}
                   </div>
                 )}
+              </section>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {selectedInvitation && (
+        <div className="drawer-overlay" onClick={closeInviteDrawer}>
+          <aside className="drawer-panel employee-drawer-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="drawer-header employee-drawer-header">
+              <div className="employee-drawer-identity">
+                <div className="employee-drawer-avatar">{initials(selectedInvitation.first_name, selectedInvitation.last_name)}</div>
+                <div className="employee-drawer-meta">
+                  <div className="employee-drawer-title-row">
+                    <h3 className="drawer-task-title">{selectedInvitation.first_name} {selectedInvitation.last_name}</h3>
+                    <span className="status-dot pending">Pending</span>
+                  </div>
+                  <p className="employee-drawer-subtitle">{selectedInvitation.email}</p>
+                  <div className="employee-drawer-badges">
+                    <span className="employee-id-pill">Invite {selectedInvitation.id}</span>
+                    <span className="role-badge">Status pending</span>
+                  </div>
+                </div>
+              </div>
+              <button className="drawer-close-btn" onClick={closeInviteDrawer} aria-label="Close invitation details">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="18" height="18">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="drawer-body">
+              <section className="drawer-section">
+                <h4 className="drawer-section-title">Invitation Overview</h4>
+                <dl className="drawer-info-grid">
+                  <div className="detail-info-item">
+                    <dt>Email</dt>
+                    <dd>{selectedInvitation.email}</dd>
+                  </div>
+                  <div className="detail-info-item">
+                    <dt>Department</dt>
+                    <dd>{selectedInvitation.department?.name || "Unassigned"}</dd>
+                  </div>
+                  <div className="detail-info-item">
+                    <dt>Job Title</dt>
+                    <dd>{selectedInvitation.job_title || "—"}</dd>
+                  </div>
+                  <div className="detail-info-item">
+                    <dt>Invited By</dt>
+                    <dd>{selectedInvitation.invited_by || "—"}</dd>
+                  </div>
+                  <div className="detail-info-item">
+                    <dt>Created</dt>
+                    <dd>{formatDateTime(selectedInvitation.created_at)}</dd>
+                  </div>
+                  <div className="detail-info-item">
+                    <dt>Expires</dt>
+                    <dd>{formatDateTime(selectedInvitation.expires_at)}</dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section className="drawer-section">
+                <h4 className="drawer-section-title">Workflow Role Tags</h4>
+                <div className="obs-team-role-list">
+                  {invitationRoleNames(selectedInvitation).length > 0 ? (
+                    invitationRoleNames(selectedInvitation).map((roleName) => (
+                      <span key={`${selectedInvitation.id}-drawer-${roleName}`} className="obs-role-chip">{roleName}</span>
+                    ))
+                  ) : (
+                    <span className="obs-role-chip obs-role-chip-muted">No workflow roles</span>
+                  )}
+                </div>
+              </section>
+
+              <section className="drawer-section">
+                {inviteActionError && <div className="employee-inline-feedback error">{inviteActionError}</div>}
+                <div className="employee-drawer-actions">
+                  <button
+                    type="button"
+                    className="action-btn action-btn-danger"
+                    onClick={revokeSelectedInvitation}
+                    disabled={inviteActionLoading}
+                  >
+                    {inviteActionLoading ? "Revoking..." : "Revoke Invitation"}
+                  </button>
+                </div>
               </section>
             </div>
           </aside>

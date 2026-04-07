@@ -2,7 +2,7 @@
 
 import { memo, Fragment } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import type { WorkflowStep } from "@/types/workflow";
+import type { WorkflowStep, WorkflowTrigger } from "@/types/workflow";
 import { NODE_TYPE_CONFIG, STEP_ACTION_CONFIG, TASK_ACTION_OPTIONS, CONNECTOR_CONFIG } from "@/types/workflow";
 
 export type FlowNodeData = WorkflowStep & {
@@ -10,6 +10,10 @@ export type FlowNodeData = WorkflowStep & {
   onDelete?: () => void;
   /** Source handle IDs that already have an outgoing edge — used to hide handle labels */
   connectedHandles?: string[];
+  /** Trigger info for start nodes */
+  trigger?: WorkflowTrigger;
+  /** Callback when start node is clicked */
+  onConfigureTrigger?: () => void;
 };
 
 /* ─── Reusable node delete button ─── */
@@ -30,8 +34,17 @@ function NodeDeleteBtn({ onDelete }: { onDelete: () => void }) {
    ─────────────────────────────────────────────────────── */
 export const StartNode = memo(function StartNode({ data }: NodeProps) {
   const d = data as unknown as FlowNodeData;
+  
   return (
-    <div className="rf-node rf-node-start">
+    <div 
+      className="rf-node rf-node-start" 
+      onClick={(e) => {
+        e.stopPropagation();
+        d.onConfigureTrigger?.();
+      }}
+      title="Configure trigger"
+      style={{ cursor: d.onConfigureTrigger ? "pointer" : "default" }}
+    >
       <div className="rf-node-icon">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="#fff" width="20" height="20">
           <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />

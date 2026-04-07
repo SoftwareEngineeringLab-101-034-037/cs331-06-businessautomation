@@ -345,6 +345,15 @@
   color: var(--text-muted);
 }
 
+.status-dot.pending {
+  color: #d97706;
+}
+
+.status-dot.pending::before {
+  background: #d97706;
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.2);
+}
+
 .status-dot.draft {
   color: #a78bfa;
 }
@@ -2155,6 +2164,46 @@
 .team-observatory .obs-metrics-row {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
+}
+
+.team-view-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 10px 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.team-view-tab {
+  position: relative;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 0;
+  padding: 10px 14px 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 0.18s ease;
+}
+
+.team-view-tab:hover {
+  color: var(--text-primary);
+}
+
+.team-view-tab.active {
+  color: var(--text-primary);
+}
+
+.team-view-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
 }
 
 .team-observatory .obs-metric-card {
@@ -6984,18 +7033,25 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 12px 20px;
-  min-width: 90px;
-  max-width: 140px;
+  gap: 8px;
+  padding: 14px 22px;
+  min-width: 112px;
+  max-width: 160px;
   border-radius: 50px;
   text-align: center;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.14);
+  transition: transform 140ms ease, box-shadow 140ms ease;
 }
 
 .rf-node-start {
   background: linear-gradient(135deg, #22c55e, #16a34a);
   border-color: #16a34a;
   color: #fff;
+}
+
+.rf-node-start:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(22, 163, 74, 0.3);
 }
 
 .rf-node-end {
@@ -7022,7 +7078,7 @@
   font-size: 0.78rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
 }
 
 /* ── Task & Action Nodes ── */
@@ -7918,6 +7974,16 @@
 
   .team-observatory .team-dept-inline-meta {
     white-space: normal;
+  }
+
+  .team-view-tabs {
+    display: flex;
+    width: 100%;
+  }
+
+  .team-view-tab {
+    flex: 1;
+    text-align: center;
   }
 
   .employee-drawer-identity {

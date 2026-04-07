@@ -50,6 +50,17 @@ const INITIAL_FORM: SingleFormData = {
   job_title: "",
 };
 
+function isValidExcelFile(candidate: File | null | undefined): candidate is File {
+  if (!candidate) return false;
+  const name = candidate.name.toLowerCase();
+  const extOK = name.endsWith(".xlsx") || name.endsWith(".xls");
+  const mime = (candidate.type || "").toLowerCase();
+  const mimeOK = mime === "" ||
+    mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    mime === "application/vnd.ms-excel";
+  return extOK && mimeOK;
+}
+
 export default function InviteDialog({ isOpen, onClose, onResult }: InviteDialogProps) {
   const [tab, setTab] = useState<InviteTab>("single");
   const [form, setForm] = useState<SingleFormData>(INITIAL_FORM);
@@ -206,6 +217,11 @@ export default function InviteDialog({ isOpen, onClose, onResult }: InviteDialog
       onResult("Please select an Excel file first.", "error");
       return;
     }
+    if (!isValidExcelFile(file)) {
+      setFile(null);
+      onResult("Please select a valid Excel file.", "error");
+      return;
+    }
     if (!organization?.id) {
       onResult("No organisation selected.", "error");
       return;
@@ -272,17 +288,25 @@ export default function InviteDialog({ isOpen, onClose, onResult }: InviteDialog
     e.preventDefault();
     setDragOver(false);
     const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile && (droppedFile.name.endsWith(".xlsx") || droppedFile.name.endsWith(".xls"))) {
+    if (isValidExcelFile(droppedFile)) {
       setFile(droppedFile);
     } else {
+      setFile(null);
       onResult("Please upload a valid Excel file (.xlsx or .xls).", "error");
     }
   };
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
-    if (selected) {
-      setFile(selected);
+    if (!selected) {
+      return;
     }
+    if (isValidExcelFile(selected)) {
+      setFile(selected);
+      return;
+    }
+    setFile(null);
+    onResult("Please select a valid Excel file.", "error");
+    e.currentTarget.value = "";
   };
 
   if (!isOpen) return null;

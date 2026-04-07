@@ -21,7 +21,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import type { WorkflowStep, WorkflowEdge, NodeType } from "@/types/workflow";
+import type { WorkflowStep, WorkflowEdge, WorkflowTrigger, NodeType } from "@/types/workflow";
 import { NODE_TYPE_CONFIG } from "@/types/workflow";
 import { nodeTypes, type FlowNodeData } from "./FlowNodes";
 
@@ -134,6 +134,8 @@ export interface WorkflowCanvasProps {
   onConnect: (connection: Connection) => void;
   onDeleteStep: (id: string) => void;
   onDeleteEdge: (id: string) => void;
+  trigger?: WorkflowTrigger;
+  onConfigureTrigger?: () => void;
 }
 
 /* ─── Helpers ─── */
@@ -142,6 +144,8 @@ function stepsToFlowNodes(
   edges: WorkflowEdge[],
   selectedId: string | null,
   onDeleteStep: (id: string) => void,
+  trigger?: WorkflowTrigger,
+  onConfigureTrigger?: () => void,
 ): Node[] {
   // Build per-node set of source handles that already have an outgoing edge
   const connectedSrc = new Map<string, Set<string>>();
@@ -162,6 +166,7 @@ function stepsToFlowNodes(
         selected: s.id === selectedId,
         onDelete: deletable ? () => onDeleteStep(s.id) : undefined,
         connectedHandles: Array.from(connectedSrc.get(s.id) ?? []),
+        ...(s.type === "start" && { trigger, onConfigureTrigger }),
       } as unknown as Record<string, unknown>,
       selected: s.id === selectedId,
     };
@@ -204,14 +209,16 @@ export default function WorkflowCanvas({
   onConnect,
   onDeleteStep,
   onDeleteEdge,
+  trigger,
+  onConfigureTrigger,
 }: WorkflowCanvasProps) {
   /* Track which edge is "selected" locally — avoids the problem
      of the controlled-rerender resetting RF internal selection. */
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
   const flowNodes = useMemo(
-    () => stepsToFlowNodes(steps, edges, selectedStepId, onDeleteStep),
-    [steps, edges, selectedStepId, onDeleteStep],
+    () => stepsToFlowNodes(steps, edges, selectedStepId, onDeleteStep, trigger, onConfigureTrigger),
+    [steps, edges, selectedStepId, onDeleteStep, trigger, onConfigureTrigger],
   );
   const flowEdges = useMemo(
     () => edgesToFlowEdges(edges, selectedEdgeId, onDeleteEdge),
@@ -220,6 +227,12 @@ export default function WorkflowCanvas({
 
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
+      const nodeData = node.data as unknown as FlowNodeData | undefined;
+      if (node.type === "start") {
+        nodeData?.onConfigureTrigger?.();
+        setSelectedEdgeId(null);
+        return;
+      }
       onSelectStep(node.id);
       setSelectedEdgeId(null);
     },

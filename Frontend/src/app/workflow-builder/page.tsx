@@ -1729,14 +1729,6 @@ export default function WorkflowBuilderPage() {
                     </div>
                   )}
                 </div>
-
-                {/* Trigger config shortcut */}
-                <div className="wf-field">
-                  <label className="wf-field-label">Trigger</label>
-                  <button className="action-btn action-btn-outline" style={{ width: "100%" }} onClick={() => setSelectedId("__trigger__")}>
-                    Configure Trigger ({draft.trigger.type.replace(/_/g, " ")})
-                  </button>
-                </div>
               </div>
             </aside>
 
@@ -1772,6 +1764,8 @@ export default function WorkflowBuilderPage() {
                 onConnect={onConnect}
                 onDeleteStep={handleDeleteStep}
                 onDeleteEdge={handleDeleteEdge}
+                trigger={draft.trigger}
+                onConfigureTrigger={() => setSelectedId("__trigger__")}
               />
             </div>
 
