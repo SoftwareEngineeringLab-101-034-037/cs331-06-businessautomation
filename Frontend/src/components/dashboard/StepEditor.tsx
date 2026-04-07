@@ -873,9 +873,15 @@ export function StepEditor({
                     </label>
                     {step.connector?.type === "email" && field.key === "from_account_id" ? (
                       <>
+                        {(() => {
+                          const currentValue = step.connector?.params[field.key] || "";
+                          const hasCurrent = currentValue
+                            ? availableGmailAccounts.some((account) => (account.account_id || account.account_email) === currentValue)
+                            : true;
+                          return (
                         <select
                           className="wf-select"
-                          value={step.connector?.params[field.key] || ""}
+                          value={currentValue}
                           onChange={(e) =>
                             onChange({
                               ...step,
@@ -887,6 +893,11 @@ export function StepEditor({
                           }
                         >
                           <option value="">Primary connected account</option>
+                          {!hasCurrent && currentValue && (
+                            <option key={`disconnected-${currentValue}`} value={currentValue}>
+                              Disconnected account: {currentValue}
+                            </option>
+                          )}
                           {availableGmailAccounts.map((account) => {
                             const fallback = account.account_email || account.account_id;
                             const label = account.account_name
@@ -899,6 +910,8 @@ export function StepEditor({
                             );
                           })}
                         </select>
+                          );
+                        })()}
                         <button
                           className="action-btn action-btn-outline"
                           type="button"

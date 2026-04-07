@@ -490,12 +490,11 @@ export default function WorkstationPage() {
     if (!organization?.id) return;
 
     const timer = window.setInterval(() => {
-      void refreshWorkflowList();
       void refreshInstanceList();
     }, 20000);
 
     return () => window.clearInterval(timer);
-  }, [organization?.id, refreshWorkflowList, refreshInstanceList]);
+  }, [organization?.id, refreshInstanceList]);
 
   /* 3-dot dropdown: open id + fixed position */
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);

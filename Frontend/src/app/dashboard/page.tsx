@@ -60,7 +60,8 @@ export default function DashboardOverview() {
     ? MOCK_TASKS.filter(
         (t) =>
           t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          t.id.toLowerCase().includes(searchQuery.toLowerCase())
+          t.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          t.workflowName.toLowerCase().includes(searchQuery.toLowerCase())
       ).slice(0, 5)
     : [];
 

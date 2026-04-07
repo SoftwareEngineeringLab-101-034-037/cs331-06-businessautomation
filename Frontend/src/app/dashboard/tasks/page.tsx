@@ -255,6 +255,56 @@ function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined, inst
   };
 }
 
+function formatRelativeTime(iso?: string): string {
+  if (!iso) return "just now";
+  const time = new Date(iso).getTime();
+  if (Number.isNaN(time)) return "just now";
+
+  const diffMs = Date.now() - time;
+  if (diffMs <= 0) return "just now";
+
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}w ago`;
+
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+
+  const years = Math.floor(days / 365);
+  return `${years}y ago`;
+}
+
+function getTaskRecency(task: Task): { label: string; at: number } {
+  const createdAt = new Date(task.createdAt).getTime();
+  const completedAt = task.completedAt ? new Date(task.completedAt).getTime() : Number.NaN;
+
+  const hasCompletedAt = Number.isFinite(completedAt);
+  const hasCreatedAt = Number.isFinite(createdAt);
+
+  if (task.status === "completed" && hasCompletedAt) {
+    return { label: `Completed ${formatRelativeTime(task.completedAt)}`, at: completedAt };
+  }
+
+  if ((task.status === "rejected" || task.status === "escalated" || task.status === "sent_back") && hasCompletedAt) {
+    return { label: `Updated ${formatRelativeTime(task.completedAt)}`, at: completedAt };
+  }
+
+  if (task.status === "in_progress") {
+    return { label: `Started ${formatRelativeTime(task.createdAt)}`, at: hasCreatedAt ? createdAt : 0 };
+  }
+
+  return { label: `Created ${formatRelativeTime(task.createdAt)}`, at: hasCreatedAt ? createdAt : 0 };
+}
+
 function TaskCard({
   task,
   onSelect,
@@ -275,6 +325,7 @@ function TaskCard({
         : task.status === "sent_back"
           ? "kanban-card-sent-back"
           : "";
+  const recency = getTaskRecency(task);
 
   return (
     <div
@@ -305,6 +356,7 @@ function TaskCard({
       )}
       <div className="kanban-card-meta">
         <div className="kanban-card-meta-item">{task.departmentOrigin}</div>
+        <div className="kanban-card-meta-item">{recency.label}</div>
         <div className="kanban-card-meta-item">
           {new Date(task.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
         </div>
@@ -356,6 +408,7 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestVersionRef = useRef(0);
+  const hasLoadedOnceRef = useRef(false);
   const roleCacheRef = useRef<{ orgId: string; userId: string; roles: string[]; fetchedAt: number } | null>(null);
   const workflowCacheRef = useRef<{ orgId: string; workflows: BackendWorkflow[]; fetchedAt: number } | null>(null);
 
@@ -430,12 +483,14 @@ export default function TasksPage() {
       if (requestVersion === requestVersionRef.current) {
         setTasks([]);
         setLoading(false);
+        hasLoadedOnceRef.current = false;
       }
       return;
     }
 
     if (requestVersion === requestVersionRef.current) {
-      setLoading(true);
+      // Keep initial-load feedback, but avoid layout shifts during background auto-refresh.
+      setLoading(!hasLoadedOnceRef.current);
       setError(null);
     }
     try {
@@ -496,6 +551,7 @@ export default function TasksPage() {
     } finally {
       if (requestVersion === requestVersionRef.current) {
         setLoading(false);
+        hasLoadedOnceRef.current = true;
       }
     }
   }, [authFetch, organization?.id, userId, loadMyRoles, loadWorkflowsCached]);
@@ -575,7 +631,7 @@ export default function TasksPage() {
       tasks: filtered
         .filter((t) => col.statuses.includes(t.status))
         .sort((a, b) => {
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+          return getTaskRecency(b).at - getTaskRecency(a).at;
         }),
     }));
   }, [filtered]);

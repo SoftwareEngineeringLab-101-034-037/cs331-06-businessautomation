@@ -356,6 +356,18 @@ function toUserSafeInstanceError(rawError: string): string {
     }
   }
 
+  const gmailErr = raw.match(/^integrations gmail send failed status=(\d+) error=(.+)$/i);
+  if (gmailErr) {
+    matchedFriendly = true;
+    return `Gmail send failed (HTTP ${gmailErr[1]}): ${gmailErr[2].trim()}`;
+  }
+
+  const gmailBodyErr = raw.match(/^integrations gmail send failed status=(\d+) body=(.+)$/i);
+  if (gmailBodyErr) {
+    matchedFriendly = true;
+    return `Gmail send failed (HTTP ${gmailBodyErr[1]}): ${gmailBodyErr[2].trim()}`;
+  }
+
   const bodyMarker = " body=";
   const markerIndex = raw.indexOf(bodyMarker);
   if (markerIndex >= 0) {
@@ -374,18 +386,6 @@ function toUserSafeInstanceError(rawError: string): string {
     } catch {
       // Keep raw when body is not parsable JSON.
     }
-  }
-
-  const gmailErr = raw.match(/^integrations gmail send failed status=(\d+) error=(.+)$/i);
-  if (gmailErr) {
-    matchedFriendly = true;
-    return `Gmail send failed (HTTP ${gmailErr[1]}): ${gmailErr[2].trim()}`;
-  }
-
-  const gmailBodyErr = raw.match(/^integrations gmail send failed status=(\d+) body=(.+)$/i);
-  if (gmailBodyErr) {
-    matchedFriendly = true;
-    return `Gmail send failed (HTTP ${gmailBodyErr[1]}): ${gmailBodyErr[2].trim()}`;
   }
 
   const taskNodeErr = raw.match(/^task node\s+([^\s]+)\s+failed:\s*(.+)$/i);
