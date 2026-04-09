@@ -21,8 +21,8 @@ var ErrDuplicateRole = errors.New("duplicate role")
 var ErrCannotRemoveAdmin = errors.New("cannot remove admin member")
 var ErrCannotRemoveSelf = errors.New("cannot remove your own account")
 
-var ClerkDeleteUserFunc = func(clerkSecretKey, userID string) error {
-	endpoint := fmt.Sprintf("%s/users/%s", clerkBaseURL, url.PathEscape(userID))
+var ClerkDeleteMembershipFunc = func(clerkSecretKey, organizationID, userID string) error {
+	endpoint := fmt.Sprintf("%s/organizations/%s/memberships/%s", clerkBaseURL, url.PathEscape(organizationID), url.PathEscape(userID))
 	req, err := http.NewRequest(http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create Clerk delete request: %w", err)
@@ -41,6 +41,7 @@ var ClerkDeleteUserFunc = func(clerkSecretKey, userID string) error {
 	}
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Clerk membership delete failed for org %s user %s: status=%d body=%s", organizationID, userID, resp.StatusCode, strings.TrimSpace(string(body)))
 		return fmt.Errorf("clerk user delete failed status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -294,7 +295,7 @@ func (s *EmployeeService) RemoveEmployee(orgID, employeeID, actorUserID string) 
 		return err
 	}
 
-	if err := s.deleteFromClerk(user.ID); err != nil {
+	if err := s.deleteFromClerk(orgID, user.ID); err != nil {
 		return fmt.Errorf("employee removed from database but failed to delete from clerk: %w", err)
 	}
 
@@ -302,12 +303,15 @@ func (s *EmployeeService) RemoveEmployee(orgID, employeeID, actorUserID string) 
 	return nil
 }
 
-func (s *EmployeeService) deleteFromClerk(userID string) error {
+func (s *EmployeeService) deleteFromClerk(orgID, userID string) error {
 	if strings.TrimSpace(userID) == "" {
 		return fmt.Errorf("invalid clerk user id")
+	}
+	if strings.TrimSpace(orgID) == "" {
+		return fmt.Errorf("invalid clerk organization id")
 	}
 	if strings.TrimSpace(s.clerkSecretKey) == "" {
 		return fmt.Errorf("clerk secret key not configured for strict user deletion")
 	}
-	return ClerkDeleteUserFunc(s.clerkSecretKey, userID)
+	return ClerkDeleteMembershipFunc(s.clerkSecretKey, orgID, userID)
 }

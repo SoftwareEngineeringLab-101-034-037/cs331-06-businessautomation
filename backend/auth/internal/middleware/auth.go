@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"errors"
 	"log"
 	"net/http"
@@ -57,6 +58,47 @@ func ClerkAuthMiddleware(keyFunc jwt.Keyfunc, issuerURL string) gin.HandlerFunc 
 		}
 
 		c.Set(UserIDKey, userID)
+		c.Next()
+	}
+}
+// SystemServiceKeyMiddleware authorizes machine-to-machine requests using
+// an explicit shared key header, without requiring JWT parsing.
+func SystemServiceKeyMiddleware(expectedKey string, allowedCallers ...string) gin.HandlerFunc {
+	trimmedExpected := strings.TrimSpace(expectedKey)
+	allowed := make(map[string]struct{}, len(allowedCallers))
+	for _, caller := range allowedCallers {
+		c := strings.TrimSpace(caller)
+		if c == "" {
+			continue
+		}
+		allowed[c] = struct{}{}
+	}
+
+	return func(c *gin.Context) {
+		if trimmedExpected == "" {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "system service key not configured"})
+			return
+		}
+
+		provided := strings.TrimSpace(c.GetHeader("X-System-Key"))
+		if provided == "" || len(provided) != len(trimmedExpected) || subtle.ConstantTimeCompare([]byte(provided), []byte(trimmedExpected)) != 1 {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid system service key"})
+			return
+		}
+
+		caller := strings.TrimSpace(c.GetHeader("X-System-Caller"))
+		if caller == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing system caller"})
+			return
+		}
+		if len(allowed) > 0 {
+			if _, ok := allowed[caller]; !ok {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden system caller"})
+				return
+			}
+		}
+
+		c.Set("system_caller", caller)
 		c.Next()
 	}
 }

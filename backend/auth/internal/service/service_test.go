@@ -189,9 +189,9 @@ func TestRemoveEmployee(t *testing.T) {
 		db := setupServiceTestDB(t)
 		svc := NewEmployeeService(db, "test_clerk_secret")
 
-		prevDeleteFn := ClerkDeleteUserFunc
-		ClerkDeleteUserFunc = func(_ string, _ string) error { return nil }
-		defer func() { ClerkDeleteUserFunc = prevDeleteFn }()
+		prevDeleteFn := ClerkDeleteMembershipFunc
+		ClerkDeleteMembershipFunc = func(_ string, _ string, _ string) error { return nil }
+		defer func() { ClerkDeleteMembershipFunc = prevDeleteFn }()
 
 		now := time.Now()
 		if err := db.Exec(`

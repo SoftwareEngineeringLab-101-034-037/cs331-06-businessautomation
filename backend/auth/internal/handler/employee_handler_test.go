@@ -747,9 +747,9 @@ func TestDeleteEmployee(t *testing.T) {
 		h, db := newEmployeeHandlerForTestWithClerkSecret(t, "test_clerk_secret")
 		r := newEmployeeTestRouter(h)
 
-		prevDeleteFn := service.ClerkDeleteUserFunc
-		service.ClerkDeleteUserFunc = func(_ string, _ string) error { return nil }
-		defer func() { service.ClerkDeleteUserFunc = prevDeleteFn }()
+		prevDeleteFn := service.ClerkDeleteMembershipFunc
+		service.ClerkDeleteMembershipFunc = func(_ string, _ string, _ string) error { return nil }
+		defer func() { service.ClerkDeleteMembershipFunc = prevDeleteFn }()
 
 		now := time.Now()
 		if err := db.Exec(`

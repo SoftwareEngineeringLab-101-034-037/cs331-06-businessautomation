@@ -156,44 +156,55 @@ type clerkOrgInvitation struct {
 	Status       string `json:"status"`
 }
 
+type clerkInvitationListPage struct {
+	Data       []clerkOrgInvitation `json:"data"`
+	TotalCount int                  `json:"totalCount"`
+}
+
 func revokeClerkOrgInvitationsByEmail(clerkSecretKey, orgID, email string) error {
 	if clerkSecretKey == "" {
 		return fmt.Errorf("clerk secret key not configured")
 	}
 
-	listURL := fmt.Sprintf("%s/organizations/%s/invitations?limit=100", clerkBaseURL, orgID)
-	listReq, err := http.NewRequest(http.MethodGet, listURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create Clerk list-invitations request: %w", err)
-	}
-	listReq.Header.Set("Authorization", "Bearer "+clerkSecretKey)
-
 	client := &http.Client{Timeout: 10 * time.Second}
-	listResp, err := client.Do(listReq)
-	if err != nil {
-		return fmt.Errorf("clerk list invitations request failed: %w", err)
-	}
-	defer listResp.Body.Close()
-
-	if listResp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(listResp.Body)
-		return fmt.Errorf("clerk list invitations returned status %d: %s", listResp.StatusCode, string(respBody))
-	}
-
-	payload, err := io.ReadAll(listResp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read clerk invitations response: %w", err)
-	}
-
-	var invites []clerkOrgInvitation
-	if err := json.Unmarshal(payload, &invites); err != nil {
-		var wrapped struct {
-			Data []clerkOrgInvitation `json:"data"`
+	const pageLimit = 100
+	invites := make([]clerkOrgInvitation, 0)
+	for offset := 0; ; offset += pageLimit {
+		listURL := fmt.Sprintf("%s/organizations/%s/invitations?limit=%d&offset=%d", clerkBaseURL, orgID, pageLimit, offset)
+		listReq, err := http.NewRequest(http.MethodGet, listURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create Clerk list-invitations request: %w", err)
 		}
-		if err2 := json.Unmarshal(payload, &wrapped); err2 != nil {
-			return fmt.Errorf("failed to decode clerk invitations payload: %w", err)
+		listReq.Header.Set("Authorization", "Bearer "+clerkSecretKey)
+
+		listResp, err := client.Do(listReq)
+		if err != nil {
+			return fmt.Errorf("clerk list invitations request failed: %w", err)
 		}
-		invites = wrapped.Data
+		payload, err := io.ReadAll(listResp.Body)
+		listResp.Body.Close()
+		if err != nil {
+			return fmt.Errorf("failed to read clerk invitations response: %w", err)
+		}
+		if listResp.StatusCode >= 300 {
+			return fmt.Errorf("clerk list invitations returned status %d: %s", listResp.StatusCode, string(payload))
+		}
+
+		pageInvites, totalCount, err := decodeClerkInvitationPage(payload)
+		if err != nil {
+			return err
+		}
+		invites = append(invites, pageInvites...)
+
+		if len(pageInvites) == 0 {
+			break
+		}
+		if totalCount > 0 && offset+pageLimit >= totalCount {
+			break
+		}
+		if totalCount <= 0 && len(pageInvites) < pageLimit {
+			break
+		}
 	}
 
 	revokedCount := 0
@@ -216,6 +227,26 @@ func revokeClerkOrgInvitationsByEmail(clerkSecretKey, orgID, email string) error
 	}
 
 	return nil
+}
+
+func decodeClerkInvitationPage(payload []byte) ([]clerkOrgInvitation, int, error) {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return nil, 0, nil
+	}
+	if trimmed[0] == '[' {
+		var invites []clerkOrgInvitation
+		if err := json.Unmarshal(trimmed, &invites); err != nil {
+			return nil, 0, fmt.Errorf("failed to decode clerk invitations payload: %w", err)
+		}
+		return invites, 0, nil
+	}
+
+	var wrapped clerkInvitationListPage
+	if err := json.Unmarshal(trimmed, &wrapped); err != nil {
+		return nil, 0, fmt.Errorf("failed to decode clerk invitations payload: %w", err)
+	}
+	return wrapped.Data, wrapped.TotalCount, nil
 }
 
 func revokeSingleClerkInvitation(client *http.Client, clerkSecretKey, orgID, invitationID string) error {
@@ -278,11 +309,11 @@ func (s *EmployeeService) AcceptInvitationByEmail(email, orgID, userID string) e
 			"department_id":   invitation.DepartmentID,
 			"updated_at":      now,
 		}
-		if invitation.FirstName != "" {
-			userUpdates["first_name"] = invitation.FirstName
+		if trimmedFirstName := strings.TrimSpace(invitation.FirstName); trimmedFirstName != "" {
+			userUpdates["first_name"] = trimmedFirstName
 		}
-		if invitation.LastName != "" {
-			userUpdates["last_name"] = invitation.LastName
+		if trimmedLastName := strings.TrimSpace(invitation.LastName); trimmedLastName != "" {
+			userUpdates["last_name"] = trimmedLastName
 		}
 		if invitation.JobTitle != "" {
 			userUpdates["job_title"] = invitation.JobTitle

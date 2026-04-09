@@ -115,6 +115,12 @@ func main() {
 		}
 	}
 
+	systemAPI := r.Group("/api/system")
+	systemAPI.Use(middleware.SystemServiceKeyMiddleware(cfg.WorkflowServiceToken, "workflow-service"))
+	{
+		systemAPI.GET("/orgs/:orgId/roles", employeeHandler.ListRoles)
+	}
+
 	addr := ":" + cfg.Port
 	log.Printf("Auth service running on http://localhost%s", addr)
 
