@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -65,7 +66,7 @@ func (d *httpRoleDirectory) listMemberIDs(orgID, roleName, authHeader string) ([
 		return nil, ErrInvalidArgs
 	}
 
-	endpoint := fmt.Sprintf("%s/api/orgs/%s/roles", d.baseURL, url.PathEscape(orgID))
+	endpoint := d.rolesEndpoint(orgID, authHeader)
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -74,7 +75,8 @@ func (d *httpRoleDirectory) listMemberIDs(orgID, roleName, authHeader string) ([
 	case strings.TrimSpace(authHeader) != "":
 		req.Header.Set("Authorization", strings.TrimSpace(authHeader))
 	case d.authToken != "":
-		req.Header.Set("Authorization", "Bearer "+d.authToken)
+		req.Header.Set("X-System-Key", d.authToken)
+		req.Header.Set("X-System-Caller", "workflow-service")
 	}
 
 	resp, err := d.client.Do(req)
@@ -84,7 +86,12 @@ func (d *httpRoleDirectory) listMemberIDs(orgID, roleName, authHeader string) ([
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("role directory request failed: status=%d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		bodyText := strings.TrimSpace(string(body))
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("role directory endpoint not found at %s: status=%d body=%s", endpoint, resp.StatusCode, bodyText)
+		}
+		return nil, fmt.Errorf("role directory request failed: endpoint=%s status=%d body=%s", endpoint, resp.StatusCode, bodyText)
 	}
 
 	var roles []roleSummaryResponse
@@ -113,4 +120,11 @@ func (d *httpRoleDirectory) listMemberIDs(orgID, roleName, authHeader string) ([
 
 	log.Printf("role_directory_http.ListMemberIDs role not found org_id=%q role=%q", orgID, roleName)
 	return nil, ErrRoleNotFound
+}
+
+func (d *httpRoleDirectory) rolesEndpoint(orgID, authHeader string) string {
+	if strings.TrimSpace(authHeader) == "" && strings.TrimSpace(d.authToken) != "" {
+		return fmt.Sprintf("%s/api/system/orgs/%s/roles", d.baseURL, url.PathEscape(orgID))
+	}
+	return fmt.Sprintf("%s/api/orgs/%s/roles", d.baseURL, url.PathEscape(orgID))
 }

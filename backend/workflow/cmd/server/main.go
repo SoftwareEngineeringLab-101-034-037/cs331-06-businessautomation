@@ -61,7 +61,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to configure role directory: %v", err)
 	}
-	assigneeSelector := executor.NewRandomRoleAssigneeSelector(roleDirectory)
+	assigneeSelector := executor.NewBalancedRoleAssigneeSelector(roleDirectory, store)
 	exec := executor.NewExecutor(store, email, assigneeSelector)
 
 	workflowHandler := handler.NewWorkflowHandler(store)
@@ -114,6 +114,7 @@ func main() {
 
 			// Instance management
 			orgApi.POST("/instances", instanceHandler.Start)
+			orgApi.POST("/instances/:id/restart", instanceHandler.Restart)
 			orgApi.GET("/instances", instanceHandler.List)
 			orgApi.GET("/instances/:id", instanceHandler.Get)
 

@@ -353,6 +353,46 @@ func (h *InstanceHandler) Start(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"instance_id": instID})
 }
 
+// POST /api/orgs/:orgId/instances/:id/restart
+func (h *InstanceHandler) Restart(c *gin.Context) {
+	orgID := c.Param("orgId")
+	instanceID := c.Param("id")
+
+	inst, ok := h.Store.GetInstance(instanceID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if inst.OrgID != orgID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if inst.Status != models.InstanceFailed {
+		c.JSON(http.StatusConflict, gin.H{"error": "instance is not failed"})
+		return
+	}
+	if h.Exec == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "executor not configured"})
+		return
+	}
+
+	restarted, err := h.Exec.RestartFailedInstance(instanceID, middleware.GetAuthorizationHeader(c))
+	if err != nil {
+		switch err {
+		case executor.ErrInstanceNotFound, executor.ErrWorkflowNotFound, executor.ErrFailedNodeNotFound:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "restart failed"})
+		case executor.ErrInstanceNotFailed:
+			c.JSON(http.StatusConflict, gin.H{"error": "instance is not failed"})
+		default:
+			log.Printf("instance_handler.Restart failed instance_id=%q org_id=%q: %v", instanceID, orgID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "restart failed"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, restarted)
+}
+
 // GET /api/orgs/:orgId/instances/:id
 func (h *InstanceHandler) Get(c *gin.Context) {
 	id := c.Param("id")

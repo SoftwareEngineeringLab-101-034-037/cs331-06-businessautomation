@@ -272,12 +272,16 @@ func (m *MongoStore) FindInstanceByWorkflowAndFormResponse(workflowID, formRespo
 }
 
 func (m *MongoStore) FindInstanceByWorkflowAndEmailMessageID(workflowID, emailMessageID string) (models.Instance, bool, error) {
+	if strings.TrimSpace(emailMessageID) == "" {
+		return models.Instance{}, false, nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var inst models.Instance
 	err := m.instCol.FindOne(ctx, bson.M{
-		"workflow_id":            workflowID,
+		"workflow_id":           workflowID,
 		"data.email_message_id": emailMessageID,
 	}).Decode(&inst)
 	if err != nil {
@@ -366,6 +370,7 @@ func compactInstanceProjection() bson.M {
 		"status":       1,
 		"current_node": 1,
 		"node_states":  1,
+		"audit_log":    1,
 		"started_at":   1,
 		"completed_at": 1,
 	}

@@ -142,7 +142,7 @@
         },
         "assigned_user": {
           "type": "string",
-          "description": "Direct user ID override. If set, overrides role/position routing."
+          "description": "Direct user fallback. Used only when assigned_role is empty."
         },
         "task_actions": {
           "type": "array",

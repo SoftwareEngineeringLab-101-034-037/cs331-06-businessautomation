@@ -149,7 +149,7 @@ type WorkflowNode struct {
 	AssignedRole string `json:"assigned_role,omitempty" bson:"assigned_role,omitempty"`
 	// AssignedPosition narrows within the role (e.g. "CFO", "Department Head").
 	AssignedPosition string `json:"assigned_position,omitempty" bson:"assigned_position,omitempty"`
-	// AssignedUser pins the task to a specific user ID (overrides role/position).
+	// AssignedUser is a direct user fallback used only when AssignedRole is empty.
 	AssignedUser string `json:"assigned_user,omitempty" bson:"assigned_user,omitempty"`
 	// TaskActions lists what the assignee can do: approve, reject, clarify, complete.
 	TaskActions []string `json:"task_actions,omitempty" bson:"task_actions,omitempty"`

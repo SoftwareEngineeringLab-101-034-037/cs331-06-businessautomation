@@ -32,11 +32,14 @@ var (
 	ErrUnknownAction        = errors.New("unknown action")
 	ErrTaskConflict         = errors.New("task was updated concurrently")
 	ErrInstanceNotFound     = errors.New("instance not found")
+	ErrInstanceNotFailed    = errors.New("instance is not failed")
 	ErrWorkflowNotFound     = errors.New("workflow not found")
 	ErrTaskNodeNotFound     = errors.New("task node not found in workflow")
+	ErrFailedNodeNotFound   = errors.New("failed node not found in workflow")
 	ErrForbiddenTaskAction  = errors.New("forbidden task action")
 	ErrTaskClaimNotAllowed  = errors.New("task claim not allowed")
 	ErrPendingTaskStartOnly = errors.New("pending tasks can only be started")
+	ErrNoEligibleAssignee   = errors.New("no eligible assignee found for task")
 )
 
 func NewExecutor(s storage.Store, e connectors.EmailConnector, selector TaskAssigneeSelector) *Executor {
@@ -135,6 +138,77 @@ func (e *Executor) FindOrStartInstanceByEmailMessage(wf models.Workflow, data ma
 		return "", false, err
 	}
 	return instanceID, false, nil
+}
+
+func (e *Executor) RestartFailedInstance(instanceID, authHeader string) (models.Instance, error) {
+	lock := e.instanceLock(instanceID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	inst, ok := e.store.GetInstance(instanceID)
+	if !ok {
+		return models.Instance{}, ErrInstanceNotFound
+	}
+	if inst.Status != models.InstanceFailed {
+		return models.Instance{}, ErrInstanceNotFailed
+	}
+
+	wf, ok := e.store.GetWorkflow(inst.WorkflowID)
+	if !ok {
+		return models.Instance{}, ErrWorkflowNotFound
+	}
+
+	nodeID := restartNodeID(inst)
+	if nodeID == "" || wf.FindNode(nodeID) == nil {
+		return models.Instance{}, ErrFailedNodeNotFound
+	}
+
+	now := time.Now()
+	if inst.NodeStates == nil {
+		inst.NodeStates = make(map[string]models.NodeState)
+	}
+	ns := inst.NodeStates[nodeID]
+	ns.Status = "running"
+	ns.StartedAt = &now
+	ns.CompletedAt = nil
+	ns.Output = ""
+	inst.NodeStates[nodeID] = ns
+	inst.Status = models.InstanceRunning
+	inst.CurrentNode = nodeID
+	inst.CompletedAt = nil
+	inst.AuditLog = append(inst.AuditLog, models.AuditEntry{
+		Timestamp: now,
+		NodeID:    nodeID,
+		Action:    "instance_restarted",
+		Details: map[string]interface{}{
+			"failed_node": nodeID,
+			"workflow_id": wf.ID,
+		},
+	})
+	if _, err := e.store.SaveInstance(inst); err != nil {
+		return models.Instance{}, err
+	}
+
+	go e.walkNode(instanceID, nodeID, &wf, inst.Data, authHeader)
+	return inst, nil
+}
+
+func restartNodeID(inst models.Instance) string {
+	if trimmed := strings.TrimSpace(inst.CurrentNode); trimmed != "" {
+		return trimmed
+	}
+	var latestNodeID string
+	var latestTime time.Time
+	for nodeID, state := range inst.NodeStates {
+		if state.Status != "failed" || state.CompletedAt == nil {
+			continue
+		}
+		if latestNodeID == "" || state.CompletedAt.After(latestTime) {
+			latestNodeID = nodeID
+			latestTime = *state.CompletedAt
+		}
+	}
+	return latestNodeID
 }
 
 func (e *Executor) findInstanceIDByFormResponse(workflowID, responseID string) (string, error) {
@@ -318,19 +392,25 @@ func (e *Executor) walkNext(instanceID string, node *models.WorkflowNode, result
 
 func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *models.WorkflowNode, data map[string]interface{}, authHeader string) (string, error) {
 	assignedUser := node.AssignedUser
+	assignedRole := strings.TrimSpace(node.AssignedRole)
 	if e.assigneeSelector != nil {
 		resolvedUser, err := e.selectAssignee(wf.OrgID, node.AssignedRole, node.AssignedUser, authHeader)
 		if err != nil {
-			// Do not fail workflow execution on assignee lookup issues.
-			// Create the task anyway so it remains visible for manual pickup.
-			log.Printf("executor: assignee lookup failed for role=%q org=%q: %v; creating unassigned task", node.AssignedRole, wf.OrgID, err)
+			log.Printf("executor: assignee lookup failed for role=%q org=%q: %v", node.AssignedRole, wf.OrgID, err)
 			e.audit(instanceID, node.ID, "assignee_lookup_failed", map[string]interface{}{
 				"role":  node.AssignedRole,
 				"error": err.Error(),
 			})
-			resolvedUser = ""
+			return "", fmt.Errorf("resolve assignee: %w", err)
 		}
 		assignedUser = resolvedUser
+	}
+
+	if assignedRole != "" && strings.TrimSpace(assignedUser) == "" {
+		e.audit(instanceID, node.ID, "assignee_unresolved", map[string]interface{}{
+			"role": node.AssignedRole,
+		})
+		return "", ErrNoEligibleAssignee
 	}
 
 	task := models.TaskAssignment{
@@ -372,7 +452,6 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 
 	return "", nil
 }
-
 func (e *Executor) executeAction(instanceID, orgID string, node *models.WorkflowNode, data map[string]interface{}) error {
 	if node.Connector == nil {
 		return fmt.Errorf("missing connector configuration")

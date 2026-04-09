@@ -27,6 +27,29 @@ type mockOrgEmail struct {
 	sendForOrgErr error
 }
 
+type fixedRoleMemberSelectionStrategy struct {
+	selectedUserID string
+}
+
+func (s fixedRoleMemberSelectionStrategy) Select(memberIDs []string) string {
+	_ = memberIDs
+	return s.selectedUserID
+}
+
+type flipFlopRoleMemberSelectionStrategy struct {
+	selectedUserID string
+	callCount      int
+}
+
+func (s *flipFlopRoleMemberSelectionStrategy) Select(memberIDs []string) string {
+	_ = memberIDs
+	s.callCount++
+	if s.callCount == 1 {
+		return ""
+	}
+	return s.selectedUserID
+}
+
 func (m *mockEmail) Send(to, subject, body string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1048,5 +1071,234 @@ func TestRunActionSendForOrgErrorMarksFailedAndDoesNotAdvance(t *testing.T) {
 	}
 	if _, ok := inst.NodeStates["end"]; ok {
 		t.Fatalf("expected execution not to reach end node")
+	}
+}
+
+func TestRunTaskFailsWhenRoleAssigneeCannotBeResolved(t *testing.T) {
+	store := newMockStore()
+	exec := NewExecutor(store, &mockEmail{}, NewRandomRoleAssigneeSelector(NewStaticRoleMemberDirectory(map[string]map[string][]string{})))
+
+	wf := models.Workflow{
+		ID:    "wf-task-no-assignee",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{
+			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "task"},
+			{ID: "task", Type: models.NodeTask, Title: "Manager Task", AssignedRole: "manager", TaskActions: []string{"approve"}, Next: "end"},
+			{ID: "end", Type: models.NodeEnd, Title: "End"},
+		},
+	}
+	instanceID := seedInstance(t, store, wf, map[string]interface{}{"request_id": "r-404"})
+
+	exec.run(instanceID, wf, map[string]interface{}{"request_id": "r-404"}, "")
+
+	inst, ok := store.GetInstance(instanceID)
+	if !ok {
+		t.Fatalf("instance not found")
+	}
+	if inst.Status != models.InstanceFailed {
+		t.Fatalf("expected failed status when assignee cannot be resolved, got %s", inst.Status)
+	}
+	if len(store.tasks) != 0 {
+		t.Fatalf("expected no task to be persisted when role assignee is unresolved, got %d", len(store.tasks))
+	}
+	if got := countAuditAction(inst, "assignee_unresolved"); got != 1 {
+		t.Fatalf("expected assignee_unresolved audit entry, got %d", got)
+	}
+}
+
+func TestExecuteTaskUsesInjectedRoleSelectionStrategy(t *testing.T) {
+	store := newMockStore()
+	directory := NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {
+			"manager": {"user-a", "user-b"},
+		},
+	})
+	selector := NewRandomRoleAssigneeSelectorWithStrategy(directory, fixedRoleMemberSelectionStrategy{selectedUserID: "user-b"})
+	exec := NewExecutor(store, &mockEmail{}, selector)
+
+	wf := models.Workflow{ID: "wf-fixed-selector", OrgID: "org-1"}
+	node := models.WorkflowNode{ID: "task", Type: models.NodeTask, Title: "Task", AssignedRole: "manager", TaskActions: []string{"approve"}}
+
+	if _, err := exec.executeTask("inst-fixed", &wf, &node, map[string]interface{}{"x": 1}, ""); err != nil {
+		t.Fatalf("executeTask failed: %v", err)
+	}
+	if len(store.tasks) != 1 {
+		t.Fatalf("expected one saved task, got %d", len(store.tasks))
+	}
+	for _, task := range store.tasks {
+		if task.AssignedUser != "user-b" {
+			t.Fatalf("expected injected strategy to pick user-b, got %q", task.AssignedUser)
+		}
+	}
+}
+
+func TestExecuteTaskRoleSelectionOverridesPreferredUser(t *testing.T) {
+	store := newMockStore()
+	directory := NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {
+			"manager": {"user-a", "user-b"},
+		},
+	})
+	selector := NewRandomRoleAssigneeSelectorWithStrategy(directory, fixedRoleMemberSelectionStrategy{selectedUserID: "user-b"})
+	exec := NewExecutor(store, &mockEmail{}, selector)
+
+	wf := models.Workflow{ID: "wf-role-preferred", OrgID: "org-1"}
+	node := models.WorkflowNode{
+		ID:           "task",
+		Type:         models.NodeTask,
+		Title:        "Task",
+		AssignedRole: "manager",
+		AssignedUser: "user-a",
+		TaskActions:  []string{"approve"},
+	}
+
+	if _, err := exec.executeTask("inst-role-preferred", &wf, &node, map[string]interface{}{"x": 1}, ""); err != nil {
+		t.Fatalf("executeTask failed: %v", err)
+	}
+	if len(store.tasks) != 1 {
+		t.Fatalf("expected one saved task, got %d", len(store.tasks))
+	}
+	for _, task := range store.tasks {
+		if task.AssignedUser != "user-b" {
+			t.Fatalf("expected role-based strategy to override preferred user and pick user-b, got %q", task.AssignedUser)
+		}
+	}
+}
+
+func TestSelectorUsesPreferredUserWhenRoleIsEmpty(t *testing.T) {
+	selector := NewRandomRoleAssigneeSelectorWithStrategy(
+		NewStaticRoleMemberDirectory(map[string]map[string][]string{}),
+		fixedRoleMemberSelectionStrategy{selectedUserID: "user-b"},
+	)
+
+	assignee, err := selector.Select("org-1", "", "user-a")
+	if err != nil {
+		t.Fatalf("selector returned error: %v", err)
+	}
+	if assignee != "user-a" {
+		t.Fatalf("expected preferred user fallback when role is empty, got %q", assignee)
+	}
+}
+
+func TestBalancedSelectorPrefersLeastAssignedMember(t *testing.T) {
+	store := newMockStore()
+	seedTask := func(id, user string, createdAt time.Time) {
+		store.tasks[id] = models.TaskAssignment{
+			ID:           id,
+			OrgID:        "org-1",
+			AssignedRole: "manager",
+			AssignedUser: user,
+			Status:       models.TaskCompleted,
+			CreatedAt:    createdAt,
+		}
+	}
+	now := time.Now()
+	seedTask("t-1", "user-a", now.Add(-5*time.Minute))
+	seedTask("t-2", "user-a", now.Add(-4*time.Minute))
+	seedTask("t-3", "user-a", now.Add(-3*time.Minute))
+	seedTask("t-4", "user-b", now.Add(-2*time.Minute))
+
+	directory := NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {"manager": {"user-a", "user-b"}},
+	})
+	selector := NewBalancedRoleAssigneeSelector(directory, store)
+	selector.strategy = fixedRoleMemberSelectionStrategy{selectedUserID: "user-b"}
+
+	assignee, err := selector.Select("org-1", "manager", "")
+	if err != nil {
+		t.Fatalf("selector returned error: %v", err)
+	}
+	if assignee != "user-b" {
+		t.Fatalf("expected least-assigned member user-b, got %q", assignee)
+	}
+}
+
+func TestBalancedSelectorTieBreakUsesStrategy(t *testing.T) {
+	store := newMockStore()
+	seedTask := func(id, user string, createdAt time.Time) {
+		store.tasks[id] = models.TaskAssignment{
+			ID:           id,
+			OrgID:        "org-1",
+			AssignedRole: "manager",
+			AssignedUser: user,
+			Status:       models.TaskCompleted,
+			CreatedAt:    createdAt,
+		}
+	}
+	now := time.Now()
+	seedTask("t-1", "user-a", now.Add(-2*time.Minute))
+	seedTask("t-2", "user-b", now.Add(-1*time.Minute))
+
+	directory := NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {"manager": {"user-a", "user-b"}},
+	})
+	selector := NewBalancedRoleAssigneeSelector(directory, store)
+	selector.strategy = fixedRoleMemberSelectionStrategy{selectedUserID: "user-b"}
+
+	assignee, err := selector.Select("org-1", "manager", "")
+	if err != nil {
+		t.Fatalf("selector returned error: %v", err)
+	}
+	if assignee != "user-b" {
+		t.Fatalf("expected tie-break strategy to select user-b, got %q", assignee)
+	}
+}
+
+func TestRestartFailedInstanceResumesFromFailedTaskNode(t *testing.T) {
+	store := newMockStore()
+	strategy := &flipFlopRoleMemberSelectionStrategy{selectedUserID: "user-b"}
+	exec := NewExecutor(store, &mockEmail{}, NewRandomRoleAssigneeSelectorWithStrategy(NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {
+			"manager": {"user-b"},
+		},
+	}), strategy))
+
+	wf := models.Workflow{
+		ID:    "wf-restart",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{
+			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "task"},
+			{ID: "task", Type: models.NodeTask, Title: "Review", AssignedRole: "manager", TaskActions: []string{"approve"}, Next: "end"},
+			{ID: "end", Type: models.NodeEnd, Title: "End"},
+		},
+	}
+	store.workflows[wf.ID] = wf
+	instanceID := seedInstance(t, store, wf, map[string]interface{}{"request_id": "r-1"})
+
+	exec.run(instanceID, wf, map[string]interface{}{"request_id": "r-1"}, "")
+
+	inst, ok := store.GetInstance(instanceID)
+	if !ok {
+		t.Fatalf("instance not found")
+	}
+	if inst.Status != models.InstanceFailed {
+		t.Fatalf("expected failed status before restart, got %s", inst.Status)
+	}
+
+	restarted, err := exec.RestartFailedInstance(instanceID, "Bearer user-token")
+	if err != nil {
+		t.Fatalf("RestartFailedInstance returned error: %v", err)
+	}
+	if restarted.Status != models.InstanceRunning {
+		t.Fatalf("expected running status immediately after restart, got %s", restarted.Status)
+	}
+
+	inst = waitForInstanceStatus(t, store, instanceID, models.InstanceWaiting)
+	if inst.Status != models.InstanceWaiting {
+		t.Fatalf("expected waiting status after restart resumed task node, got %s", inst.Status)
+	}
+	if inst.CurrentNode != "task" {
+		t.Fatalf("expected current node to remain task, got %q", inst.CurrentNode)
+	}
+	if countAuditAction(inst, "instance_restarted") != 1 {
+		t.Fatalf("expected instance_restarted audit entry, got %+v", inst.AuditLog)
+	}
+	if len(store.tasks) != 1 {
+		t.Fatalf("expected one task after restart, got %d", len(store.tasks))
+	}
+	for _, task := range store.tasks {
+		if task.AssignedUser != "user-b" {
+			t.Fatalf("expected restarted task to be assigned to user-b, got %q", task.AssignedUser)
+		}
 	}
 }
