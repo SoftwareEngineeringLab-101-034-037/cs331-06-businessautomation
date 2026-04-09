@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
-import { RoleGate } from "@/components/dashboard/RoleProvider";
+import { RoleGate, useRole } from "@/components/dashboard/RoleProvider";
 
-const INTEGRATIONS_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
+const INTEGRATIONS_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || undefined;
 const INTEGRATIONS_API_MISSING_ERROR = "NEXT_PUBLIC_INTEGRATIONS_API (or NEXT_PUBLIC_GOOGLE_FORMS_API) is not configured.";
 
 type IntegrationStatus = {
@@ -39,6 +39,7 @@ type ConnectedAccount = {
 export default function GmailIntegrationPage() {
   const { getToken } = useAuth();
   const { organization } = useOrganization();
+  const { role, roleResolved } = useRole();
 
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
@@ -56,6 +57,7 @@ export default function GmailIntegrationPage() {
   const oauthPopupRef = useRef<Window | null>(null);
   const getTokenRef = useRef(getToken);
   const apiBase = (INTEGRATIONS_API || "").trim();
+  const canManageIntegrations = roleResolved && role === "admin";
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -168,12 +170,15 @@ export default function GmailIntegrationPage() {
   }, [apiBase]);
 
   useEffect(() => {
+    if (!canManageIntegrations) {
+      return;
+    }
     const controller = new AbortController();
     void loadData(controller.signal);
     return () => {
       controller.abort();
     };
-  }, [loadData]);
+  }, [canManageIntegrations, loadData]);
 
   const disconnectAccount = useCallback(
     async (accountID: string) => {
@@ -254,6 +259,10 @@ export default function GmailIntegrationPage() {
         .split(/[;,]/)
         .map((value) => value.trim())
         .filter(Boolean);
+      if (recipients.length === 0) {
+        setError("Recipient is required.");
+        return;
+      }
 
       const res = await authFetch(`${apiBase}/integrations/gmail/send?org_id=${encodeURIComponent(organization.id)}`, {
         method: "POST",

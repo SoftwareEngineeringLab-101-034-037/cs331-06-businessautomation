@@ -1,17 +1,28 @@
-export function mergeSignals(signals: Array<AbortSignal | null | undefined>): AbortSignal | undefined {
+type MergedSignal = {
+  signal?: AbortSignal;
+  dispose: () => void;
+};
+
+export function mergeSignals(signals: Array<AbortSignal | null | undefined>): MergedSignal {
   const activeSignals = signals.filter(Boolean) as AbortSignal[];
   if (activeSignals.length === 0) {
-    return undefined;
+    return { signal: undefined, dispose: () => {} };
   }
   if (activeSignals.length === 1) {
-    return activeSignals[0];
+    return { signal: activeSignals[0], dispose: () => {} };
   }
 
   const controller = new AbortController();
+  let disposed = false;
   const cleanup = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
     for (const signal of activeSignals) {
       signal.removeEventListener("abort", abort);
     }
+    controller.signal.removeEventListener("abort", cleanup);
   };
   const abort = () => {
     cleanup();
@@ -25,7 +36,7 @@ export function mergeSignals(signals: Array<AbortSignal | null | undefined>): Ab
     signal.addEventListener("abort", abort, { once: true });
   }
   controller.signal.addEventListener("abort", cleanup, { once: true });
-  return controller.signal;
+  return { signal: controller.signal, dispose: cleanup };
 }
 
 export async function authFetch(
@@ -41,13 +52,15 @@ export async function authFetch(
     headers.set("Authorization", `Bearer ${token}`);
   }
   const timeoutID = setTimeout(() => controller.abort(), timeoutMs);
+  const mergedSignal = mergeSignals([init.signal, controller.signal]);
   try {
     return await fetch(input, {
       ...init,
-      signal: mergeSignals([init.signal, controller.signal]),
+      signal: mergedSignal.signal,
       headers,
     });
   } finally {
     clearTimeout(timeoutID);
+    mergedSignal.dispose();
   }
 }

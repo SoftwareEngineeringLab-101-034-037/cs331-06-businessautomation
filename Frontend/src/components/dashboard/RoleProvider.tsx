@@ -20,12 +20,15 @@ const RoleContext = createContext<RoleContextValue | null>(null);
  */
 export function RoleProvider({
   children,
+  allowClientOverride = false,
 }: {
   children: ReactNode;
+  allowClientOverride?: boolean;
 }) {
   const { orgRole, isLoaded } = useAuth();
   const [manualRole, setManualRole] = useState<UserRole | null>(null);
   const roleResolved = isLoaded;
+  const canOverrideRole = process.env.NODE_ENV !== "production" || allowClientOverride;
 
   const derivedRole = useMemo<UserRole | null>(() => {
     if (!roleResolved) return null;
@@ -37,8 +40,11 @@ export function RoleProvider({
   const role = manualRole ?? derivedRole;
 
   const setRole = useCallback((nextRole: UserRole) => {
+    if (!canOverrideRole) {
+      return;
+    }
     setManualRole(nextRole);
-  }, []);
+  }, [canOverrideRole]);
 
   const hasAccess = useCallback(
     (allowed: UserRole[]) => roleResolved && role !== null && allowed.includes(role),

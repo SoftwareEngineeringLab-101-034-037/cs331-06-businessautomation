@@ -3192,6 +3192,7 @@
 }
 
 .workflow-data-chip-link {
+  display: inline-block;
   max-width: min(100%, 280px);
   white-space: nowrap;
   overflow: hidden;

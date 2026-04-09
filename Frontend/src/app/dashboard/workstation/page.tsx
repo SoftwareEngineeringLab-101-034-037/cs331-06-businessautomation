@@ -122,6 +122,7 @@ function formatTaskDecision(status: string, decision?: string): string {
 function prettyActionName(action: string): string {
   switch (action) {
     case "instance_started": return "Workflow started";
+    case "instance_restarted": return "Instance restarted";
     case "task_assigned": return "Task assigned";
     case "task_started": return "Task started";
     case "task_action": return "Task decision recorded";
@@ -325,6 +326,7 @@ export default function WorkstationPage() {
   const [error, setError] = useState<string | null>(null);
   const [refreshingWorkflows, setRefreshingWorkflows] = useState(false);
   const [refreshingInstances, setRefreshingInstances] = useState(false);
+  const [restartingInstanceId, setRestartingInstanceId] = useState<string | null>(null);
   const instanceRequestControllerRef = useRef<AbortController | null>(null);
   const instanceRequestIdRef = useRef(0);
   const workflowsRequestIdRef = useRef(0);
@@ -485,6 +487,42 @@ export default function WorkstationPage() {
     setRefreshingInstances(false);
   }
   }, [organization?.id, orgApiBase, authFetch, showToast]);
+
+  const restartFailedInstance = useCallback(async () => {
+    if (!organization?.id || !selectedInstance || selectedInstance.status !== "failed") {
+      return;
+    }
+
+    setRestartingInstanceId(selectedInstance.id);
+    try {
+      const response = await authFetch(`${orgApiBase}/instances/${selectedInstance.id}/restart`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        let message = `Restart failed (${response.status})`;
+        try {
+          const payload = await response.json() as { error?: string };
+          if (payload?.error) {
+            message = payload.error;
+          }
+        } catch {
+          // Keep the status-based fallback when the body is not JSON.
+        }
+        throw new Error(message);
+      }
+
+      const restarted = await response.json() as BackendInstance;
+      setSelectedInstance(restarted);
+      setSelectedInstanceTasks([]);
+      showToast("Instance restarted.", "success");
+      await refreshInstanceList();
+      await openInstanceDrawer(restarted);
+    } catch (err: any) {
+      showToast(`Failed to restart instance: ${err?.message || err}`, "error");
+    } finally {
+      setRestartingInstanceId(null);
+    }
+  }, [organization?.id, selectedInstance, authFetch, orgApiBase, showToast, refreshInstanceList, openInstanceDrawer]);
 
   useEffect(() => {
     if (!organization?.id) return;
@@ -968,13 +1006,27 @@ export default function WorkstationPage() {
                     const status = deriveInstanceStatus(selectedInstance, instanceWorkflow);
                     const progress = computeInstanceProgress(selectedInstance, instanceWorkflow);
                     return (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 18 }}>
-                    <div className="overview-stat-card"><span className="overview-stat-label">Status</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{instanceStatusLabel(status)}</span></div>
-                    <div className="overview-stat-card"><span className="overview-stat-label">Current Step</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.current_node || "-"}</span></div>
-                    <div className="overview-stat-card"><span className="overview-stat-label">Progress</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{progress.total > 0 ? `${progress.completed}/${progress.total} = ${progress.percent}%` : "-"}</span></div>
-                    <div className="overview-stat-card"><span className="overview-stat-label">Started</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{timeAgo(selectedInstance.started_at)}</span></div>
-                    <div className="overview-stat-card"><span className="overview-stat-label">Completed</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.completed_at ? timeAgo(selectedInstance.completed_at) : "-"}</span></div>
-                  </div>
+                    <>
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+                        {selectedInstance.status === "failed" && (
+                          <button
+                            type="button"
+                            className="action-btn action-btn-primary action-btn-sm"
+                            onClick={() => { void restartFailedInstance(); }}
+                            disabled={restartingInstanceId === selectedInstance.id}
+                          >
+                            {restartingInstanceId === selectedInstance.id ? "Restarting..." : "Restart from Failed Step"}
+                          </button>
+                        )}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 18 }}>
+                        <div className="overview-stat-card"><span className="overview-stat-label">Status</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{instanceStatusLabel(status)}</span></div>
+                        <div className="overview-stat-card"><span className="overview-stat-label">Current Step</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.current_node || "-"}</span></div>
+                        <div className="overview-stat-card"><span className="overview-stat-label">Progress</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{progress.total > 0 ? `${progress.completed}/${progress.total} = ${progress.percent}%` : "-"}</span></div>
+                        <div className="overview-stat-card"><span className="overview-stat-label">Started</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{timeAgo(selectedInstance.started_at)}</span></div>
+                        <div className="overview-stat-card"><span className="overview-stat-label">Completed</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.completed_at ? timeAgo(selectedInstance.completed_at) : "-"}</span></div>
+                      </div>
+                    </>
                     );
                   })()}
 

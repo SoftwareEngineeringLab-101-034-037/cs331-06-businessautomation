@@ -432,25 +432,30 @@ export default function TasksPage() {
       return cached.roles;
     }
 
-    const roleRes = await authFetch(`${AUTH_API}/api/orgs/${orgId}/roles`);
-    if (!roleRes.ok) {
-      return [];
+    try {
+      const roleRes = await authFetch(`${AUTH_API}/api/orgs/${orgId}/roles`);
+      if (!roleRes.ok) {
+        const body = await roleRes.text();
+        throw new Error(`Failed to load roles (${roleRes.status}): ${body}`);
+      }
+
+      const roles = (await roleRes.json()) as BackendRoleSummary[];
+      const myRoleNames = (roles || [])
+        .filter((role) => (role.members || []).some((member) => member.id === currentUserId))
+        .map((role) => role.name)
+        .filter(Boolean);
+
+      roleCacheRef.current = {
+        orgId,
+        userId: currentUserId,
+        roles: myRoleNames,
+        fetchedAt: now,
+      };
+
+      return myRoleNames;
+    } catch (err) {
+      throw err instanceof Error ? err : new Error("Failed to load roles");
     }
-
-    const roles = (await roleRes.json()) as BackendRoleSummary[];
-    const myRoleNames = (roles || [])
-      .filter((role) => (role.members || []).some((member) => member.id === currentUserId))
-      .map((role) => role.name)
-      .filter(Boolean);
-
-    roleCacheRef.current = {
-      orgId,
-      userId: currentUserId,
-      roles: myRoleNames,
-      fetchedAt: now,
-    };
-
-    return myRoleNames;
   }, [authFetch]);
 
   const loadWorkflowsCached = useCallback(async (orgId: string): Promise<BackendWorkflow[]> => {
@@ -481,6 +486,7 @@ export default function TasksPage() {
     const orgId = organization?.id;
     if (!orgId || !userId) {
       if (requestVersion === requestVersionRef.current) {
+        setError(null);
         setTasks([]);
         setLoading(false);
         hasLoadedOnceRef.current = false;
@@ -546,7 +552,7 @@ export default function TasksPage() {
     } catch (err: any) {
       if (requestVersion === requestVersionRef.current) {
         setError(err?.message || "Could not load tasks");
-        setTasks([]);
+        setTasks((current) => (hasLoadedOnceRef.current && current.length > 0 ? current : []));
       }
     } finally {
       if (requestVersion === requestVersionRef.current) {
