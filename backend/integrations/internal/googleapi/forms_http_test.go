@@ -17,7 +17,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 func jsonResponse(status int, body string) *http.Response {
 	return &http.Response{
 		StatusCode: status,
-		Header:     make(http.Header),
+		Header:     http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }
@@ -95,21 +95,45 @@ func TestFormsAPIHelpers(t *testing.T) {
 	if responses[0].RespondentEmail != "u@example.com" {
 		t.Fatalf("unexpected respondent email in list response: %#v", responses[0].RespondentEmail)
 	}
-	if responses[0].Answers["q_upload"].FileUploadAnswers == nil || len(responses[0].Answers["q_upload"].FileUploadAnswers.Answers) != 1 {
-		t.Fatalf("expected file upload answers in list response, got %#v", responses[0].Answers["q_upload"])
+	listUpload, ok := responses[0].Answers["q_upload"]
+	if !ok {
+		t.Fatalf("expected q_upload answer in list response, got %#v", responses[0].Answers)
+	}
+	if listUpload.FileUploadAnswers == nil || len(listUpload.FileUploadAnswers.Answers) != 1 {
+		t.Fatalf("expected file upload answers in list response, got %#v", listUpload)
 	}
 
 	resp, err := GetResponse(client, "form_1", "resp_1")
 	if err != nil {
 		t.Fatalf("GetResponse failed: %v", err)
 	}
-	if resp.ResponseID != "resp_1" || resp.Answers["q1"].TextAnswers.Answers[0].Value != "yes" {
-		t.Fatalf("unexpected response payload: %#v", resp)
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	if resp.ResponseID != "resp_1" {
+		t.Fatalf("unexpected response id: %#v", resp.ResponseID)
+	}
+	answer, ok := resp.Answers["q1"]
+	if !ok {
+		t.Fatalf("expected q1 answer in response, got %#v", resp.Answers)
+	}
+	if answer.TextAnswers == nil {
+		t.Fatalf("expected text answers for q1, got %#v", answer)
+	}
+	if len(answer.TextAnswers.Answers) == 0 {
+		t.Fatalf("expected at least one text answer for q1, got %#v", answer.TextAnswers)
+	}
+	if got := answer.TextAnswers.Answers[0].Value; got != "yes" {
+		t.Fatalf("unexpected q1 answer value: %q", got)
 	}
 	if resp.RespondentEmail != "u@example.com" {
 		t.Fatalf("unexpected respondent email in single response: %#v", resp.RespondentEmail)
 	}
-	if resp.Answers["q_upload"].FileUploadAnswers == nil || len(resp.Answers["q_upload"].FileUploadAnswers.Answers) != 1 {
-		t.Fatalf("expected file upload answers in single response, got %#v", resp.Answers["q_upload"])
+	singleUpload, ok := resp.Answers["q_upload"]
+	if !ok {
+		t.Fatalf("expected q_upload answer in single response, got %#v", resp.Answers)
+	}
+	if singleUpload.FileUploadAnswers == nil || len(singleUpload.FileUploadAnswers.Answers) != 1 {
+		t.Fatalf("expected file upload answers in single response, got %#v", singleUpload)
 	}
 }

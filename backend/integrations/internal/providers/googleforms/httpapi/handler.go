@@ -90,6 +90,10 @@ func (h *Handler) HandleWatchByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "watch id required")
 		return
 	}
+	if h.provider == nil {
+		writeError(w, http.StatusServiceUnavailable, "provider not configured")
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		h.getWatch(w, r, id)

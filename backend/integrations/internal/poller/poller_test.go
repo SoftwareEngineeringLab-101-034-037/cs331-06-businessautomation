@@ -1,6 +1,7 @@
 package poller
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/example/business-automation/backend/integrations/internal/googleapi"
@@ -27,8 +28,15 @@ func TestMapFieldsIncludesMappedAndEmail(t *testing.T) {
 	if data["name"] != "v1" || data["email"] != "u@example.com" {
 		t.Fatalf("unexpected mapped data: %#v", data)
 	}
-	if data["resume_links"] != "Drive file abc123|https://drive.google.com/file/d/abc123/view" {
-		t.Fatalf("expected named drive link for upload field, got %#v", data["resume_links"])
+	var entries []struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(data["resume_links"]), &entries); err != nil {
+		t.Fatalf("expected JSON-encoded upload links, got %q: %v", data["resume_links"], err)
+	}
+	if len(entries) != 1 || entries[0].Name != "Drive file abc123" || entries[0].URL != "https://drive.google.com/file/d/abc123/view" {
+		t.Fatalf("unexpected structured upload links: %#v", entries)
 	}
 }
 

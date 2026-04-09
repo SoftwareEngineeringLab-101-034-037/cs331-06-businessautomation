@@ -3,6 +3,7 @@ package integrations
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/example/business-automation/backend/integrations/internal/models"
@@ -47,6 +48,13 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(provider Provider) {
 	if r == nil || provider == nil {
 		return
+	}
+	value := reflect.ValueOf(provider)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return
+		}
 	}
 	id := strings.TrimSpace(provider.ID())
 	if id == "" {

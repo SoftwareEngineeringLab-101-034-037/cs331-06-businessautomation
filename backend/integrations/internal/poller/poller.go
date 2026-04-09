@@ -167,7 +167,11 @@ func (p *Poller) mapFields(resp googleapi.FormResponse, mapping map[string]strin
 		}
 
 		if answer.FileUploadAnswers != nil && len(answer.FileUploadAnswers.Answers) > 0 {
-			entries := make([]string, 0, len(answer.FileUploadAnswers.Answers))
+			type fileUploadEntry struct {
+				Name string `json:"name"`
+				URL  string `json:"url"`
+			}
+			entries := make([]fileUploadEntry, 0, len(answer.FileUploadAnswers.Answers))
 			for _, uploaded := range answer.FileUploadAnswers.Answers {
 				fileID := strings.TrimSpace(uploaded.FileID)
 				if fileID == "" {
@@ -178,10 +182,12 @@ func (p *Poller) mapFields(resp googleapi.FormResponse, mapping map[string]strin
 				if name == "" {
 					name = "Drive file " + fileID
 				}
-				entries = append(entries, name+"|"+url)
+				entries = append(entries, fileUploadEntry{Name: name, URL: url})
 			}
 			if len(entries) > 0 {
-				data[key] = strings.Join(entries, ", ")
+				if encoded, err := json.Marshal(entries); err == nil {
+					data[key] = string(encoded)
+				}
 			}
 		}
 	}

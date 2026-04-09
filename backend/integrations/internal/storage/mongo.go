@@ -195,7 +195,7 @@ func (s *MongoStore) DeleteToken(ctx context.Context, orgID string) error {
 }
 
 func (s *MongoStore) DeleteTokenByAccount(ctx context.Context, orgID, provider, accountID string) error {
-	_, err := s.tokens.DeleteOne(ctx, tokenProviderAccountSelector(orgID, provider, accountID))
+	_, err := s.tokens.DeleteMany(ctx, tokenProviderAccountSelector(orgID, provider, accountID))
 	return err
 }
 
@@ -412,31 +412,40 @@ func normalizeTokenAccountID(accountID string) string {
 
 func tokenProviderSelector(orgID, provider string) bson.M {
 	resolvedProvider := normalizeTokenProvider(provider)
+	providerClauses := []bson.M{{"provider": resolvedProvider}}
+	if resolvedProvider == defaultWatchProvider {
+		providerClauses = append(providerClauses,
+			bson.M{"provider": ""},
+			bson.M{"provider": bson.M{"$exists": false}},
+		)
+	}
 	return bson.M{"$and": []bson.M{
 		{"org_id": orgID},
-		{"$or": []bson.M{
-			{"provider": resolvedProvider},
-			{"provider": ""},
-			{"provider": bson.M{"$exists": false}},
-		}},
+		{"$or": providerClauses},
 	}}
 }
 
 func tokenProviderAccountSelector(orgID, provider, accountID string) bson.M {
 	resolvedProvider := normalizeTokenProvider(provider)
 	resolvedAccountID := normalizeTokenAccountID(accountID)
+	providerClauses := []bson.M{{"provider": resolvedProvider}}
+	if resolvedProvider == defaultWatchProvider {
+		providerClauses = append(providerClauses,
+			bson.M{"provider": ""},
+			bson.M{"provider": bson.M{"$exists": false}},
+		)
+	}
+	accountClauses := []bson.M{{"account_id": resolvedAccountID}}
+	if resolvedProvider == defaultWatchProvider && resolvedAccountID == "primary" {
+		accountClauses = append(accountClauses,
+			bson.M{"account_id": ""},
+			bson.M{"account_id": bson.M{"$exists": false}},
+		)
+	}
 	return bson.M{"$and": []bson.M{
 		{"org_id": orgID},
-		{"$or": []bson.M{
-			{"provider": resolvedProvider},
-			{"provider": ""},
-			{"provider": bson.M{"$exists": false}},
-		}},
-		{"$or": []bson.M{
-			{"account_id": resolvedAccountID},
-			{"account_id": ""},
-			{"account_id": bson.M{"$exists": false}},
-		}},
+		{"$or": providerClauses},
+		{"$or": accountClauses},
 	}}
 }
 

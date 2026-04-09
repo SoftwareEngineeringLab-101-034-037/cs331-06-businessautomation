@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
 	"testing"
 
 	"github.com/example/business-automation/backend/integrations/internal/models"
@@ -36,8 +37,15 @@ func TestRegistryRegisterGetAndIDs(t *testing.T) {
 		t.Fatalf("expected google_forms provider")
 	}
 	ids := r.IDs()
-	if len(ids) != 2 {
-		t.Fatalf("expected 2 IDs, got %d", len(ids))
+	sort.Strings(ids)
+	expected := []string{"gmail", "google_forms"}
+	if len(ids) != len(expected) {
+		t.Fatalf("expected %d IDs, got %d (%v)", len(expected), len(ids), ids)
+	}
+	for idx, want := range expected {
+		if ids[idx] != want {
+			t.Fatalf("expected IDs %v, got %v", expected, ids)
+		}
 	}
 }
 
@@ -54,6 +62,13 @@ func TestRegistryGetOrDefault(t *testing.T) {
 func TestRegistryIgnoresEmptyOrNil(t *testing.T) {
 	r := NewRegistry()
 	r.Register(nil)
+	var typedNil *fakeProvider
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("Register should not panic for typed-nil providers: %v", recovered)
+		}
+	}()
+	r.Register(typedNil)
 	r.Register(fakeProvider{id: ""})
 	if len(r.IDs()) != 0 {
 		t.Fatalf("expected no registered providers")
