@@ -98,6 +98,8 @@ func main() {
 		orgApi := api.Group("/orgs/:orgId")
 		orgApi.Use(middleware.OrgAdminOnly())
 		{
+			orgApi.GET("/settings", employeeHandler.GetOrganizationSettings)
+			orgApi.PUT("/settings", employeeHandler.UpdateOrganizationSettings)
 			orgApi.POST("/departments", employeeHandler.CreateDepartment)
 			orgApi.GET("/departments", employeeHandler.ListDepartments)
 			orgApi.GET("/departments/:deptID", employeeHandler.GetDepartment)

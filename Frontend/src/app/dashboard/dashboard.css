@@ -5284,6 +5284,41 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.settings-org-setup-intro {
+  border-bottom: none;
+  padding-bottom: 8px;
+}
+
+.settings-org-setup-intro-info {
+  width: 100%;
+}
+
+.settings-org-setup-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 20px 10px;
+}
+
+.settings-org-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.settings-org-setup-field,
+.settings-org-setup-usecase {
+  margin: 0;
+}
+
+.settings-org-setup-footer {
+  justify-content: space-between;
+}
+
+.settings-org-setup-meta {
+  display: grid;
+  gap: 4px;
+}
+
 .settings-list-shell {
   display: grid;
   gap: 10px;
@@ -8609,6 +8644,15 @@
 
   .settings-row-actions {
     justify-content: flex-start;
+  }
+
+  .settings-org-setup-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-org-setup-footer {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 

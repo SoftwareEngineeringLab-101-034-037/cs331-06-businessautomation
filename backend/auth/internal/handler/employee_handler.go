@@ -18,6 +18,51 @@ func NewEmployeeHandler(svc *service.EmployeeService) *EmployeeHandler {
 	return &EmployeeHandler{Service: svc}
 }
 
+// GET /api/orgs/:orgId/settings
+func (h *EmployeeHandler) GetOrganizationSettings(c *gin.Context) {
+	orgID := c.Param("orgId")
+	settings, err := h.Service.GetOrganizationSettings(orgID)
+	if err != nil {
+		log.Printf("GetOrganizationSettings error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, settings)
+}
+
+// PUT /api/orgs/:orgId/settings
+func (h *EmployeeHandler) UpdateOrganizationSettings(c *gin.Context) {
+	orgID := c.Param("orgId")
+	var body struct {
+		Domain   string `json:"domain"`
+		Industry string `json:"industry"`
+		Size     string `json:"size"`
+		Country  string `json:"country"`
+		UseCase  string `json:"use_case"`
+	}
+
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	settings, err := h.Service.UpdateOrganizationSettings(orgID, service.OrganizationSettingsUpdateInput{
+		Domain:   body.Domain,
+		Industry: body.Industry,
+		Size:     body.Size,
+		Country:  body.Country,
+		UseCase:  body.UseCase,
+	})
+	if err != nil {
+		log.Printf("UpdateOrganizationSettings error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, settings)
+}
+
 // POST /api/orgs/:orgId/departments
 func (h *EmployeeHandler) CreateDepartment(c *gin.Context) {
 	orgID := c.Param("orgId")

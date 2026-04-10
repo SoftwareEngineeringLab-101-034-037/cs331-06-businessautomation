@@ -130,6 +130,74 @@ func TestListDepartmentsReturnsOrgDepartments(t *testing.T) {
 	}
 }
 
+func TestGetOrganizationSettingsReturnsExistingValues(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	now := time.Now()
+	if err := db.Exec(`
+		INSERT INTO organization_settings (id, organization_id, domain, industry, size, country, use_case, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "settings_1", "org_1", "acme.com", "Technology", "51-200", "Bangladesh", "Workflow automation", now, now).Error; err != nil {
+		t.Fatalf("failed seeding organization settings: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/orgs/org_1/settings", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("failed unmarshalling response: %v", err)
+	}
+	if got["domain"] != "acme.com" {
+		t.Fatalf("expected domain acme.com, got %v", got["domain"])
+	}
+	if got["industry"] != "Technology" {
+		t.Fatalf("expected industry Technology, got %v", got["industry"])
+	}
+}
+
+func TestUpdateOrganizationSettingsUpsertsAndPersists(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	body := `{"domain":" example.org ","industry":"Finance","size":"11-50","country":"Bangladesh","use_case":"Approvals"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/orgs/org_1/settings", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var stored struct {
+		Domain   string `gorm:"column:domain"`
+		Industry string `gorm:"column:industry"`
+		Size     string `gorm:"column:size"`
+		Country  string `gorm:"column:country"`
+		UseCase  string `gorm:"column:use_case"`
+	}
+	if err := db.Table("organization_settings").
+		Select("domain, industry, size, country, use_case").
+		Where("organization_id = ?", "org_1").
+		Take(&stored).Error; err != nil {
+		t.Fatalf("failed reading stored settings: %v", err)
+	}
+
+	if stored.Domain != "example.org" {
+		t.Fatalf("expected trimmed domain example.org, got %q", stored.Domain)
+	}
+	if stored.Industry != "Finance" || stored.Size != "11-50" || stored.Country != "Bangladesh" || stored.UseCase != "Approvals" {
+		t.Fatalf("unexpected stored settings: %+v", stored)
+	}
+}
+
 func TestInviteSingleBadRequestOnInvalidBody(t *testing.T) {
 	h, _ := newEmployeeHandlerForTest(t)
 	r := newEmployeeTestRouter(h)
@@ -816,6 +884,8 @@ func newEmployeeTestRouter(h *EmployeeHandler) *gin.Engine {
 		c.Next()
 	})
 
+	r.GET("/api/orgs/:orgId/settings", h.GetOrganizationSettings)
+	r.PUT("/api/orgs/:orgId/settings", h.UpdateOrganizationSettings)
 	r.POST("/api/orgs/:orgId/departments", h.CreateDepartment)
 	r.GET("/api/orgs/:orgId/departments", h.ListDepartments)
 	r.PUT("/api/orgs/:orgId/departments/:deptID", h.UpdateDepartment)
@@ -870,6 +940,19 @@ func setupEmployeeHandlerTestDB(t *testing.T) *gorm.DB {
 			created_at DATETIME,
 			updated_at DATETIME,
 			last_sign_in_at DATETIME
+		)
+		`,
+		`
+		CREATE TABLE organization_settings (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL UNIQUE,
+			domain TEXT,
+			industry TEXT,
+			size TEXT,
+			country TEXT,
+			use_case TEXT,
+			created_at DATETIME,
+			updated_at DATETIME
 		)
 		`,
 		`
