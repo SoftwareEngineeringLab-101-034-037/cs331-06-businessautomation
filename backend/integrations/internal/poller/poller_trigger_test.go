@@ -1,26 +1,12 @@
 package poller
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/example/business-automation/backend/integrations/internal/models"
 )
-
-type noopStore struct{}
-
-func (noopStore) ListActiveWatchesByProvider(context.Context, string) ([]*models.FormWatch, error) {
-	return nil, nil
-}
-func (noopStore) UpdateWatch(context.Context, *models.FormWatch) error { return nil }
-func (noopStore) ListActiveGmailWatches(context.Context) ([]*models.GmailWatch, error) {
-	return nil, nil
-}
-func (noopStore) UpdateGmailWatch(context.Context, *models.GmailWatch) error { return nil }
 
 func TestPollerTriggerWorkflowPostsToEngine(t *testing.T) {
 	type requestMeta struct {
