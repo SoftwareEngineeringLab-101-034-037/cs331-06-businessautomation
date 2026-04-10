@@ -130,6 +130,74 @@ func TestListDepartmentsReturnsOrgDepartments(t *testing.T) {
 	}
 }
 
+func TestGetOrganizationSettingsReturnsExistingValues(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	now := time.Now()
+	if err := db.Exec(`
+		INSERT INTO organization_settings (id, organization_id, domain, industry, size, country, use_case, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "settings_1", "org_1", "acme.com", "Technology", "51-200", "Bangladesh", "Workflow automation", now, now).Error; err != nil {
+		t.Fatalf("failed seeding organization settings: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/orgs/org_1/settings", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("failed unmarshalling response: %v", err)
+	}
+	if got["domain"] != "acme.com" {
+		t.Fatalf("expected domain acme.com, got %v", got["domain"])
+	}
+	if got["industry"] != "Technology" {
+		t.Fatalf("expected industry Technology, got %v", got["industry"])
+	}
+}
+
+func TestUpdateOrganizationSettingsUpsertsAndPersists(t *testing.T) {
+	h, db := newEmployeeHandlerForTest(t)
+	r := newEmployeeTestRouter(h)
+
+	body := `{"domain":" example.org ","industry":"Finance","size":"11-50","country":"Bangladesh","use_case":"Approvals"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/orgs/org_1/settings", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var stored struct {
+		Domain   string `gorm:"column:domain"`
+		Industry string `gorm:"column:industry"`
+		Size     string `gorm:"column:size"`
+		Country  string `gorm:"column:country"`
+		UseCase  string `gorm:"column:use_case"`
+	}
+	if err := db.Table("organization_settings").
+		Select("domain, industry, size, country, use_case").
+		Where("organization_id = ?", "org_1").
+		Take(&stored).Error; err != nil {
+		t.Fatalf("failed reading stored settings: %v", err)
+	}
+
+	if stored.Domain != "example.org" {
+		t.Fatalf("expected trimmed domain example.org, got %q", stored.Domain)
+	}
+	if stored.Industry != "Finance" || stored.Size != "11-50" || stored.Country != "Bangladesh" || stored.UseCase != "Approvals" {
+		t.Fatalf("unexpected stored settings: %+v", stored)
+	}
+}
+
 func TestInviteSingleBadRequestOnInvalidBody(t *testing.T) {
 	h, _ := newEmployeeHandlerForTest(t)
 	r := newEmployeeTestRouter(h)
@@ -742,10 +810,67 @@ func TestDeleteRoleNotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteEmployee(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		h, db := newEmployeeHandlerForTestWithClerkSecret(t, "test_clerk_secret")
+		r := newEmployeeTestRouter(h)
+
+		prevDeleteFn := service.ClerkDeleteMembershipFunc
+		service.ClerkDeleteMembershipFunc = func(_ string, _ string, _ string) error { return nil }
+		defer func() { service.ClerkDeleteMembershipFunc = prevDeleteFn }()
+
+		now := time.Now()
+		if err := db.Exec(`
+			INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, "user_member", "member@example.com", "Mem", "Ber", "org_1", false, true, now, now).Error; err != nil {
+			t.Fatalf("failed seeding user: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/orgs/org_1/employees/user_member", nil)
+		req.Header.Set("X-User-ID", "admin_actor")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("admin target rejected", func(t *testing.T) {
+		h, db := newEmployeeHandlerForTest(t)
+		r := newEmployeeTestRouter(h)
+
+		now := time.Now()
+		if err := db.Exec(`
+			INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, "user_admin", "admin@example.com", "Ad", "Min", "org_1", true, true, now, now).Error; err != nil {
+			t.Fatalf("failed seeding user: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/orgs/org_1/employees/user_admin", nil)
+		req.Header.Set("X-User-ID", "admin_actor")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+}
+
 func newEmployeeHandlerForTest(t *testing.T) (*EmployeeHandler, *gorm.DB) {
+	return newEmployeeHandlerForTestWithClerkSecret(t, "")
+}
+
+func newEmployeeHandlerForTestWithClerkSecret(t *testing.T, clerkSecret string) (*EmployeeHandler, *gorm.DB) {
 	t.Helper()
 	db := setupEmployeeHandlerTestDB(t)
-	svc := service.NewEmployeeService(db, "")
+	prevRevokeFn := service.ClerkRevokeOrgInvitationsByEmailFunc
+	service.ClerkRevokeOrgInvitationsByEmailFunc = func(_ string, _ string, _ string) error { return nil }
+	t.Cleanup(func() { service.ClerkRevokeOrgInvitationsByEmailFunc = prevRevokeFn })
+	svc := service.NewEmployeeService(db, clerkSecret)
 	return NewEmployeeHandler(svc), db
 }
 
@@ -759,6 +884,8 @@ func newEmployeeTestRouter(h *EmployeeHandler) *gin.Engine {
 		c.Next()
 	})
 
+	r.GET("/api/orgs/:orgId/settings", h.GetOrganizationSettings)
+	r.PUT("/api/orgs/:orgId/settings", h.UpdateOrganizationSettings)
 	r.POST("/api/orgs/:orgId/departments", h.CreateDepartment)
 	r.GET("/api/orgs/:orgId/departments", h.ListDepartments)
 	r.PUT("/api/orgs/:orgId/departments/:deptID", h.UpdateDepartment)
@@ -768,6 +895,7 @@ func newEmployeeTestRouter(h *EmployeeHandler) *gin.Engine {
 	r.DELETE("/api/orgs/:orgId/invitations/:invitationId", h.RevokeInvitation)
 	r.POST("/api/orgs/:orgId/employees/invite/bulk", h.InviteBulk)
 	r.GET("/api/orgs/:orgId/employees", h.ListEmployees)
+	r.DELETE("/api/orgs/:orgId/employees/:employeeId", h.DeleteEmployee)
 	r.POST("/api/orgs/:orgId/roles", h.CreateRole)
 	r.GET("/api/orgs/:orgId/roles", h.ListRoles)
 	r.PUT("/api/orgs/:orgId/roles/:roleID", h.UpdateRole)
@@ -812,6 +940,19 @@ func setupEmployeeHandlerTestDB(t *testing.T) *gorm.DB {
 			created_at DATETIME,
 			updated_at DATETIME,
 			last_sign_in_at DATETIME
+		)
+		`,
+		`
+		CREATE TABLE organization_settings (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL UNIQUE,
+			domain TEXT,
+			industry TEXT,
+			size TEXT,
+			country TEXT,
+			use_case TEXT,
+			created_at DATETIME,
+			updated_at DATETIME
 		)
 		`,
 		`

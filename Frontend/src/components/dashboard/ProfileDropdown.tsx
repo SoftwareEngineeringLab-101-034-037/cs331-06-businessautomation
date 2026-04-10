@@ -85,7 +85,7 @@ export default function ProfileDropdown() {
             <div className="profile-menu-info">
               <span className="profile-menu-name">{displayName}</span>
               <span className="profile-menu-email">{email}</span>
-              <span className="profile-menu-role">{ROLE_LABELS[role]}</span>
+              <span className="profile-menu-role">{role ? ROLE_LABELS[role] : "Loading role..."}</span>
             </div>
           </div>
 

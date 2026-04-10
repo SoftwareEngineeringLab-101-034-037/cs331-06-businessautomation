@@ -15,6 +15,7 @@ type Store interface {
 	SaveInstance(models.Instance) (string, error)
 	GetInstance(id string) (models.Instance, bool)
 	FindInstanceByWorkflowAndFormResponse(workflowID, formResponseID string) (models.Instance, bool, error)
+	FindInstanceByWorkflowAndEmailMessageID(workflowID, emailMessageID string) (models.Instance, bool, error)
 	ListInstancesByOrg(orgID string) ([]models.Instance, error)
 	ListInstancesByWorkflow(workflowID string) ([]models.Instance, error)
 
@@ -25,5 +26,6 @@ type Store interface {
 	HasActiveTasks(instanceID string) (bool, error)
 	ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error)
 	ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error)
+	ListTasksByRoles(orgID string, roles []string) ([]models.TaskAssignment, error)
 	ListTasksByInstance(instanceID string) ([]models.TaskAssignment, error)
 }

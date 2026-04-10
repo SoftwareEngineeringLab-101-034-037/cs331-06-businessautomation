@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 import { useToast, ToastContainer } from "@/components/Toast";
+import { authFetch as authFetchWithToken } from "@/lib/auth-fetch";
 import { formatInstanceLabel } from "@/lib/instance-label";
 import { computeHeightBasedProgress, type WorkflowProgressNode } from "@/lib/workflow-progress";
 
@@ -121,6 +122,7 @@ function formatTaskDecision(status: string, decision?: string): string {
 function prettyActionName(action: string): string {
   switch (action) {
     case "instance_started": return "Workflow started";
+    case "instance_restarted": return "Instance restarted";
     case "task_assigned": return "Task assigned";
     case "task_started": return "Task started";
     case "task_action": return "Task decision recorded";
@@ -131,6 +133,54 @@ function prettyActionName(action: string): string {
     case "email_sent": return "Email sent";
     default: return action.replaceAll("_", " ");
   }
+}
+
+function formatAuditError(value: unknown): string {
+  let raw = "";
+
+  if (value instanceof Error) {
+    raw = String(value.message || "").trim();
+  } else if (typeof value === "object" && value !== null) {
+    const payload = value as Record<string, unknown>;
+    if (typeof payload.error === "string") {
+      raw = payload.error.trim();
+    } else if (typeof payload.message === "string") {
+      raw = payload.message.trim();
+    } else if (payload.body != null) {
+      if (typeof payload.body === "string") {
+        raw = payload.body.trim();
+      } else if (typeof payload.body === "object") {
+        const bodyPayload = payload.body as Record<string, unknown>;
+        if (typeof bodyPayload.error === "string") {
+          raw = bodyPayload.error.trim();
+        } else if (typeof bodyPayload.message === "string") {
+          raw = bodyPayload.message.trim();
+        }
+      }
+    }
+  }
+
+  if (!raw) {
+    raw = String(value || "").trim();
+  }
+  if (!raw) return "";
+
+  const bodyIdx = raw.indexOf(" body=");
+  if (bodyIdx >= 0) {
+    const prefix = raw.slice(0, bodyIdx).trim();
+    const bodyRaw = raw.slice(bodyIdx + " body=".length).trim();
+    try {
+      const parsed = JSON.parse(bodyRaw) as { error?: string };
+      const nested = String(parsed?.error || "").trim();
+      if (nested) {
+        return `${prefix} - ${nested}`;
+      }
+    } catch {
+      // Keep raw fallback when body is not valid JSON.
+    }
+  }
+
+  return raw;
 }
 
 function toTimeValue(value?: string): number | null {
@@ -242,15 +292,8 @@ export default function WorkstationPage() {
 
   const orgApiBase = `${WF_API}/api/orgs/${organization?.id}`;
 
-  const authFetch = useCallback(async (input: string, init: RequestInit = {}): Promise<Response> => {
-    const token = await getToken();
-    return fetch(input, {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
+  const authFetch = useCallback(async (input: string, init: RequestInit = {}, timeoutMs = 10000): Promise<Response> => {
+    return authFetchWithToken(getToken, input, init, timeoutMs);
   }, [getToken]);
 
   /* Show toast passed via URL query (from workflow-builder redirects) */
@@ -281,8 +324,13 @@ export default function WorkstationPage() {
   const [instanceDrawerLoading, setInstanceDrawerLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshingWorkflows, setRefreshingWorkflows] = useState(false);
+  const [refreshingInstances, setRefreshingInstances] = useState(false);
+  const [restartingInstanceId, setRestartingInstanceId] = useState<string | null>(null);
   const instanceRequestControllerRef = useRef<AbortController | null>(null);
   const instanceRequestIdRef = useRef(0);
+  const refreshInstancesRequestIdRef = useRef(0);
+  const workflowsRequestIdRef = useRef(0);
 
   const closeInstanceDrawer = useCallback(() => {
     instanceRequestIdRef.current += 1;
@@ -353,34 +401,153 @@ export default function WorkstationPage() {
 
   const fetchWorkflows = useCallback(async () => {
     if (!organization?.id) return;
+    const requestID = ++workflowsRequestIdRef.current;
+    const instanceRequestID = ++refreshInstancesRequestIdRef.current;
+    const isLatest = () => workflowsRequestIdRef.current === requestID;
+    const isLatestInstance = () => refreshInstancesRequestIdRef.current === instanceRequestID;
     setLoading(true);
     setError(null);
     try {
-      const [wfRes, instRes, employeeRes] = await Promise.all([
+      const [wfRes, instRes] = await Promise.all([
         authFetch(`${orgApiBase}/workflows`),
-        authFetch(`${orgApiBase}/instances`),
-        authFetch(`${AUTH_API}/api/orgs/${organization.id}/employees`),
+        authFetch(`${orgApiBase}/instances?compact=true`),
       ]);
       if (!wfRes.ok || !instRes.ok) throw new Error(`HTTP ${wfRes.status}/${instRes.status}`);
 
-      const [wfData, instData, employeeData] = await Promise.all([
+      const [wfData, instData] = await Promise.all([
         wfRes.json() as Promise<BackendWorkflow[]>,
         instRes.json() as Promise<BackendInstance[]>,
-        employeeRes.ok ? employeeRes.json() as Promise<BackendEmployee[]> : Promise.resolve([]),
       ]);
 
+      if (!isLatest()) return;
       setWorkflows(wfData ?? []);
+      if (isLatestInstance()) {
       setInstances(instData ?? []);
-      setEmployees(employeeData ?? []);
+      }
+
+      // Load directory data in the background so the table renders faster.
+      void (async () => {
+        try {
+          const employeeRes = await authFetch(`${AUTH_API}/api/orgs/${organization.id}/employees`, {}, 8000);
+          if (!employeeRes.ok) {
+            return;
+          }
+          const employeeData = (await employeeRes.json()) as BackendEmployee[];
+          if (isLatest()) {
+            setEmployees(employeeData ?? []);
+          }
+        } catch (employeeErr) {
+          if (isLatest()) {
+            console.warn("Failed to load employee directory", employeeErr);
+          }
+        }
+      })();
     } catch (err: any) {
+      if (!isLatest()) return;
       console.error("Failed to load workflows:", err);
       setError(err.message || "Could not reach workflow service");
     } finally {
-      setLoading(false);
+      if (isLatest()) {
+        setLoading(false);
+      }
     }
   }, [organization?.id, orgApiBase, authFetch]);
 
   useEffect(() => { fetchWorkflows(); }, [fetchWorkflows]);
+
+  const refreshWorkflowList = useCallback(async () => {
+    if (!organization?.id) return;
+    const requestID = ++workflowsRequestIdRef.current;
+    const isLatest = () => workflowsRequestIdRef.current === requestID;
+    setRefreshingWorkflows(true);
+    try {
+      const wfRes = await authFetch(`${orgApiBase}/workflows`);
+      if (!wfRes.ok) throw new Error(`HTTP ${wfRes.status}`);
+      const wfData = (await wfRes.json()) as BackendWorkflow[];
+      if (isLatest()) {
+        setWorkflows(wfData ?? []);
+      }
+    } catch (err: any) {
+      if (isLatest()) {
+        showToast(`Failed to refresh workflows: ${err?.message || err}`, "error");
+      }
+    } finally {
+      if (isLatest()) {
+        setRefreshingWorkflows(false);
+      }
+    }
+  }, [organization?.id, orgApiBase, authFetch, showToast]);
+
+  const refreshInstanceList = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (!organization?.id) return;
+    const requestID = ++refreshInstancesRequestIdRef.current;
+    const isLatest = () => refreshInstancesRequestIdRef.current === requestID;
+    if (!silent) {
+    setRefreshingInstances(true);
+    }
+    try {
+      const instRes = await authFetch(`${orgApiBase}/instances?compact=true`);
+      if (!instRes.ok) throw new Error(`HTTP ${instRes.status}`);
+      const instData = (await instRes.json()) as BackendInstance[];
+      if (isLatest()) {
+        setInstances(instData ?? []);
+      }
+    } catch (err: any) {
+      if (isLatest() && !silent) {
+        showToast(`Failed to refresh instances: ${err?.message || err}`, "error");
+      }
+    } finally {
+    if (!silent && isLatest()) {
+        setRefreshingInstances(false);
+      }
+    }
+  }, [organization?.id, orgApiBase, authFetch, showToast]);
+
+  const restartFailedInstance = useCallback(async () => {
+    if (!organization?.id || !selectedInstance || selectedInstance.status !== "failed") {
+      return;
+    }
+
+    setRestartingInstanceId(selectedInstance.id);
+    try {
+      const response = await authFetch(`${orgApiBase}/instances/${selectedInstance.id}/restart`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        let message = `Restart failed (${response.status})`;
+        try {
+          const payload = await response.json() as { error?: string };
+          if (payload?.error) {
+            message = payload.error;
+          }
+        } catch {
+          // Keep the status-based fallback when the body is not JSON.
+        }
+        throw new Error(message);
+      }
+
+      const restarted = await response.json() as BackendInstance;
+      setSelectedInstance(restarted);
+      setSelectedInstanceTasks([]);
+      showToast("Instance restarted.", "success");
+      await refreshInstanceList({ silent: true });
+      await openInstanceDrawer(restarted);
+    } catch (err: any) {
+      showToast(`Failed to restart instance: ${err?.message || err}`, "error");
+    } finally {
+      setRestartingInstanceId(null);
+    }
+  }, [organization?.id, selectedInstance, authFetch, orgApiBase, showToast, refreshInstanceList, openInstanceDrawer]);
+
+  useEffect(() => {
+    if (!organization?.id) return;
+
+    const timer = window.setInterval(() => {
+      void refreshInstanceList({ silent: true });
+    }, 20000);
+
+    return () => window.clearInterval(timer);
+  }, [organization?.id, refreshInstanceList]);
 
   /* 3-dot dropdown: open id + fixed position */
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -536,14 +703,14 @@ export default function WorkstationPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       showToast(`"${triggerTarget.name}" triggered successfully. Instance: ${data.instance_id}`, "success");
-      setTimeout(() => fetchWorkflows(), 500);
+      setTimeout(() => { void refreshInstanceList({ silent: true }); }, 500);
     } catch (err: any) {
       showToast("Failed to trigger workflow: " + (err.message || err), "error");
     } finally {
       setTriggerTarget(null);
       setTriggeringWorkflow(false);
     }
-  }, [triggerTarget, orgApiBase, authFetch, showToast, fetchWorkflows]);
+  }, [triggerTarget, orgApiBase, authFetch, showToast, refreshInstanceList]);
 
   const openActiveDialog = useCallback((wf: BackendWorkflow) => {
     setOpenMenuId(null);
@@ -625,6 +792,17 @@ export default function WorkstationPage() {
       });
   }, [instances, workflowByID, instanceStatusFilter, instanceTimeFilter]);
 
+  const instanceViewRows = useMemo(() => {
+    return filteredInstances.map((instance) => {
+      const workflow = workflowByID.get(instance.workflow_id);
+      return {
+        instance,
+        displayStatus: deriveInstanceStatus(instance, workflow),
+        progress: computeInstanceProgress(instance, workflow),
+      };
+    });
+  }, [filteredInstances, workflowByID]);
+
   return (
     <>
     <RoleGate
@@ -668,7 +846,9 @@ export default function WorkstationPage() {
                   Clear
                 </button>
               )}
-              <button className="action-btn action-btn-outline action-btn-sm" onClick={fetchWorkflows}>Refresh</button>
+              <button className="action-btn action-btn-outline action-btn-sm" onClick={refreshWorkflowList} disabled={refreshingWorkflows}>
+                {refreshingWorkflows ? "Refreshing..." : "Refresh Workflows"}
+              </button>
               <Link href="/workflow-builder" className="action-btn action-btn-primary action-btn-sm">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="18" height="18">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -766,6 +946,9 @@ export default function WorkstationPage() {
                   Clear
                 </button>
               )}
+              <button className="action-btn action-btn-outline action-btn-sm" onClick={() => { void refreshInstanceList(); }} disabled={refreshingInstances}>
+                {refreshingInstances ? "Refreshing..." : "Refresh Instances"}
+              </button>
             </div>
           </div>
 
@@ -781,7 +964,7 @@ export default function WorkstationPage() {
             </div>
           )}
 
-          {!loading && !error && filteredInstances.length > 0 && (
+          {!loading && !error && instanceViewRows.length > 0 && (
             <div className="table-container" style={{ maxHeight: `${10 * 48 + 72}px`, overflowY: "auto" }}>
               <table className="data-table">
                 <thead>
@@ -790,10 +973,7 @@ export default function WorkstationPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredInstances.map((inst) => {
-                    const workflow = workflowByID.get(inst.workflow_id);
-                    const displayStatus = deriveInstanceStatus(inst, workflow);
-                    const progress = computeInstanceProgress(inst, workflow);
+                  {instanceViewRows.map(({ instance: inst, displayStatus, progress }) => {
                     return (
                       <tr key={inst.id}>
                         <td className="font-medium">
@@ -841,13 +1021,27 @@ export default function WorkstationPage() {
                     const status = deriveInstanceStatus(selectedInstance, instanceWorkflow);
                     const progress = computeInstanceProgress(selectedInstance, instanceWorkflow);
                     return (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 18 }}>
-                    <div className="overview-stat-card"><span className="overview-stat-label">Status</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{instanceStatusLabel(status)}</span></div>
-                    <div className="overview-stat-card"><span className="overview-stat-label">Current Step</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.current_node || "-"}</span></div>
-                    <div className="overview-stat-card"><span className="overview-stat-label">Progress</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{progress.total > 0 ? `${progress.completed}/${progress.total} = ${progress.percent}%` : "-"}</span></div>
-                    <div className="overview-stat-card"><span className="overview-stat-label">Started</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{timeAgo(selectedInstance.started_at)}</span></div>
-                    <div className="overview-stat-card"><span className="overview-stat-label">Completed</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.completed_at ? timeAgo(selectedInstance.completed_at) : "-"}</span></div>
-                  </div>
+                    <>
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+                        {selectedInstance.status === "failed" && (
+                          <button
+                            type="button"
+                            className="action-btn action-btn-primary action-btn-sm"
+                            onClick={() => { void restartFailedInstance(); }}
+                            disabled={restartingInstanceId === selectedInstance.id}
+                          >
+                            {restartingInstanceId === selectedInstance.id ? "Restarting..." : "Restart from Failed Step"}
+                          </button>
+                        )}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 18 }}>
+                        <div className="overview-stat-card"><span className="overview-stat-label">Status</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{instanceStatusLabel(status)}</span></div>
+                        <div className="overview-stat-card"><span className="overview-stat-label">Current Step</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.current_node || "-"}</span></div>
+                        <div className="overview-stat-card"><span className="overview-stat-label">Progress</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{progress.total > 0 ? `${progress.completed}/${progress.total} = ${progress.percent}%` : "-"}</span></div>
+                        <div className="overview-stat-card"><span className="overview-stat-label">Started</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{timeAgo(selectedInstance.started_at)}</span></div>
+                        <div className="overview-stat-card"><span className="overview-stat-label">Completed</span><span className="overview-stat-value" style={{ fontSize: "1rem" }}>{selectedInstance.completed_at ? timeAgo(selectedInstance.completed_at) : "-"}</span></div>
+                      </div>
+                    </>
                     );
                   })()}
 
@@ -898,6 +1092,7 @@ export default function WorkstationPage() {
                         if (details.action) pieces.push(`Decision: ${String(details.action)}`);
                         if (details.comment) pieces.push(`Comment: ${String(details.comment)}`);
                         if (details.reason) pieces.push(`Reason: ${String(details.reason)}`);
+                        if (details.error) pieces.push(`Error: ${formatAuditError(details.error)}`);
                         return (
                           <div key={`${entry.timestamp}-${idx}`} style={{ border: "1px solid var(--border-color)", borderRadius: 10, padding: 10, background: "var(--surface-alt)" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>

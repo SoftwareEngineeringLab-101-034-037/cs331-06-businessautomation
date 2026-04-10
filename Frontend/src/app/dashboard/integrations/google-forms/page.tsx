@@ -5,8 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 
-const GF_API = process.env.NEXT_PUBLIC_GOOGLE_FORMS_API;
-const GF_API_MISSING_ERROR = "NEXT_PUBLIC_GOOGLE_FORMS_API is not configured.";
+const GF_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "";
+const GF_API_MISSING_ERROR = "NEXT_PUBLIC_INTEGRATIONS_API (or NEXT_PUBLIC_GOOGLE_FORMS_API) is not configured.";
 
 type IntegrationStatus = {
   configured?: boolean;
@@ -44,23 +44,30 @@ export default function GoogleFormsIntegrationPage() {
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [error, setError] = useState<string | null>(null);
   const loadDataRequestIdRef = useRef(0);
+  const oauthPollRef = useRef<number | null>(null);
+  const getTokenRef = useRef(getToken);
   const gfApiBase = (GF_API || "").trim();
+
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
 
   const connectUrl = useMemo(() => {
     if (!organization?.id || !gfApiBase) return "";
-    return `${gfApiBase}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}`;
+    return `${gfApiBase}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}&service=google_forms`;
   }, [gfApiBase, organization?.id]);
 
   const authFetch = useCallback(async (input: string, init: RequestInit = {}) => {
-    const token = await getToken();
+    const token = await getTokenRef.current();
+    const headers = new Headers(init.headers);
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
     return fetch(input, {
       ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
+      headers,
     });
-  }, [getToken]);
+  }, []);
 
   const loadData = useCallback(async () => {
     const requestId = ++loadDataRequestIdRef.current;
@@ -82,7 +89,7 @@ export default function GoogleFormsIntegrationPage() {
 
     try {
       const [statusRes, accountsRes] = await Promise.all([
-        authFetch(`${gfApiBase}/integration/status?org_id=${encodeURIComponent(organization.id)}`),
+        authFetch(`${gfApiBase}/integration/status?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
         authFetch(`${gfApiBase}/integration/accounts?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
       ]);
 
@@ -118,6 +125,10 @@ export default function GoogleFormsIntegrationPage() {
 
   useEffect(() => {
     return () => {
+      if (oauthPollRef.current !== null) {
+        window.clearInterval(oauthPollRef.current);
+        oauthPollRef.current = null;
+      }
       loadDataRequestIdRef.current += 1;
     };
   }, []);
@@ -143,7 +154,7 @@ export default function GoogleFormsIntegrationPage() {
       setError(null);
       try {
         const res = await authFetch(
-          `${gfApiBase}/integration/accounts/${encodeURIComponent(accountID)}?org_id=${encodeURIComponent(organization.id)}`,
+          `${gfApiBase}/integration/accounts/${encodeURIComponent(accountID)}?org_id=${encodeURIComponent(organization.id)}&service=google_forms`,
           { method: "DELETE" },
         );
         if (!res.ok) {
@@ -168,7 +179,7 @@ export default function GoogleFormsIntegrationPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await authFetch(`${gfApiBase}/auth/google/disconnect?org_id=${encodeURIComponent(organization.id)}`, {
+      const res = await authFetch(`${gfApiBase}/auth/google/disconnect?org_id=${encodeURIComponent(organization.id)}&service=google_forms`, {
         method: "DELETE",
       });
       if (!res.ok) {
@@ -213,6 +224,12 @@ export default function GoogleFormsIntegrationPage() {
               disabled={!connectUrl || !status?.configured}
               onClick={async () => {
                 if (!connectUrl || !status?.configured) return;
+
+                if (oauthPollRef.current !== null) {
+                  window.clearInterval(oauthPollRef.current);
+                  oauthPollRef.current = null;
+                }
+
                 const popup = window.open("", "_blank");
                 if (!popup) {
                   setError("Popup was blocked by the browser. Please allow popups and try again.");
@@ -228,8 +245,24 @@ export default function GoogleFormsIntegrationPage() {
                   if (!payload.auth_url) {
                     throw new Error("missing auth_url in connect response");
                   }
+
+                  const pollID = window.setInterval(() => {
+                    if (popup.closed) {
+                      if (oauthPollRef.current !== null) {
+                        window.clearInterval(oauthPollRef.current);
+                        oauthPollRef.current = null;
+                      }
+                      void loadData();
+                    }
+                  }, 1000);
+                  oauthPollRef.current = pollID;
+
                   popup.location.href = payload.auth_url;
                 } catch (err: any) {
+                  if (oauthPollRef.current !== null) {
+                    window.clearInterval(oauthPollRef.current);
+                    oauthPollRef.current = null;
+                  }
                   popup.close();
                   setError(err?.message || "Failed to start Google OAuth connect flow");
                 }
@@ -284,7 +317,7 @@ export default function GoogleFormsIntegrationPage() {
               </div>
             </div>
 
-            {!status?.configured && (
+            {status && !status.configured && (
               <div className="integration-alert warning">
                 <strong>Setup required:</strong> Google OAuth credentials are missing.
                 {missingFields ? ` Missing: ${missingFields}.` : ""}

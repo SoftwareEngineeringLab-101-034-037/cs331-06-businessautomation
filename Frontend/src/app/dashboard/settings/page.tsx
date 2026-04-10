@@ -7,6 +7,7 @@ import { useRole } from "@/components/dashboard/RoleProvider";
 import { ROLE_LABELS, type UserRole } from "@/types/dashboard";
 import CreateDepartmentDialog from "@/components/dashboard/CreateDepartmentDialog";
 import CreateRoleDialog from "@/components/dashboard/CreateRoleDialog";
+import { COUNTRY_OPTIONS, INDUSTRY_OPTIONS, ORG_SIZE_OPTIONS } from "@/lib/org-options";
 
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
 
@@ -62,6 +63,26 @@ interface BackendEmployee {
   };
 }
 
+interface BackendOrganizationSettings {
+  id: string;
+  organization_id: string;
+  domain?: string;
+  industry?: string;
+  size?: string;
+  country?: string;
+  use_case?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface OrgSettingsFormState {
+  domain: string;
+  industry: string;
+  size: string;
+  country: string;
+  use_case: string;
+}
+
 const SECTION_META: Record<SettingsSection, { label: string; description: string }> = {
   org: {
     label: "Org Settings",
@@ -93,7 +114,7 @@ const SECTION_META: Record<SettingsSection, { label: string; description: string
   },
 };
 
-function canManageSettings(role: UserRole) {
+function canManageSettings(role: UserRole | null) {
   return role === "admin";
 }
 
@@ -112,12 +133,23 @@ export default function SettingsPage() {
   const { getToken } = useAuth();
   const { theme, toggle } = useTheme();
   const { role } = useRole();
+  const roleLabel = role ? ROLE_LABELS[role] : "Loading role...";
 
   const adminMode = canManageSettings(role);
   const [activeSection, setActiveSection] = useState<SettingsSection>(adminMode ? "org" : "appearance");
   const [departments, setDepartments] = useState<BackendDepartmentSummary[]>([]);
   const [roles, setRoles] = useState<BackendRoleSummary[]>([]);
   const [employees, setEmployees] = useState<BackendEmployee[]>([]);
+  const [orgSettings, setOrgSettings] = useState<BackendOrganizationSettings | null>(null);
+  const [orgSettingsForm, setOrgSettingsForm] = useState<OrgSettingsFormState>({
+    domain: "",
+    industry: "",
+    size: "",
+    country: "",
+    use_case: "",
+  });
+  const [orgSettingsSaving, setOrgSettingsSaving] = useState(false);
+  const [orgSettingsSaveMsg, setOrgSettingsSaveMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDepartmentDialog, setShowDepartmentDialog] = useState(false);
@@ -165,13 +197,23 @@ export default function SettingsPage() {
     return "Unknown creator";
   }, [user?.id]);
 
+  const syncOrgSettingsForm = useCallback((next: BackendOrganizationSettings | null) => {
+    setOrgSettingsForm({
+      domain: next?.domain || "",
+      industry: next?.industry || "",
+      size: next?.size || "",
+      country: next?.country || "",
+      use_case: next?.use_case || "",
+    });
+  }, []);
+
   const fetchManagementData = useCallback(async () => {
     if (!adminMode || !organization?.id) return;
     setLoading(true);
     setError(null);
     try {
       const token = await getToken();
-      const [departmentRes, roleRes, employeeRes] = await Promise.all([
+      const [departmentRes, roleRes, employeeRes, settingsRes] = await Promise.all([
         fetch(`${AUTH_API}/api/orgs/${organization.id}/departments`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
@@ -181,27 +223,72 @@ export default function SettingsPage() {
         fetch(`${AUTH_API}/api/orgs/${organization.id}/employees`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
+        fetch(`${AUTH_API}/api/orgs/${organization.id}/settings`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
       ]);
 
-      if (!departmentRes.ok || !roleRes.ok || !employeeRes.ok) {
+      if (!departmentRes.ok || !roleRes.ok || !employeeRes.ok || !settingsRes.ok) {
         throw new Error("Failed to load settings data");
       }
 
-      const [departmentData, roleData, employeeData] = await Promise.all([
+      const [departmentData, roleData, employeeData, orgSettingsData] = await Promise.all([
         departmentRes.json(),
         roleRes.json(),
         employeeRes.json(),
+        settingsRes.json(),
       ]);
 
       setDepartments(Array.isArray(departmentData) ? departmentData : []);
       setRoles(Array.isArray(roleData) ? roleData : []);
       setEmployees(Array.isArray(employeeData) ? employeeData : []);
+      const nextOrgSettings = orgSettingsData && typeof orgSettingsData === "object"
+        ? (orgSettingsData as BackendOrganizationSettings)
+        : null;
+      setOrgSettings(nextOrgSettings);
+      syncOrgSettingsForm(nextOrgSettings);
+      setOrgSettingsSaveMsg(null);
     } catch (fetchError: any) {
       setError(fetchError.message || "Could not load settings data");
     } finally {
       setLoading(false);
     }
-  }, [adminMode, organization?.id, getToken]);
+  }, [adminMode, organization?.id, getToken, syncOrgSettingsForm]);
+
+  const updateOrgSettingField = useCallback((field: keyof OrgSettingsFormState, value: string) => {
+    setOrgSettingsForm((current) => ({ ...current, [field]: value }));
+  }, []);
+
+  const saveOrgSettings = useCallback(async () => {
+    if (!organization?.id) return;
+    setOrgSettingsSaving(true);
+    setError(null);
+    setOrgSettingsSaveMsg(null);
+    try {
+      const token = await getToken();
+      const res = await fetch(`${AUTH_API}/api/orgs/${organization.id}/settings`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(orgSettingsForm),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error || "Failed to update organisation settings");
+      }
+      const next = await res.json();
+      const normalized = next && typeof next === "object" ? (next as BackendOrganizationSettings) : null;
+      setOrgSettings(normalized);
+      syncOrgSettingsForm(normalized);
+      setOrgSettingsSaveMsg("Organisation settings updated.");
+    } catch (saveError: any) {
+      setError(saveError.message || "Could not update organisation settings");
+    } finally {
+      setOrgSettingsSaving(false);
+    }
+  }, [organization?.id, getToken, orgSettingsForm, syncOrgSettingsForm]);
 
   const deleteEntity = useCallback(async () => {
     if (!confirmDelete || !organization?.id) return;
@@ -286,7 +373,7 @@ export default function SettingsPage() {
                 <div className="settings-row">
                   <div className="settings-row-info">
                     <span className="settings-row-label">Managed Access Role</span>
-                    <span className="settings-row-desc">{ROLE_LABELS[role]}</span>
+                    <span className="settings-row-desc">{roleLabel}</span>
                   </div>
                   <span className="settings-badge settings-badge-muted">Current</span>
                 </div>
@@ -313,6 +400,94 @@ export default function SettingsPage() {
                     <span className="settings-row-label">Structure Snapshot</span>
                     <span className="settings-row-desc">{departments.length} departments · {roles.length} workflow roles · {employees.length} employees</span>
                   </div>
+                </div>
+              </div>
+
+              <div className="settings-card settings-card-wide">
+                <div className="settings-card-header">
+                  <h4>Organisation Setup Details</h4>
+                </div>
+                <div className="settings-row settings-org-setup-intro">
+                  <div className="settings-row-info settings-org-setup-intro-info">
+                    <span className="settings-row-desc">These are stored in the Auth service organization_settings table and can be edited here.</span>
+                  </div>
+                </div>
+                <div className="settings-org-setup-body">
+                  <div className="settings-org-setup-grid">
+                    <div className="wf-field settings-org-setup-field">
+                    <label className="wf-field-label">Domain</label>
+                    <input
+                      className="wf-input"
+                      placeholder="example.com"
+                      value={orgSettingsForm.domain}
+                      onChange={(e) => updateOrgSettingField("domain", e.target.value)}
+                    />
+                    </div>
+                    <div className="wf-field settings-org-setup-field">
+                    <label className="wf-field-label">Industry</label>
+                      <select
+                        className="wf-select"
+                        value={orgSettingsForm.industry}
+                        onChange={(e) => updateOrgSettingField("industry", e.target.value)}
+                      >
+                        <option value="">Select industry</option>
+                        {INDUSTRY_OPTIONS.map((industry) => (
+                          <option key={industry} value={industry}>{industry}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="wf-field settings-org-setup-field">
+                    <label className="wf-field-label">Organisation Size</label>
+                      <select
+                        className="wf-select"
+                        value={orgSettingsForm.size}
+                        onChange={(e) => updateOrgSettingField("size", e.target.value)}
+                      >
+                        <option value="">Select size</option>
+                        {ORG_SIZE_OPTIONS.map((size) => (
+                          <option key={size} value={size}>{size}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="wf-field settings-org-setup-field">
+                    <label className="wf-field-label">Country</label>
+                    <input
+                      className="wf-input"
+                        list="org-settings-country-options"
+                        placeholder="Start typing country name"
+                      value={orgSettingsForm.country}
+                      onChange={(e) => updateOrgSettingField("country", e.target.value)}
+                    />
+                      <datalist id="org-settings-country-options">
+                        {COUNTRY_OPTIONS.map((country) => (
+                          <option key={country} value={country} />
+                        ))}
+                      </datalist>
+                    </div>
+                  </div>
+                  <div className="wf-field settings-org-setup-usecase">
+                    <label className="wf-field-label">Use Case</label>
+                    <textarea
+                      className="wf-textarea"
+                      rows={3}
+                      placeholder="What this organisation uses automation for"
+                      value={orgSettingsForm.use_case}
+                      onChange={(e) => updateOrgSettingField("use_case", e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="settings-card-footer settings-org-setup-footer">
+                  <div className="settings-org-setup-meta">
+                    <span className="settings-saved-msg settings-saved-static">
+                      Last updated: {formatDate(orgSettings?.updated_at)}
+                    </span>
+                    {orgSettingsSaveMsg && (
+                      <span className="settings-saved-msg settings-saved-static">{orgSettingsSaveMsg}</span>
+                    )}
+                  </div>
+                  <button className="action-btn action-btn-outline" onClick={saveOrgSettings} disabled={orgSettingsSaving}>
+                    {orgSettingsSaving ? "Saving..." : "Save Organisation Settings"}
+                  </button>
                 </div>
               </div>
             </div>
@@ -445,7 +620,7 @@ export default function SettingsPage() {
                 <div className="settings-row">
                   <div className="settings-row-info">
                     <span className="settings-row-label">Access Role</span>
-                    <span className="settings-row-desc">{ROLE_LABELS[role]}</span>
+                    <span className="settings-row-desc">{roleLabel}</span>
                   </div>
                 </div>
               </div>
@@ -568,7 +743,7 @@ export default function SettingsPage() {
                 <div className="settings-row">
                   <div className="settings-row-info">
                     <span className="settings-row-label">Current Access Role</span>
-                    <span className="settings-row-desc">{ROLE_LABELS[role]} controls what this user can manage in the dashboard.</span>
+                    <span className="settings-row-desc">{roleLabel} controls what this user can manage in the dashboard.</span>
                   </div>
                   <span className="settings-badge settings-badge-muted">Access</span>
                 </div>

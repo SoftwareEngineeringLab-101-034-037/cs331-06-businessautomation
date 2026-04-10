@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type {
   WorkflowStep,
   WorkflowTrigger,
@@ -10,17 +10,29 @@ import type {
   ConnectorType,
   TaskAction,
   TaskDataVisibilityMode,
+  ConditionConfig,
+  ConditionRule,
+  ConditionJoin,
+  ConditionDataType,
+  ConditionOperator,
+  WorkflowDataField,
 } from "@/types/workflow";
 import {
   TRIGGER_CONFIG,
   STEP_ACTION_CONFIG,
   NODE_TYPE_CONFIG,
   PRESET_ORG_ROLES,
-  PRESET_POSITIONS,
   CONNECTOR_CONFIG,
   TASK_ACTION_OPTIONS,
 } from "@/types/workflow";
-import { parseFieldMapping, serializeFieldMapping } from "@/lib/workflow-mapping";
+import {
+  parseFieldMapping,
+  serializeFieldMapping,
+  parseFieldSchema,
+  normalizeConditionDataType,
+  inferConditionDataTypeFromFormFieldType,
+  buildFieldSchemaJSON,
+} from "@/lib/workflow-mapping";
 
 const GOOGLE_FORMS_CREATE_URL = "https://docs.google.com/forms/u/0/create";
 
@@ -31,6 +43,343 @@ type GoogleFormField = {
   required?: boolean;
   field_type?: string;
 };
+
+const CONDITION_DATA_TYPE_OPTIONS: Array<{ value: ConditionDataType; label: string }> = [
+  { value: "text", label: "Text" },
+  { value: "number", label: "Number" },
+  { value: "boolean", label: "Yes / No" },
+  { value: "date", label: "Date" },
+  { value: "datetime", label: "Date & Time" },
+  { value: "time", label: "Time" },
+];
+
+const CONDITION_OPERATORS_BY_TYPE: Record<ConditionDataType, Array<{ value: ConditionOperator; label: string; requiresValue?: boolean }>> = {
+  text: [
+    { value: "eq", label: "is" },
+    { value: "neq", label: "is not" },
+    { value: "contains", label: "contains" },
+    { value: "not_contains", label: "does not contain" },
+    { value: "starts_with", label: "starts with" },
+    { value: "ends_with", label: "ends with" },
+    { value: "is_empty", label: "is empty", requiresValue: false },
+    { value: "is_not_empty", label: "is not empty", requiresValue: false },
+  ],
+  number: [
+    { value: "eq", label: "=" },
+    { value: "neq", label: "!=" },
+    { value: "gt", label: ">" },
+    { value: "gte", label: ">=" },
+    { value: "lt", label: "<" },
+    { value: "lte", label: "<=" },
+  ],
+  boolean: [
+    { value: "eq", label: "is" },
+    { value: "neq", label: "is not" },
+  ],
+  date: [
+    { value: "eq", label: "=" },
+    { value: "neq", label: "!=" },
+    { value: "gt", label: ">" },
+    { value: "gte", label: ">=" },
+    { value: "lt", label: "<" },
+    { value: "lte", label: "<=" },
+  ],
+  datetime: [
+    { value: "eq", label: "=" },
+    { value: "neq", label: "!=" },
+    { value: "gt", label: ">" },
+    { value: "gte", label: ">=" },
+    { value: "lt", label: "<" },
+    { value: "lte", label: "<=" },
+  ],
+  time: [
+    { value: "eq", label: "=" },
+    { value: "neq", label: "!=" },
+    { value: "gt", label: ">" },
+    { value: "gte", label: ">=" },
+    { value: "lt", label: "<" },
+    { value: "lte", label: "<=" },
+  ],
+};
+
+function inferConditionDataTypeForField(field?: WorkflowDataField): ConditionDataType {
+  if (!field) return "text";
+  return normalizeConditionDataType(field.dataType);
+}
+
+function operatorRequiresValue(dataType: ConditionDataType, operator: ConditionOperator): boolean {
+  const meta = CONDITION_OPERATORS_BY_TYPE[dataType].find((item) => item.value === operator);
+  if (!meta) return true;
+  return meta.requiresValue !== false;
+}
+
+function formatConditionRuleSummary(rule: ConditionRule): string {
+  if (!rule.field || !rule.operator) return "";
+  const opLabel = CONDITION_OPERATORS_BY_TYPE[rule.dataType]
+    .find((item) => item.value === rule.operator)?.label || rule.operator;
+  if (!operatorRequiresValue(rule.dataType, rule.operator)) {
+    return `${rule.field} ${opLabel}`;
+  }
+  const value = String(rule.value || "").trim();
+  if (!value) return `${rule.field} ${opLabel}`;
+  return `${rule.field} ${opLabel} ${value}`;
+}
+
+function formatConditionSummary(config: ConditionConfig): string {
+  const explicitLogic = String(config.logic || "").trim();
+  if (explicitLogic) return explicitLogic;
+
+  const parts = config.rules
+    .map((rule) => formatConditionRuleSummary(rule))
+    .filter((part) => part.length > 0);
+  if (parts.length === 0) return "";
+  const joinLabel = (config.join || "and").toUpperCase();
+  return parts.join(` ${joinLabel} `);
+}
+
+function buildDefaultConditionLogic(ruleCount: number, join: ConditionJoin): string {
+  if (ruleCount <= 0) return "";
+  if (ruleCount === 1) return "1";
+  const op = join === "or" ? " OR " : " AND ";
+  return Array.from({ length: ruleCount }, (_, idx) => String(idx + 1)).join(op);
+}
+
+function truncateConditionFieldLabel(label: string, maxLength = 28): string {
+  const text = String(label || "").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1)}…`;
+}
+
+function tokenizeConditionLogicInput(raw: string): string[] {
+  const matches = String(raw || "").toUpperCase().match(/\d+|AND|OR|\(|\)/g);
+  return matches || [];
+}
+
+function formatConditionLogicTokens(tokens: string[]): string {
+  let out = "";
+  for (const token of tokens) {
+    if (token === "(") {
+      out = out ? `${out} (` : "(";
+      continue;
+    }
+    if (token === ")") {
+      out = `${out})`;
+      continue;
+    }
+    if (token === "AND" || token === "OR") {
+      out = out ? `${out} ${token}` : token;
+      continue;
+    }
+    if (!out || out.endsWith("(")) {
+      out = `${out}${token}`;
+    } else {
+      out = `${out} ${token}`;
+    }
+  }
+  return out.trim();
+}
+
+function appendConditionLogicToken(current: string, token: string): string {
+  const normalizedToken = String(token || "").trim().toUpperCase();
+  if (!normalizedToken) return String(current || "").trim();
+
+  const tokens = tokenizeConditionLogicInput(current);
+  const last = tokens[tokens.length - 1] || "";
+
+  if ((normalizedToken === "AND" || normalizedToken === "OR") && (tokens.length === 0 || last === "(" || last === "AND" || last === "OR")) {
+    return formatConditionLogicTokens(tokens);
+  }
+  if (normalizedToken === ")" && (tokens.length === 0 || last === "(" || last === "AND" || last === "OR")) {
+    return formatConditionLogicTokens(tokens);
+  }
+
+  tokens.push(normalizedToken);
+  return formatConditionLogicTokens(tokens);
+}
+
+function popConditionLogicToken(current: string): string {
+  const tokens = tokenizeConditionLogicInput(current);
+  if (tokens.length === 0) return "";
+  tokens.pop();
+  return formatConditionLogicTokens(tokens);
+}
+
+function normalizeAssignmentToken(raw: string): string {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  if (!text.startsWith("#") && !text.startsWith("@")) return "";
+  const prefix = text[0];
+  const body = text.slice(1).trim().replace(/\s+/g, " ");
+  if (!body) return "";
+  return `${prefix}${body}`;
+}
+
+function parseTaskAssignmentTargets(rawTargets: string[]): { targets: string[]; roles: string[]; users: string[] } {
+  const targets: string[] = [];
+  const roles: string[] = [];
+  const users: string[] = [];
+  const seenTargets = new Set<string>();
+  const seenRoles = new Set<string>();
+  const seenUsers = new Set<string>();
+
+  for (const rawTarget of rawTargets) {
+    const token = normalizeAssignmentToken(rawTarget);
+    if (!token) continue;
+    const lowered = token.toLowerCase();
+    if (seenTargets.has(lowered)) continue;
+    seenTargets.add(lowered);
+    targets.push(token);
+
+    if (token.startsWith("#")) {
+      const role = token.slice(1).trim();
+      const roleKey = role.toLowerCase();
+      if (role && !seenRoles.has(roleKey)) {
+        seenRoles.add(roleKey);
+        roles.push(role);
+      }
+      continue;
+    }
+
+    if (token.startsWith("@")) {
+      const userID = token.slice(1).trim();
+      const userKey = userID.toLowerCase();
+      if (userID && !seenUsers.has(userKey)) {
+        seenUsers.add(userKey);
+        users.push(userID);
+      }
+    }
+  }
+
+  return { targets, roles, users };
+}
+
+function buildTaskAssignmentTargets(rawTargets: string[] | undefined, fallbackRole?: string, fallbackUser?: string): string[] {
+  if (Array.isArray(rawTargets) && rawTargets.length > 0) {
+    return rawTargets;
+  }
+
+  const fallbackTargets: string[] = [];
+  const role = String(fallbackRole || "").trim();
+  const user = String(fallbackUser || "").trim();
+  if (role) fallbackTargets.push(`#${role}`);
+  if (user) fallbackTargets.push(`@${user}`);
+  return fallbackTargets;
+}
+
+function tokenizeConditionLogicExpression(raw: string): { tokens: string[]; error?: string } {
+  const input = String(raw || "").trim();
+  if (!input) {
+    return { tokens: [], error: "logic expression is empty" };
+  }
+
+  const tokens: string[] = [];
+  let index = 0;
+
+  while (index < input.length) {
+    const ch = input[index];
+
+    if (/\s/.test(ch)) {
+      index += 1;
+      continue;
+    }
+
+    if (ch === "(" || ch === ")") {
+      tokens.push(ch);
+      index += 1;
+      continue;
+    }
+
+    if (/\d/.test(ch)) {
+      let end = index + 1;
+      while (end < input.length && /\d/.test(input[end])) end += 1;
+      tokens.push(input.slice(index, end));
+      index = end;
+      continue;
+    }
+
+    if (/[a-z]/i.test(ch)) {
+      let end = index + 1;
+      while (end < input.length && /[a-z]/i.test(input[end])) end += 1;
+      const word = input.slice(index, end).toUpperCase();
+      if (word !== "AND" && word !== "OR") {
+        return { tokens: [], error: `unsupported token "${word}"` };
+      }
+      tokens.push(word);
+      index = end;
+      continue;
+    }
+
+    return { tokens: [], error: `invalid character "${ch}"` };
+  }
+
+  return { tokens };
+}
+
+function validateConditionLogicExpression(raw: string, ruleCount: number): string | null {
+  const tokenized = tokenizeConditionLogicExpression(raw);
+  if (tokenized.error) return tokenized.error;
+
+  const tokens = tokenized.tokens;
+  if (tokens.length === 0) return "logic expression is empty";
+
+  let position = 0;
+
+  const parseExpr = (): string | null => {
+    const termErr = parseTerm();
+    if (termErr) return termErr;
+    while (position < tokens.length && tokens[position] === "OR") {
+      position += 1;
+      const nextErr = parseTerm();
+      if (nextErr) return nextErr;
+    }
+    return null;
+  };
+
+  const parseTerm = (): string | null => {
+    const factorErr = parseFactor();
+    if (factorErr) return factorErr;
+    while (position < tokens.length && tokens[position] === "AND") {
+      position += 1;
+      const nextErr = parseFactor();
+      if (nextErr) return nextErr;
+    }
+    return null;
+  };
+
+  const parseFactor = (): string | null => {
+    if (position >= tokens.length) return "unexpected end of logic expression";
+
+    const token = tokens[position];
+    if (token === "(") {
+      position += 1;
+      const nestedErr = parseExpr();
+      if (nestedErr) return nestedErr;
+      if (position >= tokens.length || tokens[position] !== ")") {
+        return "missing closing parenthesis";
+      }
+      position += 1;
+      return null;
+    }
+
+    const ref = Number(token);
+    if (!Number.isInteger(ref) || ref < 1) {
+      return `invalid rule reference "${token}"`;
+    }
+    if (ref > ruleCount) {
+      return `rule reference ${ref} is out of range (max ${ruleCount})`;
+    }
+
+    position += 1;
+    return null;
+  };
+
+  const parseErr = parseExpr();
+  if (parseErr) return parseErr;
+  if (position !== tokens.length) {
+    return `unexpected token "${tokens[position]}"`;
+  }
+  return null;
+}
 
 function parseCommaSeparatedList(raw: string): string[] {
   const out: string[] = [];
@@ -94,6 +443,141 @@ export function TriggerEditor({
   onClose,
 }: TriggerEditorProps) {
   const mapping = parseFieldMapping(trigger.config.field_mapping || "");
+  const parsedSchema = parseFieldSchema(trigger.config.field_schema || "");
+  const schemaByQuestionID = new Map(parsedSchema.map((item) => [item.question_id, item]));
+  const schemaTypeOverrides: Record<string, ConditionDataType> = {};
+  for (const item of parsedSchema) {
+    if (item.data_type) {
+      schemaTypeOverrides[item.question_id] = normalizeConditionDataType(item.data_type);
+    }
+  }
+
+  const buildFallbackFieldSchema = (
+    nextMapping: Record<string, string>,
+    overrides: Record<string, ConditionDataType>,
+  ) => {
+    const rows = new Map<string, {
+      question_id: string;
+      title: string;
+      required: boolean;
+      field_type: string;
+      variable: string;
+      data_type: ConditionDataType;
+    }>();
+
+    for (const [questionIDRaw, variableRaw] of Object.entries(nextMapping)) {
+      const questionID = String(questionIDRaw || "").trim();
+      const variable = String(variableRaw || "").trim();
+      if (!questionID || !variable) continue;
+
+      const existing = schemaByQuestionID.get(questionID);
+      const resolvedType = normalizeConditionDataType(
+        overrides[questionID]
+        || existing?.data_type
+        || inferConditionDataTypeFromFormFieldType(existing?.field_type),
+      );
+
+      rows.set(questionID, {
+        question_id: questionID,
+        title: String(existing?.title || questionID).trim() || questionID,
+        required: Boolean(existing?.required),
+        field_type: String(existing?.field_type || "text").trim() || "text",
+        variable,
+        data_type: resolvedType,
+      });
+    }
+
+    for (const item of parsedSchema) {
+      const questionID = String(item.question_id || "").trim();
+      if (!questionID || rows.has(questionID)) continue;
+
+      const variable = String(nextMapping[questionID] || item.variable || "").trim();
+      if (!variable) continue;
+
+      const resolvedType = normalizeConditionDataType(
+        overrides[questionID]
+        || item.data_type
+        || inferConditionDataTypeFromFormFieldType(item.field_type),
+      );
+
+      rows.set(questionID, {
+        question_id: questionID,
+        title: String(item.title || questionID).trim() || questionID,
+        required: Boolean(item.required),
+        field_type: String(item.field_type || "text").trim() || "text",
+        variable,
+        data_type: resolvedType,
+      });
+    }
+
+    return JSON.stringify(Array.from(rows.values()));
+  };
+
+  const manualMappingRows = (() => {
+    const rows = new Map<string, {
+      questionID: string;
+      title: string;
+      required: boolean;
+      variable: string;
+      dataType: ConditionDataType;
+    }>();
+
+    for (const [questionIDRaw, variableRaw] of Object.entries(mapping)) {
+      const questionID = String(questionIDRaw || "").trim();
+      const variable = String(variableRaw || "").trim();
+      if (!questionID || !variable) continue;
+
+      const existing = schemaByQuestionID.get(questionID);
+      const dataType = normalizeConditionDataType(
+        schemaTypeOverrides[questionID]
+        || existing?.data_type
+        || inferConditionDataTypeFromFormFieldType(existing?.field_type),
+      );
+
+      rows.set(questionID, {
+        questionID,
+        title: String(existing?.title || questionID).trim() || questionID,
+        required: Boolean(existing?.required),
+        variable,
+        dataType,
+      });
+    }
+
+    for (const item of parsedSchema) {
+      const questionID = String(item.question_id || "").trim();
+      const variable = String(item.variable || "").trim();
+      if (!questionID || !variable || rows.has(questionID)) continue;
+
+      const dataType = normalizeConditionDataType(
+        schemaTypeOverrides[questionID]
+        || item.data_type
+        || inferConditionDataTypeFromFormFieldType(item.field_type),
+      );
+
+      rows.set(questionID, {
+        questionID,
+        title: String(item.title || questionID).trim() || questionID,
+        required: Boolean(item.required),
+        variable,
+        dataType,
+      });
+    }
+
+    return Array.from(rows.values()).sort((a, b) => a.questionID.localeCompare(b.questionID));
+  })();
+
+  const rebuildSchema = (
+    nextMapping: Record<string, string>,
+    overrides: Record<string, ConditionDataType> = schemaTypeOverrides,
+  ) => {
+    if (formFields.length === 0) {
+      return buildFallbackFieldSchema(nextMapping, overrides);
+    }
+    return buildFieldSchemaJSON(formFields, nextMapping, {
+      dataTypeOverrides: overrides,
+      existingSchemaRaw: trigger.config.field_schema || "",
+    });
+  };
 
   const updateFieldAlias = (questionID: string, alias: string) => {
     const next = { ...mapping };
@@ -108,6 +592,19 @@ export function TriggerEditor({
       config: {
         ...trigger.config,
         field_mapping: serializeFieldMapping(next),
+        field_schema: rebuildSchema(next),
+      },
+    });
+  };
+
+  const updateFieldDataType = (questionID: string, dataType: ConditionDataType) => {
+    const nextOverrides = { ...schemaTypeOverrides, [questionID]: normalizeConditionDataType(dataType) };
+    onChange({
+      ...trigger,
+      config: {
+        ...trigger.config,
+        field_mapping: serializeFieldMapping(mapping),
+        field_schema: rebuildSchema(mapping, nextOverrides),
       },
     });
   };
@@ -236,7 +733,7 @@ export function TriggerEditor({
               </span>
               {!googleAuthConfigured && (
                 <span className="wf-field-hint">
-                  Google Forms integration is not configured yet. A platform admin needs to set OAuth credentials in the Google Forms service.
+                  Google Forms integration is not configured yet. A platform admin needs to set OAuth credentials in the Integrations service.
                 </span>
               )}
               {googleAuthConfigured && !googleConnected && (googleConnectURL || onGoogleConnect) && (
@@ -327,34 +824,94 @@ export function TriggerEditor({
               )}
               {formFields.length > 0 ? (
                 <div style={{ display: "grid", gap: 8 }}>
-                  {formFields.map((field) => (
-                    <div key={field.question_id} className="wf-field-row" style={{ alignItems: "center", gap: 8 }}>
-                      <div style={{ flex: 1, minWidth: 180 }}>
-                        <div style={{ fontSize: "0.82rem", fontWeight: 600 }}>{field.title}</div>
-                        <div className="wf-field-hint">{field.question_id}{field.required ? " • required" : ""}</div>
+                  {formFields.map((field) => {
+                    const resolvedDataType =
+                      schemaTypeOverrides[field.question_id] ||
+                      inferConditionDataTypeFromFormFieldType(field.field_type);
+                    return (
+                      <div key={field.question_id} className="wf-field-row" style={{ alignItems: "center", gap: 8 }}>
+                        <div style={{ flex: 1, minWidth: 180 }}>
+                          <div style={{ fontSize: "0.82rem", fontWeight: 600 }}>{field.title}</div>
+                          <div className="wf-field-hint">{field.question_id}{field.required ? " • required" : ""}</div>
+                        </div>
+                        <input
+                          className="wf-input"
+                          style={{ flex: 1 }}
+                          placeholder="workflow_variable_name"
+                          value={mapping[field.question_id] || ""}
+                          onChange={(e) => updateFieldAlias(field.question_id, e.target.value)}
+                        />
+                        <select
+                          className="wf-select"
+                          style={{ width: 150 }}
+                          value={resolvedDataType}
+                          onChange={(e) => updateFieldDataType(field.question_id, e.target.value as ConditionDataType)}
+                        >
+                          {CONDITION_DATA_TYPE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
                       </div>
-                      <input
-                        className="wf-input"
-                        style={{ flex: 1 }}
-                        placeholder="workflow_variable_name"
-                        value={mapping[field.question_id] || ""}
-                        onChange={(e) => updateFieldAlias(field.question_id, e.target.value)}
-                      />
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
-                <input
-                  className="wf-input"
-                  placeholder="questionId:name, amountQuestion:amount"
-                  value={trigger.config.field_mapping || ""}
-                  onChange={(e) =>
-                    onChange({ ...trigger, config: { ...trigger.config, field_mapping: e.target.value } })
-                  }
-                />
+                <div style={{ display: "grid", gap: 8 }}>
+                  <input
+                    className="wf-input"
+                    placeholder="questionId:name, amountQuestion:amount"
+                    value={trigger.config.field_mapping || ""}
+                    onChange={(e) => {
+                      const rawMapping = e.target.value;
+                      const parsedMapping = parseFieldMapping(rawMapping);
+                      onChange({
+                        ...trigger,
+                        config: {
+                          ...trigger.config,
+                          field_mapping: rawMapping,
+                          field_schema: rebuildSchema(parsedMapping),
+                        },
+                      });
+                    }}
+                  />
+
+                  {manualMappingRows.length > 0 && (
+                    <>
+                      <span className="wf-field-hint">Edit datatype for mapped global keys:</span>
+                      {manualMappingRows.map((row) => (
+                        <div key={row.questionID} className="wf-field-row" style={{ alignItems: "center", gap: 8 }}>
+                          <div style={{ flex: 1, minWidth: 180 }}>
+                            <div style={{ fontSize: "0.82rem", fontWeight: 600 }}>{row.title}</div>
+                            <div className="wf-field-hint">{row.questionID}{row.required ? " • required" : ""}</div>
+                          </div>
+                          <input
+                            className="wf-input"
+                            style={{ flex: 1 }}
+                            placeholder="workflow_variable_name"
+                            value={row.variable}
+                            onChange={(e) => updateFieldAlias(row.questionID, e.target.value)}
+                          />
+                          <select
+                            className="wf-select"
+                            style={{ width: 150 }}
+                            value={row.dataType}
+                            onChange={(e) => updateFieldDataType(row.questionID, e.target.value as ConditionDataType)}
+                          >
+                            {CONDITION_DATA_TYPE_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
               )}
               <span className="wf-field-hint">
                 Mapped values become global workflow data keys and are available as template tokens like {"{{data.your_field}}"}.
+              </span>
+              <span className="wf-field-hint">
+                If your Google Form collects emails, map the "Respondent Email" field to expose it as a workflow variable.
               </span>
             </div>
           </>
@@ -373,7 +930,13 @@ interface StepEditorProps {
   onChange: (updated: WorkflowStep) => void;
   onClose: () => void;
   availableRoles?: string[];
+  availableUsers?: Array<{
+    id: string;
+    name?: string;
+    email?: string;
+  }>;
   suggestedDataKeys?: string[];
+  availableConditionFields?: WorkflowDataField[];
   availableForms?: Array<{
     form_id: string;
     title: string;
@@ -381,6 +944,15 @@ interface StepEditorProps {
   }>;
   formsLoading?: boolean;
   onRefreshForms?: () => void;
+  availableGmailAccounts?: Array<{
+    account_id: string;
+    account_email: string;
+    account_name?: string;
+    is_primary?: boolean;
+  }>;
+  gmailAccountsLoading?: boolean;
+  gmailAccountsError?: string | null;
+  onRefreshGmailAccounts?: () => void;
 }
 
 export function StepEditor({
@@ -389,34 +961,237 @@ export function StepEditor({
   onChange,
   onClose,
   availableRoles = PRESET_ORG_ROLES,
+  availableUsers = [],
   suggestedDataKeys = [],
+  availableConditionFields = [],
   availableForms = [],
   formsLoading = false,
   onRefreshForms,
+  availableGmailAccounts = [],
+  gmailAccountsLoading = false,
+  gmailAccountsError = null,
+  onRefreshGmailAccounts,
 }: StepEditorProps) {
-  const [roleSearch, setRoleSearch] = useState("");
-  const [showRoleDropdown, setShowRoleDropdown] = useState(false);
-  const [posSearch, setPosSearch] = useState("");
-  const [showPosDropdown, setShowPosDropdown] = useState(false);
+  const [assignmentSearch, setAssignmentSearch] = useState("");
+  const [showAssignDropdown, setShowAssignDropdown] = useState(false);
 
-  const filteredRoles = availableRoles.filter((r) =>
-    r.toLowerCase().includes(roleSearch.toLowerCase()),
-  );
-  const filteredPositions = PRESET_POSITIONS.filter((p) =>
-    p.toLowerCase().includes(posSearch.toLowerCase()),
-  );
+  const normalizedTaskAssignments = useMemo(() => {
+    return parseTaskAssignmentTargets(
+      buildTaskAssignmentTargets(step.assignmentTargets, step.assignedRole, step.assignedUser),
+    );
+  }, [step.assignmentTargets, step.assignedRole, step.assignedUser]);
+
+  const assignmentTargets = normalizedTaskAssignments.targets;
+
+  const assignmentUsersByID = useMemo(() => {
+    const lookup = new Map<string, { id: string; name?: string; email?: string }>();
+    for (const user of availableUsers) {
+      const id = String(user.id || "").trim();
+      if (!id) continue;
+      lookup.set(id, user);
+    }
+    return lookup;
+  }, [availableUsers]);
+
+  const assignmentSuggestions = useMemo<Array<{ token: string; label: string; subtitle?: string }>>(() => {
+    const query = assignmentSearch.trim();
+    if (!query) return [] as Array<{ token: string; label: string; subtitle?: string }>;
+
+    if (query.startsWith("#")) {
+      const roleQuery = query.slice(1).trim().toLowerCase();
+      return availableRoles
+        .filter((role) => roleQuery.length === 0 || role.toLowerCase().includes(roleQuery))
+        .slice(0, 10)
+        .map((role) => ({
+          token: `#${role}`,
+          label: role,
+        }));
+    }
+
+    if (query.startsWith("@")) {
+      const userQuery = query.slice(1).trim().toLowerCase();
+      return availableUsers
+        .filter((user) => {
+          if (!userQuery) return true;
+          const id = String(user.id || "").toLowerCase();
+          const name = String(user.name || "").toLowerCase();
+          const email = String(user.email || "").toLowerCase();
+          return id.includes(userQuery) || name.includes(userQuery) || email.includes(userQuery);
+        })
+        .slice(0, 10)
+        .map((user) => {
+          const id = String(user.id || "").trim();
+          const label = String(user.name || user.email || id);
+          const email = String(user.email || "").trim();
+          return {
+            token: `@${id}`,
+            label,
+            subtitle: email && email !== label ? email : undefined,
+          };
+        });
+    }
+
+    return [] as Array<{ token: string; label: string; subtitle?: string }>;
+  }, [assignmentSearch, availableRoles, availableUsers]);
   const visibilityMode: TaskDataVisibilityMode = step.taskDataVisibility || "all";
   const visibleDataKeys = step.visibleDataKeys || [];
+  const conditionFieldLookup = new Map(availableConditionFields.map((field) => [field.key, field]));
 
-  function selectRole(role: string) {
-    onChange({ ...step, assignedRole: role });
-    setRoleSearch("");
-    setShowRoleDropdown(false);
+  const normalizeRule = (rule?: Partial<ConditionRule>): ConditionRule => {
+    const field = typeof rule?.field === "string" ? rule.field : "";
+    const inferredDataType = inferConditionDataTypeForField(conditionFieldLookup.get(field));
+    const dataType = field
+      ? inferredDataType
+      : normalizeConditionDataType(rule?.dataType || inferredDataType);
+    const allowedOperators = CONDITION_OPERATORS_BY_TYPE[dataType] || CONDITION_OPERATORS_BY_TYPE.text;
+    const operator = allowedOperators.some((item) => item.value === rule?.operator)
+      ? (rule!.operator as ConditionOperator)
+      : allowedOperators[0].value;
+    const value = typeof rule?.value === "string" ? rule.value : "";
+    return {
+      field,
+      dataType,
+      operator,
+      value: operatorRequiresValue(dataType, operator) ? value : "",
+    };
+  };
+
+  const hasExplicitConditionLogic = typeof step.conditionConfig?.logic === "string";
+  const explicitConditionLogic = hasExplicitConditionLogic
+    ? String(step.conditionConfig?.logic || "").trim()
+    : undefined;
+
+  const baseConditionConfig: ConditionConfig = {
+    join: step.conditionConfig?.join === "or" ? "or" : "and",
+    logic: explicitConditionLogic || "",
+    rules: Array.isArray(step.conditionConfig?.rules) && step.conditionConfig.rules.length > 0
+      ? step.conditionConfig.rules.map((rule) => normalizeRule(rule))
+      : [normalizeRule()],
+  };
+
+  const defaultConditionLogic = buildDefaultConditionLogic(baseConditionConfig.rules.length, baseConditionConfig.join);
+  const activeConditionLogic = hasExplicitConditionLogic
+    ? String(explicitConditionLogic || "").trim()
+    : defaultConditionLogic;
+  const logicRuleTokens = baseConditionConfig.rules.map((_, index) => String(index + 1));
+  const hasMultipleConditionRules = baseConditionConfig.rules.length > 1;
+  const conditionLogicTouched = hasMultipleConditionRules && hasExplicitConditionLogic;
+  const conditionLogicError = hasMultipleConditionRules
+    ? validateConditionLogicExpression(activeConditionLogic, baseConditionConfig.rules.length)
+    : null;
+  const conditionLogicBorderColor = !conditionLogicTouched
+    ? "var(--border)"
+    : conditionLogicError
+      ? "#ef4444"
+      : "#22c55e";
+
+  function updateAssignmentTargets(nextTargets: string[]) {
+    const normalized = parseTaskAssignmentTargets(nextTargets);
+    onChange({
+      ...step,
+      assignmentTargets: normalized.targets,
+      assignedRole: normalized.roles[0] || "",
+      assignedPosition: "",
+      assignedUser: "",
+    });
   }
-  function selectPosition(pos: string) {
-    onChange({ ...step, assignedPosition: pos });
-    setPosSearch("");
-    setShowPosDropdown(false);
+
+  function addAssignmentToken(raw: string) {
+    const token = normalizeAssignmentToken(raw);
+    if (!token) return;
+    updateAssignmentTargets([...assignmentTargets, token]);
+    setAssignmentSearch("");
+    setShowAssignDropdown(false);
+  }
+
+  function removeAssignmentToken(token: string) {
+    updateAssignmentTargets(assignmentTargets.filter((item) => item !== token));
+  }
+
+  function assignmentTokenLabel(token: string): string {
+    if (token.startsWith("#")) {
+      return token;
+    }
+    if (token.startsWith("@")) {
+      const userID = token.slice(1).trim();
+      const user = assignmentUsersByID.get(userID);
+      const label = String(user?.name || user?.email || userID);
+      return `@${label}`;
+    }
+    return token;
+  }
+
+  function updateConditionConfig(next: ConditionConfig & { logic?: string }) {
+    const normalizedJoin: ConditionJoin = next.join === "or" ? "or" : "and";
+    const normalizedRules = next.rules.map((rule) => normalizeRule(rule));
+    const hasLogic = typeof next.logic === "string";
+    const logicCandidate = hasLogic ? String(next.logic || "").trim() : "";
+    const logicError = logicCandidate
+      ? validateConditionLogicExpression(logicCandidate, normalizedRules.length)
+      : "logic expression is empty";
+    const normalizedLogic = !logicError ? logicCandidate : undefined;
+    const nextConditionConfig: ConditionConfig = {
+      join: normalizedJoin,
+      rules: normalizedRules,
+    };
+    if (normalizedLogic) {
+      nextConditionConfig.logic = normalizedLogic;
+    }
+
+    onChange({
+      ...step,
+      conditionConfig: nextConditionConfig,
+      condition: formatConditionSummary({
+        join: normalizedJoin,
+        logic: normalizedLogic,
+        rules: normalizedRules,
+      }),
+    });
+  }
+
+  function updateConditionRule(index: number, partial: Partial<ConditionRule>) {
+    const nextRules = baseConditionConfig.rules.map((rule, i) => (i === index ? normalizeRule({ ...rule, ...partial }) : rule));
+    updateConditionConfig({ ...baseConditionConfig, logic: explicitConditionLogic, rules: nextRules });
+  }
+
+  function addConditionRule() {
+    const nextRules = [...baseConditionConfig.rules, normalizeRule()];
+    const nextLogic = hasExplicitConditionLogic
+      ? String(explicitConditionLogic || "")
+      : undefined;
+    updateConditionConfig({
+      ...baseConditionConfig,
+      logic: nextLogic,
+      rules: nextRules,
+    });
+  }
+
+  function removeConditionRule(index: number) {
+    const kept = baseConditionConfig.rules.filter((_, i) => i !== index);
+    const nextRules = kept.length > 0 ? kept : [normalizeRule()];
+    const nextLogic = hasExplicitConditionLogic
+      ? buildDefaultConditionLogic(nextRules.length, baseConditionConfig.join)
+      : undefined;
+    updateConditionConfig({
+      ...baseConditionConfig,
+      logic: nextLogic,
+      rules: nextRules,
+    });
+  }
+
+  function updateConditionLogic(logic: string) {
+    updateConditionConfig({
+      ...baseConditionConfig,
+      logic,
+    });
+  }
+
+  function insertConditionLogicToken(token: string) {
+    updateConditionLogic(appendConditionLogicToken(activeConditionLogic, token));
+  }
+
+  function removeConditionLogicToken() {
+    updateConditionLogic(popConditionLogicToken(activeConditionLogic));
   }
 
   const nodeType: NodeType = step.type || "task";
@@ -505,104 +1280,68 @@ export function StepEditor({
               </div>
             </div>
 
-            {/* ── Assigned Role ── */}
             <div className="wf-section">
               <div className="wf-section-label">Assignment</div>
               <div className="wf-field">
-                <label className="wf-field-label">Assigned Role</label>
+                <label className="wf-field-label">Assign to</label>
                 <span className="wf-field-hint">
-                  Which role group should handle this task?
+                  Use <strong>#</strong> for workflow roles and <strong>@</strong> for specific users. You can add multiple.
                 </span>
                 <div className="wf-role-picker">
                   <input
                     className="wf-input"
-                    placeholder="Search or type a custom role..."
-                    value={showRoleDropdown ? roleSearch : step.assignedRole}
-                    onFocus={() => { setShowRoleDropdown(true); setRoleSearch(""); }}
-                    onChange={(e) => { setRoleSearch(e.target.value); setShowRoleDropdown(true); }}
-                    onBlur={() => setTimeout(() => setShowRoleDropdown(false), 200)}
-                    onKeyDown={(e) => { if (e.key === "Enter" && roleSearch.trim()) selectRole(roleSearch.trim()); }}
+                    placeholder="e.g. #Finance Reviewer or @user_123"
+                    value={assignmentSearch}
+                    onFocus={() => setShowAssignDropdown(true)}
+                    onChange={(e) => {
+                      setAssignmentSearch(e.target.value);
+                      setShowAssignDropdown(true);
+                    }}
+                    onBlur={() => setTimeout(() => setShowAssignDropdown(false), 200)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        if (assignmentSearch.trim()) addAssignmentToken(assignmentSearch);
+                      }
+                    }}
                   />
-                  {showRoleDropdown && (
+                  {showAssignDropdown && (
                     <div className="wf-role-dropdown">
-                      {filteredRoles.length > 0 ? (
-                        filteredRoles.slice(0, 10).map((r) => (
-                          <button key={r} className={`wf-role-option ${step.assignedRole === r ? "active" : ""}`} onMouseDown={() => selectRole(r)}>
-                            {r}
+                      {assignmentSuggestions.length > 0 ? (
+                        assignmentSuggestions.map((item) => (
+                          <button
+                            key={item.token}
+                            className="wf-role-option"
+                            onMouseDown={() => addAssignmentToken(item.token)}
+                          >
+                            <span>{item.label}</span>
+                            {item.subtitle ? <span style={{ marginLeft: "auto", opacity: 0.72 }}>{item.subtitle}</span> : null}
                           </button>
                         ))
+                      ) : assignmentSearch.trim().startsWith("#") || assignmentSearch.trim().startsWith("@") ? (
+                        <div className="wf-role-empty">
+                          Press <kbd>Enter</kbd> to add <strong>{assignmentSearch.trim()}</strong>
+                        </div>
                       ) : (
                         <div className="wf-role-empty">
-                          Press <kbd>Enter</kbd> to add &ldquo;{roleSearch}&rdquo; as custom role
+                          Start with <kbd>#</kbd> for role or <kbd>@</kbd> for user.
                         </div>
                       )}
                     </div>
                   )}
                 </div>
-                {step.assignedRole && (
-                  <div className="wf-selected-role">
-                    <PersonIcon /> {step.assignedRole}
-                    <button className="wf-role-clear" onClick={() => onChange({ ...step, assignedRole: "" })}>
-                      <XSmallIcon />
-                    </button>
+                {assignmentTargets.length > 0 ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                    {assignmentTargets.map((token) => (
+                      <div key={token} className="wf-selected-role" style={{ marginTop: 0 }}>
+                        <PersonIcon /> {assignmentTokenLabel(token)}
+                        <button className="wf-role-clear" onClick={() => removeAssignmentToken(token)}>
+                          <XSmallIcon />
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                )}
-              </div>
-
-              {/* ── Assigned Position ── */}
-              <div className="wf-field">
-                <label className="wf-field-label">Position (optional)</label>
-                <span className="wf-field-hint">
-                  Narrows within the role, e.g. &ldquo;Department Head&rdquo;
-                </span>
-                <div className="wf-role-picker">
-                  <input
-                    className="wf-input"
-                    placeholder="Search or type position..."
-                    value={showPosDropdown ? posSearch : (step.assignedPosition || "")}
-                    onFocus={() => { setShowPosDropdown(true); setPosSearch(""); }}
-                    onChange={(e) => { setPosSearch(e.target.value); setShowPosDropdown(true); }}
-                    onBlur={() => setTimeout(() => setShowPosDropdown(false), 200)}
-                    onKeyDown={(e) => { if (e.key === "Enter" && posSearch.trim()) selectPosition(posSearch.trim()); }}
-                  />
-                  {showPosDropdown && (
-                    <div className="wf-role-dropdown">
-                      {filteredPositions.length > 0 ? (
-                        filteredPositions.slice(0, 10).map((p) => (
-                          <button key={p} className={`wf-role-option ${step.assignedPosition === p ? "active" : ""}`} onMouseDown={() => selectPosition(p)}>
-                            {p}
-                          </button>
-                        ))
-                      ) : (
-                        <div className="wf-role-empty">
-                          Press <kbd>Enter</kbd> to add &ldquo;{posSearch}&rdquo;
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-                {step.assignedPosition && (
-                  <div className="wf-selected-role">
-                    <PersonIcon /> {step.assignedPosition}
-                    <button className="wf-role-clear" onClick={() => onChange({ ...step, assignedPosition: "" })}>
-                      <XSmallIcon />
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* ── Specific User Override ── */}
-              <div className="wf-field">
-                <label className="wf-field-label">Specific User (optional)</label>
-                <span className="wf-field-hint">
-                  Pin the task to a specific person. Overrides role/position.
-                </span>
-                <input
-                  className="wf-input"
-                  placeholder="user ID or email"
-                  value={step.assignedUser || ""}
-                  onChange={(e) => onChange({ ...step, assignedUser: e.target.value })}
-                />
+                ) : null}
               </div>
             </div>
 
@@ -804,6 +1543,11 @@ export function StepEditor({
                 <div className="wf-section-label">
                   {CONNECTOR_CONFIG[step.connector.type].label} Parameters
                 </div>
+                {step.connector.type === "email" && (
+                  <span className="wf-field-hint">
+                    This action sends via the Gmail integration. Use Send From Account to target a specific connected Gmail account (email or account id), or leave it blank to use primary.
+                  </span>
+                )}
                 {step.connector.type === "form_submit" && (
                   <div className="wf-field">
                     <label className="wf-field-label">Use Existing Form</label>
@@ -850,7 +1594,63 @@ export function StepEditor({
                       {field.label}
                       {field.required && <span className="wf-required-star">*</span>}
                     </label>
-                    {field.options ? (
+                    {step.connector?.type === "email" && field.key === "from_account_id" ? (
+                      <>
+                        {(() => {
+                          const currentValue = step.connector?.params[field.key] || "";
+                          const hasCurrent = currentValue
+                            ? availableGmailAccounts.some((account) => (account.account_id || account.account_email) === currentValue)
+                            : true;
+                          return (
+                        <select
+                          className="wf-select"
+                          value={currentValue}
+                          onChange={(e) =>
+                            onChange({
+                              ...step,
+                              connector: {
+                                ...step.connector!,
+                                params: { ...step.connector!.params, [field.key]: e.target.value },
+                              },
+                            })
+                          }
+                        >
+                          <option value="">Primary connected account</option>
+                          {!hasCurrent && currentValue && (
+                            <option key={`disconnected-${currentValue}`} value={currentValue}>
+                              Disconnected account: {currentValue}
+                            </option>
+                          )}
+                          {availableGmailAccounts.map((account) => {
+                            const fallback = account.account_email || account.account_id;
+                            const label = account.account_name
+                              ? `${account.account_name} (${fallback})`
+                              : fallback;
+                            return (
+                              <option key={account.account_id || account.account_email} value={account.account_id || account.account_email}>
+                                {account.is_primary ? `Primary - ${label}` : label}
+                              </option>
+                            );
+                          })}
+                        </select>
+                          );
+                        })()}
+                        <button
+                          className="action-btn action-btn-outline"
+                          type="button"
+                          style={{ marginTop: 8 }}
+                          onClick={() => onRefreshGmailAccounts?.()}
+                          disabled={gmailAccountsLoading}
+                        >
+                          {gmailAccountsLoading ? "Refreshing accounts..." : "Refresh sender accounts"}
+                        </button>
+                        {gmailAccountsError && (
+                          <span className="wf-field-hint" style={{ color: "#b45309", display: "block", marginTop: 6 }}>
+                            {gmailAccountsError}
+                          </span>
+                        )}
+                      </>
+                    ) : field.options ? (
                       <select
                         className="wf-select"
                         value={step.connector?.params[field.key] || ""}
@@ -917,19 +1717,201 @@ export function StepEditor({
         {nodeType === "condition" && (
           <div className="wf-section">
             <div className="wf-section-label">Condition</div>
-            <div className="wf-field">
-              <label className="wf-field-label">Expression</label>
-              <input
-                className="wf-input"
-                placeholder='e.g. amount > 5000'
-                value={step.condition || ""}
-                onChange={(e) => onChange({ ...step, condition: e.target.value })}
-              />
-              <span className="wf-field-hint">
-                Supports: <code>==</code> <code>!=</code> <code>&gt;</code> <code>&lt;</code> <code>&gt;=</code> <code>&lt;=</code>.
-                References instance data fields by name.
-              </span>
+            {baseConditionConfig.rules.length > 1 && (
+              <div className="wf-field" style={{ marginBottom: 8 }}>
+                <label className="wf-field-label">Rule Logic</label>
+                <input
+                  className="wf-input"
+                  placeholder="1 AND 2 AND (3 OR 4)"
+                  value={activeConditionLogic}
+                  readOnly
+                  style={{ borderColor: conditionLogicBorderColor }}
+                />
+                <div className="wf-task-actions-grid" style={{ marginTop: 6, gap: 6 }}>
+                  {logicRuleTokens.map((token) => (
+                    <button
+                      key={`logic-token-rule-${token}`}
+                      type="button"
+                      className="wf-task-action-btn"
+                      onClick={() => insertConditionLogicToken(token)}
+                    >
+                      {token}
+                    </button>
+                  ))}
+                  {[
+                    { label: "AND", value: "AND" },
+                    { label: "OR", value: "OR" },
+                    { label: "(", value: "(" },
+                    { label: ")", value: ")" },
+                  ].map((token) => (
+                    <button
+                      key={`logic-token-${token.label}`}
+                      type="button"
+                      className="wf-task-action-btn"
+                      onClick={() => insertConditionLogicToken(token.value)}
+                    >
+                      {token.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="wf-task-action-btn"
+                    onClick={removeConditionLogicToken}
+                  >
+                    Backspace
+                  </button>
+                  <button
+                    type="button"
+                    className="wf-task-action-btn"
+                    onClick={() => updateConditionLogic("")}
+                  >
+                    Clear
+                  </button>
+                </div>
+                <span className="wf-field-hint">Use rule numbers with AND/OR and parentheses.</span>
+                {conditionLogicTouched && conditionLogicError && (
+                  <span className="wf-field-hint" style={{ color: "#ef4444", marginTop: 4 }}>
+                    Invalid logic: {conditionLogicError}
+                  </span>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: "grid", gap: 8 }}>
+              {baseConditionConfig.rules.map((rule, index) => {
+                const showRuleLabel = baseConditionConfig.rules.length > 1;
+                const inferredDataType = inferConditionDataTypeForField(conditionFieldLookup.get(rule.field));
+                const selectedDataType = rule.field
+                  ? inferredDataType
+                  : normalizeConditionDataType(rule.dataType || inferredDataType);
+                const operators = CONDITION_OPERATORS_BY_TYPE[selectedDataType] || CONDITION_OPERATORS_BY_TYPE.text;
+                const selectedOperator = operators.some((item) => item.value === rule.operator)
+                  ? rule.operator
+                  : operators[0].value;
+                const needsValue = operatorRequiresValue(selectedDataType, selectedOperator);
+                const selectedFieldLabel = rule.field
+                  ? (availableConditionFields.find((field) => field.key === rule.field)?.label || rule.field)
+                  : "";
+                return (
+                  <div key={`condition-rule-${index}`} style={{ display: "grid", gap: 4 }}>
+                    {showRuleLabel && (
+                      <span className="wf-field-hint" style={{ margin: 0, fontWeight: 700 }}>{`Cond ${index + 1}`}</span>
+                    )}
+                    <div className="wf-field-row" style={{ gap: 6, alignItems: "center", flexWrap: "nowrap" }}>
+                      <select
+                        className="wf-select"
+                        style={{ width: 220, maxWidth: 220 }}
+                        title={selectedFieldLabel}
+                        value={rule.field}
+                        onChange={(e) => {
+                          const field = e.target.value;
+                          const nextType = inferConditionDataTypeForField(conditionFieldLookup.get(field));
+                          const nextOps = CONDITION_OPERATORS_BY_TYPE[nextType] || CONDITION_OPERATORS_BY_TYPE.text;
+                          updateConditionRule(index, {
+                            field,
+                            dataType: nextType,
+                            operator: nextOps[0].value,
+                            value: "",
+                          });
+                        }}
+                      >
+                        <option value="">Select field</option>
+                        {availableConditionFields.map((field) => (
+                          <option key={field.key} value={field.key} title={field.label || field.key}>
+                            {truncateConditionFieldLabel(field.label || field.key)}
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        className="wf-select"
+                        style={{ width: 128 }}
+                        value={selectedOperator}
+                        onChange={(e) => updateConditionRule(index, { operator: e.target.value as ConditionOperator })}
+                      >
+                        <option value="">Select operator</option>
+                        {operators.map((operator) => (
+                          <option key={operator.value} value={operator.value}>{operator.label}</option>
+                        ))}
+                      </select>
+
+                      {needsValue ? (
+                        selectedDataType === "boolean" ? (
+                          <select
+                            className="wf-select"
+                            style={{ width: 112 }}
+                            value={String(rule.value || "")}
+                            onChange={(e) => updateConditionRule(index, { value: e.target.value })}
+                          >
+                            <option value="">Select</option>
+                            <option value="true">True</option>
+                            <option value="false">False</option>
+                          </select>
+                        ) : selectedDataType === "number" ? (
+                          <input
+                            type="number"
+                            className="wf-input"
+                            style={{ width: 120 }}
+                            value={rule.value || ""}
+                            onChange={(e) => updateConditionRule(index, { value: e.target.value })}
+                          />
+                        ) : selectedDataType === "date" ? (
+                          <input
+                            type="date"
+                            className="wf-input"
+                            style={{ width: 140 }}
+                            value={rule.value || ""}
+                            onChange={(e) => updateConditionRule(index, { value: e.target.value })}
+                          />
+                        ) : selectedDataType === "time" ? (
+                          <input
+                            type="time"
+                            className="wf-input"
+                            style={{ width: 112 }}
+                            value={rule.value || ""}
+                            onChange={(e) => updateConditionRule(index, { value: e.target.value })}
+                          />
+                        ) : selectedDataType === "datetime" ? (
+                          <input
+                            type="datetime-local"
+                            className="wf-input"
+                            style={{ width: 168 }}
+                            value={rule.value || ""}
+                            onChange={(e) => updateConditionRule(index, { value: e.target.value })}
+                          />
+                        ) : (
+                          <input
+                            className="wf-input"
+                            style={{ width: 132 }}
+                            value={rule.value || ""}
+                            onChange={(e) => updateConditionRule(index, { value: e.target.value })}
+                          />
+                        )
+                      ) : (
+                        <input className="wf-input" style={{ width: 132 }} value="" readOnly placeholder="(blank)" />
+                      )}
+
+                      <button
+                        type="button"
+                        className="action-btn action-btn-outline"
+                        onClick={() => removeConditionRule(index)}
+                        disabled={baseConditionConfig.rules.length <= 1}
+                        style={{ padding: "6px 10px", minWidth: 40 }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
+
+            <div style={{ marginTop: 8 }}>
+              <button type="button" className="action-btn action-btn-outline" onClick={addConditionRule}>
+                + Add condition
+              </button>
+            </div>
+
             <div className="wf-condition-branches">
               <div className="wf-condition-branch yes">
                 <span className="wf-condition-branch-dot" style={{ background: "#22c55e" }} />

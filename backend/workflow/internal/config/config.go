@@ -13,6 +13,7 @@ type Config struct {
 	MongoURI         string
 	ClerkIssuerURL   string
 	AuthServiceURL   string
+	IntegrationsURL  string
 	AuthServiceToken string
 	IntegrationKey   string
 	Port             string
@@ -37,6 +38,7 @@ func Load() (*Config, error) {
 		MongoURI:         strings.TrimSpace(getEnv("MONGO_URI", "")),
 		ClerkIssuerURL:   strings.TrimSpace(getEnv("CLERK_ISSUER_URL", "")),
 		AuthServiceURL:   strings.TrimSpace(getEnv("AUTH_SERVICE_URL", "http://localhost:8080")),
+		IntegrationsURL:  strings.TrimSpace(getEnv("INTEGRATIONS_SERVICE_URL", "http://localhost:8086")),
 		AuthServiceToken: strings.TrimSpace(getEnv("AUTH_SERVICE_TOKEN", "")),
 		IntegrationKey:   strings.TrimSpace(getEnv("WORKFLOW_INTEGRATION_KEY", "")),
 		Port:             strings.TrimSpace(getEnv("PORT", "8085")),

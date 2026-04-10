@@ -14,20 +14,31 @@ import { useTheme } from "@/components/ThemeProvider";
 import WorkflowCanvas from "@/components/dashboard/WorkflowCanvas";
 import { TriggerEditor, StepEditor } from "@/components/dashboard/StepEditor";
 import { useToast, ToastContainer } from "@/components/Toast";
-import { parseFieldMapping, serializeFieldMapping } from "@/lib/workflow-mapping";
+import { authFetch as authFetchWithToken } from "@/lib/auth-fetch";
+import {
+  parseFieldMapping,
+  serializeFieldMapping,
+  parseFieldSchema,
+  buildFieldSchemaJSON,
+  normalizeConditionDataType,
+  inferConditionDataTypeFromFormFieldType,
+} from "@/lib/workflow-mapping";
 import type {
   WorkflowDraft,
   WorkflowStep,
   WorkflowEdge,
   WorkflowTrigger,
   NodeType,
+  ConditionDataType,
+  ConditionOperator,
+  WorkflowDataField,
 } from "@/types/workflow";
 import { createBlankStep, generateStepId, NODE_TYPE_CONFIG } from "@/types/workflow";
 
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
-const GF_API = (process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "").trim();
-const GF_API_MISSING_ERROR = "NEXT_PUBLIC_GOOGLE_FORMS_API is not configured.";
+const GF_API = (process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "").trim();
+const GF_API_MISSING_ERROR = "NEXT_PUBLIC_INTEGRATIONS_API (or NEXT_PUBLIC_GOOGLE_FORMS_API) is not configured.";
 
 interface BackendDepartment {
   id: string;
@@ -39,6 +50,13 @@ interface BackendRole {
   id: string;
   name: string;
   description?: string;
+}
+
+interface BackendEmployee {
+  id: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
 }
 
 interface GoogleFormOption {
@@ -64,6 +82,13 @@ interface GoogleFormField {
   title: string;
   required?: boolean;
   field_type?: string;
+}
+
+interface GmailAccountOption {
+  account_id: string;
+  account_email: string;
+  account_name?: string;
+  is_primary?: boolean;
 }
 
 /* ── Initial draft ── */
@@ -104,6 +129,401 @@ const INITIAL_DRAFT: WorkflowDraft = {
   tags: [],
 };
 
+const CONDITION_VALIDATION_OPERATORS_BY_TYPE: Record<ConditionDataType, Array<{ value: ConditionOperator; requiresValue?: boolean }>> = {
+  text: [
+    { value: "eq" },
+    { value: "neq" },
+    { value: "contains" },
+    { value: "not_contains" },
+    { value: "starts_with" },
+    { value: "ends_with" },
+    { value: "is_empty", requiresValue: false },
+    { value: "is_not_empty", requiresValue: false },
+  ],
+  number: [
+    { value: "eq" },
+    { value: "neq" },
+    { value: "gt" },
+    { value: "gte" },
+    { value: "lt" },
+    { value: "lte" },
+    { value: "is_empty", requiresValue: false },
+    { value: "is_not_empty", requiresValue: false },
+  ],
+  boolean: [
+    { value: "eq" },
+    { value: "neq" },
+    { value: "is_empty", requiresValue: false },
+    { value: "is_not_empty", requiresValue: false },
+  ],
+  date: [
+    { value: "eq" },
+    { value: "neq" },
+    { value: "gt" },
+    { value: "gte" },
+    { value: "lt" },
+    { value: "lte" },
+    { value: "is_empty", requiresValue: false },
+    { value: "is_not_empty", requiresValue: false },
+  ],
+  datetime: [
+    { value: "eq" },
+    { value: "neq" },
+    { value: "gt" },
+    { value: "gte" },
+    { value: "lt" },
+    { value: "lte" },
+    { value: "is_empty", requiresValue: false },
+    { value: "is_not_empty", requiresValue: false },
+  ],
+  time: [
+    { value: "eq" },
+    { value: "neq" },
+    { value: "gt" },
+    { value: "gte" },
+    { value: "lt" },
+    { value: "lte" },
+    { value: "is_empty", requiresValue: false },
+    { value: "is_not_empty", requiresValue: false },
+  ],
+};
+
+function isSupportedConditionOperator(dataType: ConditionDataType, operator: ConditionOperator): boolean {
+  return CONDITION_VALIDATION_OPERATORS_BY_TYPE[dataType].some((item) => item.value === operator);
+}
+
+function conditionOperatorRequiresValue(dataType: ConditionDataType, operator: ConditionOperator): boolean {
+  const meta = CONDITION_VALIDATION_OPERATORS_BY_TYPE[dataType].find((item) => item.value === operator);
+  if (!meta) return true;
+  return meta.requiresValue !== false;
+}
+
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return isLeapYear(year) ? 29 : 28;
+  if ([4, 6, 9, 11].includes(month)) return 30;
+  return 31;
+}
+
+function isValidDateParts(year: number, month: number, day: number): boolean {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return false;
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > daysInMonth(year, month)) return false;
+  return true;
+}
+
+function isValidConditionValue(dataType: ConditionDataType, value: string): boolean {
+  const raw = String(value || "").trim();
+  if (!raw) return false;
+
+  switch (dataType) {
+    case "number": {
+      const numeric = Number(raw);
+      return Number.isFinite(numeric);
+    }
+    case "boolean":
+      return raw === "true" || raw === "false";
+    case "date": {
+      const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!match) return false;
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      return isValidDateParts(year, month, day);
+    }
+    case "time": {
+      const match = raw.match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+      if (!match) return false;
+      const hour = Number(match[1]);
+      const minute = Number(match[2]);
+      const second = match[3] ? Number(match[3]) : 0;
+      return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 && second >= 0 && second <= 59;
+    }
+    case "datetime": {
+      const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+      if (!match) return false;
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      const hour = Number(match[4]);
+      const minute = Number(match[5]);
+      const second = match[6] ? Number(match[6]) : 0;
+      if (!isValidDateParts(year, month, day)) return false;
+      return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 && second >= 0 && second <= 59;
+    }
+    case "text":
+    default:
+      return raw.length > 0;
+  }
+}
+
+function buildDefaultConditionLogic(ruleCount: number, join: "and" | "or"): string {
+  if (ruleCount <= 0) return "";
+  if (ruleCount === 1) return "1";
+  const glue = join === "or" ? " OR " : " AND ";
+  return Array.from({ length: ruleCount }, (_, idx) => String(idx + 1)).join(glue);
+}
+
+function tokenizeConditionLogicExpression(raw: string): { tokens: string[]; error?: string } {
+  const input = String(raw || "").trim();
+  if (!input) {
+    return { tokens: [], error: "logic expression is empty" };
+  }
+
+  const tokens: string[] = [];
+  let index = 0;
+
+  while (index < input.length) {
+    const ch = input[index];
+
+    if (/\s/.test(ch)) {
+      index += 1;
+      continue;
+    }
+
+    if (ch === "(" || ch === ")") {
+      tokens.push(ch);
+      index += 1;
+      continue;
+    }
+
+    if (/\d/.test(ch)) {
+      let end = index + 1;
+      while (end < input.length && /\d/.test(input[end])) end += 1;
+      tokens.push(input.slice(index, end));
+      index = end;
+      continue;
+    }
+
+    if (/[a-z]/i.test(ch)) {
+      let end = index + 1;
+      while (end < input.length && /[a-z]/i.test(input[end])) end += 1;
+      const word = input.slice(index, end).toUpperCase();
+      if (word !== "AND" && word !== "OR") {
+        return { tokens: [], error: `unsupported token \"${word}\"` };
+      }
+      tokens.push(word);
+      index = end;
+      continue;
+    }
+
+    return { tokens: [], error: `invalid character \"${ch}\"` };
+  }
+
+  return { tokens };
+}
+
+function validateConditionLogicExpression(raw: string, ruleCount: number): string | null {
+  const tokenized = tokenizeConditionLogicExpression(raw);
+  if (tokenized.error) return tokenized.error;
+
+  const tokens = tokenized.tokens;
+  if (tokens.length === 0) return "logic expression is empty";
+
+  let position = 0;
+
+  const parseExpr = (): string | null => {
+    const termErr = parseTerm();
+    if (termErr) return termErr;
+    while (position < tokens.length && tokens[position] === "OR") {
+      position += 1;
+      const nextErr = parseTerm();
+      if (nextErr) return nextErr;
+    }
+    return null;
+  };
+
+  const parseTerm = (): string | null => {
+    const factorErr = parseFactor();
+    if (factorErr) return factorErr;
+    while (position < tokens.length && tokens[position] === "AND") {
+      position += 1;
+      const nextErr = parseFactor();
+      if (nextErr) return nextErr;
+    }
+    return null;
+  };
+
+  const parseFactor = (): string | null => {
+    if (position >= tokens.length) return "unexpected end of logic expression";
+
+    const token = tokens[position];
+    if (token === "(") {
+      position += 1;
+      const nestedErr = parseExpr();
+      if (nestedErr) return nestedErr;
+      if (position >= tokens.length || tokens[position] !== ")") {
+        return "missing closing parenthesis";
+      }
+      position += 1;
+      return null;
+    }
+
+    const ref = Number(token);
+    if (!Number.isInteger(ref) || ref < 1) {
+      return `invalid rule reference \"${token}\"`;
+    }
+    if (ref > ruleCount) {
+      return `rule reference ${ref} is out of range (max ${ruleCount})`;
+    }
+
+    position += 1;
+    return null;
+  };
+
+  const parseErr = parseExpr();
+  if (parseErr) return parseErr;
+  if (position !== tokens.length) {
+    return `unexpected token \"${tokens[position]}\"`;
+  }
+  return null;
+}
+
+function validateConditionNodes(
+  steps: WorkflowStep[],
+  edges: WorkflowEdge[],
+  conditionFieldTypeByKey: Map<string, ConditionDataType>,
+): string[] {
+  const errors: string[] = [];
+  const outgoing = (id: string) => edges.filter((e) => e.source === id);
+
+  for (const s of steps.filter((n) => n.type === "condition")) {
+    const out = outgoing(s.id);
+    const hasYes = out.some((e) => e.sourceHandle === "yes");
+    const hasNo = out.some((e) => e.sourceHandle === "no");
+
+    const join = s.conditionConfig?.join === "or" ? "or" : "and";
+    const rules = s.conditionConfig?.rules || [];
+
+    if (rules.length === 0) {
+      errors.push(`Condition "${s.title}" must define at least one condition rule.`);
+    }
+
+    let validRuleCount = 0;
+    rules.forEach((rule, index) => {
+      const ruleLabel = `Condition "${s.title}" rule ${index + 1}`;
+      if (!rule.field) {
+        errors.push(`${ruleLabel} is missing a field.`);
+        return;
+      }
+      if (!rule.operator) {
+        errors.push(`${ruleLabel} is missing an operator.`);
+        return;
+      }
+
+      const dataType = normalizeConditionDataType(
+        conditionFieldTypeByKey.get(rule.field) || rule.dataType || "text",
+      );
+      if (!isSupportedConditionOperator(dataType, rule.operator)) {
+        errors.push(`${ruleLabel} has an invalid operator for ${dataType} datatype.`);
+        return;
+      }
+
+      const needsValue = conditionOperatorRequiresValue(dataType, rule.operator);
+      const value = String(rule.value || "").trim();
+      if (!needsValue) {
+        validRuleCount += 1;
+        return;
+      }
+
+      if (!value) {
+        errors.push(`${ruleLabel} requires a value.`);
+        return;
+      }
+
+      if (!isValidConditionValue(dataType, value)) {
+        errors.push(`${ruleLabel} value is not a valid ${dataType}.`);
+        return;
+      }
+
+      validRuleCount += 1;
+    });
+
+    if (validRuleCount === 0) {
+      errors.push(`Condition "${s.title}" must contain at least one valid condition rule.`);
+    }
+
+    if (rules.length > 1) {
+      const hasExplicitLogic = typeof s.conditionConfig?.logic === "string"
+        && String(s.conditionConfig?.logic || "").trim() !== "";
+      const logic = hasExplicitLogic
+        ? String(s.conditionConfig?.logic || "").trim()
+        : buildDefaultConditionLogic(rules.length, join);
+      const logicErr = validateConditionLogicExpression(logic, rules.length);
+      if (logicErr) {
+        errors.push(`Condition "${s.title}" has invalid rule logic: ${logicErr}.`);
+      }
+    }
+
+    if (!hasYes) errors.push(`Condition "${s.title}" is missing the Yes branch.`);
+    if (!hasNo) errors.push(`Condition "${s.title}" is missing the No branch.`);
+  }
+
+  return errors;
+}
+
+function normalizeTaskAssignmentToken(raw: string): string {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  if (!text.startsWith("#") && !text.startsWith("@")) return "";
+  const prefix = text[0];
+  const body = text.slice(1).trim().replace(/\s+/g, " ");
+  if (!body) return "";
+  return `${prefix}${body}`;
+}
+
+function extractTaskAssignees(step: WorkflowStep): { targets: string[]; roles: string[]; users: string[] } {
+  const rawTargets = Array.isArray(step.assignmentTargets) ? step.assignmentTargets : [];
+  const fallbackTargets: string[] = [];
+  const legacyRole = String(step.assignedRole || "").trim();
+  const legacyUser = String(step.assignedUser || "").trim();
+  if (rawTargets.length === 0) {
+    if (legacyRole) fallbackTargets.push(`#${legacyRole}`);
+    if (legacyUser) fallbackTargets.push(`@${legacyUser}`);
+  }
+
+  const sources = rawTargets.length > 0 ? rawTargets : fallbackTargets;
+  const targets: string[] = [];
+  const roles: string[] = [];
+  const users: string[] = [];
+  const seenTargets = new Set<string>();
+  const seenRoles = new Set<string>();
+  const seenUsers = new Set<string>();
+
+  for (const raw of sources) {
+    const token = normalizeTaskAssignmentToken(raw);
+    if (!token) continue;
+    const tokenKey = token.toLowerCase();
+    if (seenTargets.has(tokenKey)) continue;
+    seenTargets.add(tokenKey);
+    targets.push(token);
+
+    if (token.startsWith("#")) {
+      const role = token.slice(1).trim();
+      const roleKey = role.toLowerCase();
+      if (role && !seenRoles.has(roleKey)) {
+        seenRoles.add(roleKey);
+        roles.push(role);
+      }
+      continue;
+    }
+
+    if (token.startsWith("@")) {
+      const user = token.slice(1).trim();
+      const userKey = user.toLowerCase();
+      if (user && !seenUsers.has(userKey)) {
+        seenUsers.add(userKey);
+        users.push(user);
+      }
+    }
+  }
+
+  return { targets, roles, users };
+}
+
 export default function WorkflowBuilderPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -114,14 +534,7 @@ export default function WorkflowBuilderPage() {
   const orgApiBase = `${WF_API}/api/orgs/${organization?.id}`;
 
   const authFetch = useCallback(async (input: string, init: RequestInit = {}): Promise<Response> => {
-    const token = await getToken();
-    return fetch(input, {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    return authFetchWithToken(getToken, input, init);
   }, [getToken]);
 
   const parseVisibleDataKeys = useCallback((keys: string[] | undefined): string[] => {
@@ -172,16 +585,12 @@ export default function WorkflowBuilderPage() {
     return out;
   }, [normalizeVariableKey]);
 
-  const buildFieldSchemaJSON = useCallback((fields: GoogleFormField[], mapping: Record<string, string>): string => {
-    return JSON.stringify(
-      fields.map((field) => ({
-        question_id: field.question_id,
-        title: field.title,
-        required: Boolean(field.required),
-        field_type: field.field_type || "text",
-        variable: mapping[field.question_id] || "",
-      })),
-    );
+  const buildTriggerFieldSchema = useCallback((
+    fields: GoogleFormField[],
+    mapping: Record<string, string>,
+    existingSchemaRaw?: string,
+  ): string => {
+    return buildFieldSchemaJSON(fields, mapping, { existingSchemaRaw });
   }, []);
 
   const extractGoogleFormID = useCallback((formURL: string): string => {
@@ -191,6 +600,7 @@ export default function WorkflowBuilderPage() {
 
   const loadGoogleFormsRequestIDRef = useRef(0);
   const loadGoogleFormFieldsRequestIDRef = useRef(0);
+  const loadGmailAccountsRequestIDRef = useRef(0);
 
   const loadGoogleForms = useCallback(async () => {
     if (!organization?.id) return;
@@ -208,7 +618,7 @@ export default function WorkflowBuilderPage() {
     setGoogleFormsError(null);
     try {
       const [statusRes, formsRes] = await Promise.all([
-        authFetch(`${GF_API}/auth/google/status?org_id=${encodeURIComponent(organization.id)}`),
+        authFetch(`${GF_API}/auth/google/status?org_id=${encodeURIComponent(organization.id)}&service=google_forms`),
         authFetch(`${GF_API}/forms?org_id=${encodeURIComponent(organization.id)}`),
       ]);
 
@@ -257,10 +667,58 @@ export default function WorkflowBuilderPage() {
       setGoogleAuthConfigured(true);
       setGoogleConnected(false);
       setGoogleForms([]);
-      setGoogleFormsError("Google Forms service is unreachable.");
+      setGoogleFormsError("Integrations service is unreachable.");
     } finally {
       if (isLatest()) {
         setGoogleFormsLoading(false);
+      }
+    }
+  }, [authFetch, organization?.id]);
+
+  const loadGmailAccounts = useCallback(async () => {
+    const requestID = ++loadGmailAccountsRequestIDRef.current;
+    const isLatest = () => loadGmailAccountsRequestIDRef.current === requestID;
+
+    if (!organization?.id) {
+      if (isLatest()) {
+        setGmailAccounts([]);
+        setGmailAccountsError(null);
+        setGmailAccountsLoading(false);
+      }
+      return;
+    }
+    if (!GF_API) {
+      if (isLatest()) {
+        setGmailAccounts([]);
+        setGmailAccountsError(GF_API_MISSING_ERROR);
+        setGmailAccountsLoading(false);
+      }
+      return;
+    }
+
+    setGmailAccountsLoading(true);
+    setGmailAccounts([]);
+    setGmailAccountsError(null);
+
+    try {
+      const response = await authFetch(`${GF_API}/integrations/gmail/accounts?org_id=${encodeURIComponent(organization.id)}`);
+      if (!isLatest()) return;
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Could not load Gmail accounts (${response.status}): ${body}`);
+      }
+
+      const payload = await response.json() as { items?: GmailAccountOption[] };
+      if (!isLatest()) return;
+      setGmailAccounts(Array.isArray(payload?.items) ? payload.items : []);
+      setGmailAccountsError(null);
+    } catch (err: any) {
+      if (!isLatest()) return;
+      setGmailAccountsError(err?.message || "Failed to load Gmail accounts.");
+    } finally {
+      if (isLatest()) {
+        setGmailAccountsLoading(false);
       }
     }
   }, [authFetch, organization?.id]);
@@ -315,7 +773,7 @@ export default function WorkflowBuilderPage() {
             config: {
               ...d.trigger.config,
               field_mapping: serializeFieldMapping(finalMapping),
-              field_schema: buildFieldSchemaJSON(fields, finalMapping),
+              field_schema: buildTriggerFieldSchema(fields, finalMapping, d.trigger.config.field_schema || ""),
             },
           },
         };
@@ -329,7 +787,7 @@ export default function WorkflowBuilderPage() {
         setTriggerFormFieldsLoading(false);
       }
     }
-  }, [authFetch, organization?.id, extractGoogleFormID, parseFieldMapping, buildSuggestedFieldMapping, serializeFieldMapping, buildFieldSchemaJSON]);
+  }, [authFetch, organization?.id, extractGoogleFormID, parseFieldMapping, buildSuggestedFieldMapping, serializeFieldMapping, buildTriggerFieldSchema]);
 
   const handleGoogleConnect = useCallback(async () => {
     if (!organization?.id) {
@@ -341,7 +799,7 @@ export default function WorkflowBuilderPage() {
       return;
     }
     try {
-      const res = await authFetch(`${GF_API}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}`, {
+      const res = await authFetch(`${GF_API}/auth/google/connect-url?org_id=${encodeURIComponent(organization.id)}&service=google_forms`, {
         credentials: "include",
       });
       if (!res.ok) {
@@ -368,12 +826,13 @@ export default function WorkflowBuilderPage() {
     if (!GF_API) {
       throw new Error(GF_API_MISSING_ERROR);
     }
+    const orgQuery = `org_id=${encodeURIComponent(organization.id)}`;
 
     const triggerIsForm = triggerType === "form_submission";
     const formID = (triggerConfig.form_id || extractGoogleFormID(triggerConfig.form_url || "")).trim();
     const fieldMapping = parseFieldMapping(triggerConfig.field_mapping || "");
 
-    const watchesRes = await authFetch(`${GF_API}/watches?org_id=${encodeURIComponent(organization.id)}`);
+    const watchesRes = await authFetch(`${GF_API}/watches?${orgQuery}`);
     if (!watchesRes.ok) {
       const txt = await watchesRes.text();
       throw new Error(`watch lookup failed (${watchesRes.status}): ${txt}`);
@@ -385,7 +844,7 @@ export default function WorkflowBuilderPage() {
 
     if (!triggerIsForm || !formID) {
       if (existing && existing.active) {
-        const disableRes = await authFetch(`${GF_API}/watches/${existing.id}`, {
+        const disableRes = await authFetch(`${GF_API}/watches/${existing.id}?${orgQuery}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ active: false }),
@@ -399,7 +858,7 @@ export default function WorkflowBuilderPage() {
     }
 
     if (!existing) {
-      const createRes = await authFetch(`${GF_API}/watches`, {
+      const createRes = await authFetch(`${GF_API}/watches?${orgQuery}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -418,12 +877,12 @@ export default function WorkflowBuilderPage() {
     }
 
     if (existing.form_id !== formID) {
-    const deleteRes = await authFetch(`${GF_API}/watches/${existing.id}`, { method: "DELETE" });
+    const deleteRes = await authFetch(`${GF_API}/watches/${existing.id}?${orgQuery}`, { method: "DELETE" });
     if (!deleteRes.ok) {
       const txt = await deleteRes.text();
       throw new Error(`watch delete failed (${deleteRes.status}): ${txt}`);
     }
-      const recreateRes = await authFetch(`${GF_API}/watches`, {
+      const recreateRes = await authFetch(`${GF_API}/watches?${orgQuery}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -441,7 +900,7 @@ export default function WorkflowBuilderPage() {
       return;
     }
 
-    const updateRes = await authFetch(`${GF_API}/watches/${existing.id}`, {
+    const updateRes = await authFetch(`${GF_API}/watches/${existing.id}?${orgQuery}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -466,11 +925,15 @@ export default function WorkflowBuilderPage() {
   const [detailsSidebarOpen, setDetailsSidebarOpen] = useState(false);
   const [departments, setDepartments] = useState<BackendDepartment[]>([]);
   const [roles, setRoles] = useState<BackendRole[]>([]);
+  const [employees, setEmployees] = useState<BackendEmployee[]>([]);
   const [googleForms, setGoogleForms] = useState<GoogleFormOption[]>([]);
   const [googleFormsLoading, setGoogleFormsLoading] = useState(false);
   const [googleFormsError, setGoogleFormsError] = useState<string | null>(null);
   const [googleAuthConfigured, setGoogleAuthConfigured] = useState(true);
   const [googleConnected, setGoogleConnected] = useState(false);
+  const [gmailAccounts, setGmailAccounts] = useState<GmailAccountOption[]>([]);
+  const [gmailAccountsLoading, setGmailAccountsLoading] = useState(false);
+  const [gmailAccountsError, setGmailAccountsError] = useState<string | null>(null);
   const [triggerFormFields, setTriggerFormFields] = useState<GoogleFormField[]>([]);
   const [triggerFormFieldsLoading, setTriggerFormFieldsLoading] = useState(false);
   const [triggerFormFieldsError, setTriggerFormFieldsError] = useState<string | null>(null);
@@ -489,12 +952,12 @@ export default function WorkflowBuilderPage() {
           config: {
             ...d.trigger.config,
             field_mapping: serializeFieldMapping(suggested),
-            field_schema: buildFieldSchemaJSON(triggerFormFields, suggested),
+            field_schema: buildTriggerFieldSchema(triggerFormFields, suggested, d.trigger.config.field_schema || ""),
           },
         },
       };
     });
-  }, [triggerFormFields, buildSuggestedFieldMapping, serializeFieldMapping, buildFieldSchemaJSON]);
+  }, [triggerFormFields, buildSuggestedFieldMapping, serializeFieldMapping, buildTriggerFieldSchema]);
 
   const suggestedTaskDataKeys = useMemo(() => {
     const suggested = new Set<string>([
@@ -514,6 +977,71 @@ export default function WorkflowBuilderPage() {
 
     return Array.from(suggested).sort((a, b) => a.localeCompare(b));
   }, [draft.trigger.config.field_mapping, parseFieldMapping]);
+
+  const availableConditionFields = useMemo<WorkflowDataField[]>(() => {
+    const catalog = new Map<string, WorkflowDataField>();
+
+    const upsertField = (
+      key: string,
+      dataType: ConditionDataType,
+      label?: string,
+      source?: string,
+    ) => {
+      const normalizedKey = key.trim();
+      if (!normalizedKey) return;
+      const normalizedType = normalizeConditionDataType(dataType);
+      const existing = catalog.get(normalizedKey);
+      if (!existing) {
+        catalog.set(normalizedKey, {
+          key: normalizedKey,
+          label: label?.trim() || normalizedKey,
+          dataType: normalizedType,
+          source,
+        });
+        return;
+      }
+      if (existing.dataType === "text" && normalizedType !== "text") {
+        catalog.set(normalizedKey, {
+          ...existing,
+          dataType: normalizedType,
+          label: existing.label || label?.trim() || normalizedKey,
+        });
+      }
+    };
+
+    upsertField("trigger_source", "text", "Trigger Source", "system");
+    upsertField("trigger_type", "text", "Trigger Type", "system");
+    upsertField("form_id", "text", "Form ID", "system");
+    upsertField("form_response_id", "text", "Form Response ID", "system");
+    upsertField("form_submitted_at", "datetime", "Form Submitted At", "system");
+
+    if (draft.trigger.type === "email_received") {
+      upsertField("email_message_id", "text", "Email Message ID", "system");
+      upsertField("email_subject", "text", "Email Subject", "system");
+      upsertField("email_from", "text", "Email From", "system");
+      upsertField("email_to", "text", "Email To", "system");
+      upsertField("email_snippet", "text", "Email Snippet", "system");
+    }
+
+    const parsedFieldSchema = parseFieldSchema(draft.trigger.config.field_schema || "");
+    for (const item of parsedFieldSchema) {
+      const variable = String(item.variable || "").trim();
+      if (!variable) continue;
+      const dataType = normalizeConditionDataType(
+        item.data_type || inferConditionDataTypeFromFormFieldType(item.field_type),
+      );
+      upsertField(variable, dataType, item.title || variable, "form_field");
+    }
+
+    const mapping = parseFieldMapping(draft.trigger.config.field_mapping || "");
+    for (const mappedKey of Object.values(mapping)) {
+      const key = mappedKey.trim();
+      if (!key) continue;
+      upsertField(key, "text", key, "field_mapping");
+    }
+
+    return Array.from(catalog.values()).sort((a, b) => a.key.localeCompare(b.key));
+  }, [draft.trigger.config.field_mapping, draft.trigger.config.field_schema, draft.trigger.type]);
 
   /* ── Editing existing workflow (via ?id=) ── */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -591,17 +1119,25 @@ export default function WorkflowBuilderPage() {
   }, [searchParams, showToast, authFetch, orgApiBase]);
 
   useEffect(() => {
-    if (!organization?.id) return;
+    if (!organization?.id) {
+      setDepartments([]);
+      setRoles([]);
+      setEmployees([]);
+      return;
+    }
     let cancelled = false;
 
     (async () => {
       try {
         const token = await getToken();
-        const [deptsRes, rolesRes] = await Promise.all([
+        const [deptsRes, rolesRes, employeesRes] = await Promise.all([
           fetch(`${AUTH_API}/api/orgs/${organization.id}/departments`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
           fetch(`${AUTH_API}/api/orgs/${organization.id}/roles`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`${AUTH_API}/api/orgs/${organization.id}/employees`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
         ]);
@@ -609,16 +1145,28 @@ export default function WorkflowBuilderPage() {
         if (!cancelled && deptsRes.ok) {
           const deptsData = await deptsRes.json();
           setDepartments(Array.isArray(deptsData) ? deptsData : []);
+        } else if (!cancelled) {
+          setDepartments([]);
         }
 
         if (!cancelled && rolesRes.ok) {
           const rolesData = await rolesRes.json();
           setRoles(Array.isArray(rolesData) ? rolesData : []);
+        } else if (!cancelled) {
+          setRoles([]);
+        }
+
+        if (!cancelled && employeesRes.ok) {
+          const employeesData = await employeesRes.json();
+          setEmployees(Array.isArray(employeesData) ? employeesData : []);
+        } else if (!cancelled) {
+          setEmployees([]);
         }
       } catch {
         if (!cancelled) {
           setDepartments([]);
           setRoles([]);
+          setEmployees([]);
         }
       }
     })();
@@ -632,6 +1180,17 @@ export default function WorkflowBuilderPage() {
     if (!organization?.id) return;
     loadGoogleForms();
   }, [organization?.id, loadGoogleForms]);
+
+  useEffect(() => {
+    if (!GF_API) {
+      setGoogleFormsError(GF_API_MISSING_ERROR);
+      setGmailAccountsError(GF_API_MISSING_ERROR);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadGmailAccounts();
+  }, [organization?.id, loadGmailAccounts]);
 
   useEffect(() => {
     const isFormTrigger = draft.trigger.type === "form_submission";
@@ -707,7 +1266,11 @@ export default function WorkflowBuilderPage() {
           const formID = (nextConfig.form_id || extractGoogleFormID(nextConfig.form_url || "")).trim();
           if (formID && formID === triggerFieldsFormIDRef.current) {
             const mapping = parseFieldMapping(nextConfig.field_mapping || "");
-            nextConfig.field_schema = buildFieldSchemaJSON(triggerFormFields, mapping);
+            nextConfig.field_schema = buildTriggerFieldSchema(
+              triggerFormFields,
+              mapping,
+              nextConfig.field_schema || d.trigger.config.field_schema || "",
+            );
           }
         }
 
@@ -720,7 +1283,7 @@ export default function WorkflowBuilderPage() {
         };
       });
     },
-    [triggerFormFields, extractGoogleFormID, parseFieldMapping, buildFieldSchemaJSON],
+    [triggerFormFields, extractGoogleFormID, parseFieldMapping, buildTriggerFieldSchema],
   );
 
   /* ── React Flow change handlers ── */
@@ -943,6 +1506,9 @@ export default function WorkflowBuilderPage() {
   function validateWorkflow(): string[] {
     const errors: string[] = [];
     const { steps, edges } = draft;
+    const conditionFieldTypeByKey = new Map(
+      availableConditionFields.map((field) => [field.key, normalizeConditionDataType(field.dataType)]),
+    );
 
     // ── 1. Exactly one Start & at least one End ───────────────
     const startNodes = steps.filter((s) => s.type === "start");
@@ -984,14 +1550,8 @@ export default function WorkflowBuilderPage() {
         errors.push(`"${s.title}" (${s.type}) has no incoming connection — it is unreachable.`);
     }
 
-    // ── 5. Condition nodes need both yes & no branches ──────
-    for (const s of steps.filter((n) => n.type === "condition")) {
-      const out = outgoing(s.id);
-      const hasYes = out.some((e) => e.sourceHandle === "yes");
-      const hasNo = out.some((e) => e.sourceHandle === "no");
-      if (!hasYes) errors.push(`Condition "${s.title}" is missing the Yes branch.`);
-      if (!hasNo) errors.push(`Condition "${s.title}" is missing the No branch.`);
-    }
+    // ── 5. Condition nodes must be complete and valid ──────
+    errors.push(...validateConditionNodes(steps, edges, conditionFieldTypeByKey));
 
     // ── 6. Parallel must have ≥ 2 outgoing branches ─────────
     for (const s of steps.filter((n) => n.type === "parallel")) {
@@ -1007,8 +1567,9 @@ export default function WorkflowBuilderPage() {
 
     // ── 8. Task nodes need an assigned role ──────────────────
     for (const s of steps.filter((n) => n.type === "task")) {
-      if (!s.assignedRole)
-        errors.push(`Task "${s.title}" has no assigned role.`);
+      const assignees = extractTaskAssignees(s);
+      if (assignees.roles.length === 0 && assignees.users.length === 0)
+        errors.push(`Task "${s.title}" has no assignee. Add at least one #role or @user.`);
 
       // ── 8b. Task nodes with ≥ 2 actions need edges per action handle ──
       const actions = s.taskActions ?? [];
@@ -1057,6 +1618,14 @@ export default function WorkflowBuilderPage() {
   const handlePublish = useCallback(async () => {
     if (!canPublish) return;
     if (!organization?.id) { showToast("No active organisation — please select one first.", "error"); return; }
+    const conditionValidationFieldTypeByKey = new Map(
+      availableConditionFields.map((field) => [field.key, normalizeConditionDataType(field.dataType)]),
+    );
+    const conditionErrors = validateConditionNodes(draft.steps, draft.edges, conditionValidationFieldTypeByKey);
+    if (conditionErrors.length > 0) {
+      setPublishErrors(conditionErrors);
+      return;
+    }
     // Guard: update requires actual changes and a commit message
     if (editingId && !hasChanges) { showToast("No changes detected.", "warning"); return; }
     if (editingId && !editingIsDraft && !commitMessage.trim()) { showToast("A commit message is required.", "warning"); return; }
@@ -1078,6 +1647,9 @@ export default function WorkflowBuilderPage() {
     }
 
     const backendNodes: any[] = [];
+    const conditionFieldTypeByKey = new Map(
+      availableConditionFields.map((field) => [field.key, normalizeConditionDataType(field.dataType)]),
+    );
 
     for (const s of draft.steps) {
       const out = edgesBySource[s.id] || [];
@@ -1125,6 +1697,21 @@ export default function WorkflowBuilderPage() {
           const yesEdge = out.find((e) => e.sourceHandle === "yes");
           const noEdge = out.find((e) => e.sourceHandle === "no");
           node.condition = s.condition || "";
+          const rules = (s.conditionConfig?.rules || []).filter((rule) => rule.field && rule.operator);
+          if (rules.length > 0) {
+            const join = s.conditionConfig?.join === "or" ? "or" : "and";
+            const logic = String(s.conditionConfig?.logic || "").trim() || buildDefaultConditionLogic(rules.length, join);
+            node.condition_config = {
+              join,
+              logic,
+              rules: rules.map((rule) => ({
+                field: rule.field,
+                data_type: conditionFieldTypeByKey.get(rule.field) || normalizeConditionDataType(rule.dataType || "text"),
+                operator: rule.operator,
+                value: rule.value ?? "",
+              })),
+            };
+          }
           node.next_yes = yesEdge?.target || "";
           node.next_no = noEdge?.target || "";
           break;
@@ -1163,9 +1750,16 @@ export default function WorkflowBuilderPage() {
 
       // ── Task-specific fields ──────────────────────
       if (nodeType === "task") {
+        const assignees = extractTaskAssignees(s);
         node.assigned_role = s.assignedRole || "";
         node.assigned_position = s.assignedPosition || "";
-        node.assigned_user = s.assignedUser || "";
+        node.assigned_user = "";
+        node.assigned_targets = assignees.targets;
+        node.assigned_roles = assignees.roles;
+        node.assigned_users = assignees.users;
+        if (assignees.roles.length > 0) {
+          node.assigned_role = assignees.roles[0];
+        }
         node.task_actions = s.taskActions || [];
         node.form_template_id = s.formTemplateId || "";
         node.sla_days = s.slaDays || 0;
@@ -1248,18 +1842,27 @@ export default function WorkflowBuilderPage() {
       console.error(err);
       showToast("Failed to publish workflow: " + (err.message || err), "error");
     }
-  }, [canPublish, hasChanges, commitMessage, draft, editingId, router, showToast, syncGoogleFormsWatch, organization?.id, extractGoogleFormID, parseVisibleDataKeys]);
+  }, [canPublish, hasChanges, commitMessage, draft, editingId, router, showToast, syncGoogleFormsWatch, organization?.id, extractGoogleFormID, parseVisibleDataKeys, availableConditionFields]);
 
   const handleSaveDraft = useCallback(async () => {
     if (!draft.name.trim()) { showToast("Please enter a workflow name before saving.", "warning"); return; }
     if (!organization?.id) { showToast("No active organisation — please select one first.", "error"); return; }
-    // Build backend nodes (same logic as publish but skip validation)
+    // Build backend nodes (same logic as publish)
     const edgesBySource: Record<string, typeof draft.edges> = {};
     for (const e of draft.edges) { (edgesBySource[e.source] ??= []).push(e); }
+    const conditionFieldTypeByKey = new Map(
+      availableConditionFields.map((field) => [field.key, normalizeConditionDataType(field.dataType)]),
+    );
+    const conditionErrors = validateConditionNodes(draft.steps, draft.edges, conditionFieldTypeByKey);
+    if (conditionErrors.length > 0) {
+      showToast(`Cannot save draft: ${conditionErrors[0]}`, "warning");
+      return;
+    }
     const backendNodes: any[] = draft.steps.map((s) => {
       const out = edgesBySource[s.id] || [];
       const node: Record<string, any> = { id: s.id, type: s.type, title: s.title, description: s.description || "", position: s.position };
       if (s.type === "task") {
+        const assignees = extractTaskAssignees(s);
         const actions = s.taskActions ?? [];
         if (actions.length >= 2) {
           const nextActions: Record<string, string> = {};
@@ -1273,9 +1876,12 @@ export default function WorkflowBuilderPage() {
         } else {
           node.next = out[0]?.target || "";
         }
-        node.assigned_role = s.assignedRole || "";
+        node.assigned_role = assignees.roles[0] || s.assignedRole || "";
         node.assigned_position = s.assignedPosition || "";
-        node.assigned_user = s.assignedUser || "";
+        node.assigned_user = "";
+        node.assigned_targets = assignees.targets;
+        node.assigned_roles = assignees.roles;
+        node.assigned_users = assignees.users;
         node.task_actions = s.taskActions || [];
         node.form_template_id = s.formTemplateId || "";
         node.sla_days = s.slaDays || 0;
@@ -1285,6 +1891,21 @@ export default function WorkflowBuilderPage() {
         node.include_form_files = Boolean(s.includeFormFiles);
       } else if (s.type === "condition") {
         node.condition = s.condition || "";
+        const rules = (s.conditionConfig?.rules || []).filter((rule) => rule.field && rule.operator);
+        if (rules.length > 0) {
+          const join = s.conditionConfig?.join === "or" ? "or" : "and";
+          const logic = String(s.conditionConfig?.logic || "").trim() || buildDefaultConditionLogic(rules.length, join);
+          node.condition_config = {
+            join,
+            logic,
+            rules: rules.map((rule) => ({
+              field: rule.field,
+              data_type: conditionFieldTypeByKey.get(rule.field) || normalizeConditionDataType(rule.dataType || "text"),
+              operator: rule.operator,
+              value: rule.value ?? "",
+            })),
+          };
+        }
         node.next_yes = out.find((e) => e.sourceHandle === "yes")?.target || "";
         node.next_no = out.find((e) => e.sourceHandle === "no")?.target || "";
       } else if (s.type === "parallel") {
@@ -1333,7 +1954,7 @@ export default function WorkflowBuilderPage() {
     } catch (err: any) {
       showToast("Failed to save draft: " + (err.message || err), "error");
     }
-  }, [draft, editingId, router, showToast, syncGoogleFormsWatch, extractGoogleFormID, parseVisibleDataKeys]);
+  }, [draft, editingId, router, showToast, syncGoogleFormsWatch, extractGoogleFormID, parseVisibleDataKeys, availableConditionFields]);
 
   /* ── Selected step for editor ── */
   const selectedStep =
@@ -1664,14 +2285,6 @@ export default function WorkflowBuilderPage() {
                     </div>
                   )}
                 </div>
-
-                {/* Trigger config shortcut */}
-                <div className="wf-field">
-                  <label className="wf-field-label">Trigger</label>
-                  <button className="action-btn action-btn-outline" style={{ width: "100%" }} onClick={() => setSelectedId("__trigger__")}>
-                    Configure Trigger ({draft.trigger.type.replace(/_/g, " ")})
-                  </button>
-                </div>
               </div>
             </aside>
 
@@ -1707,6 +2320,8 @@ export default function WorkflowBuilderPage() {
                 onConnect={onConnect}
                 onDeleteStep={handleDeleteStep}
                 onDeleteEdge={handleDeleteEdge}
+                trigger={draft.trigger}
+                onConfigureTrigger={() => setSelectedId("__trigger__")}
               />
             </div>
 
@@ -1743,10 +2358,20 @@ export default function WorkflowBuilderPage() {
                   step={selectedStep}
                   stepIndex={selectedStepIndex}
                   availableRoles={roles.map((r) => r.name)}
+                  availableUsers={employees.map((employee) => ({
+                    id: employee.id,
+                    name: `${String(employee.first_name || "").trim()} ${String(employee.last_name || "").trim()}`.trim(),
+                    email: employee.email,
+                  }))}
                   suggestedDataKeys={suggestedTaskDataKeys}
+                  availableConditionFields={availableConditionFields}
                   availableForms={googleForms}
                   formsLoading={googleFormsLoading}
                   onRefreshForms={loadGoogleForms}
+                  availableGmailAccounts={gmailAccounts}
+                  gmailAccountsLoading={gmailAccountsLoading}
+                  gmailAccountsError={gmailAccountsError}
+                  onRefreshGmailAccounts={loadGmailAccounts}
                   onChange={handleStepChange}
                   onClose={handleCloseEditor}
                 />

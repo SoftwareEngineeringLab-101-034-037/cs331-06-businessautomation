@@ -24,6 +24,7 @@ function formatShortDate(d: Date): string {
 
 export default function DashboardOverview() {
   const { role } = useRole();
+  const roleLabel = role ? ROLE_LABELS[role] : "Loading role...";
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -59,7 +60,8 @@ export default function DashboardOverview() {
     ? MOCK_TASKS.filter(
         (t) =>
           t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          t.id.toLowerCase().includes(searchQuery.toLowerCase())
+          t.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          t.workflowName.toLowerCase().includes(searchQuery.toLowerCase())
       ).slice(0, 5)
     : [];
 
@@ -112,7 +114,7 @@ export default function DashboardOverview() {
                 ref={searchRef}
                 type="text"
                 className="cmd-search-input"
-                placeholder="Search tasks, requests, workflows..."
+                placeholder="Search tasks, workflows..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -177,7 +179,7 @@ export default function DashboardOverview() {
         <div className="overview-welcome">
           <div>
             <h2 className="overview-greeting">Good {getGreeting()}</h2>
-            <p className="overview-role">Viewing as <strong>{ROLE_LABELS[role]}</strong></p>
+            <p className="overview-role">Viewing as <strong>{roleLabel}</strong></p>
           </div>
           <button className="cmd-trigger" onClick={() => setShowSearch(true)}>
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16">
@@ -402,16 +404,6 @@ export default function DashboardOverview() {
                       </svg>
                     </div>
                     View Tasks
-                  </Link>
-                </RoleGate>
-                <RoleGate allowed={["admin", "employee"]}>
-                  <Link href="/dashboard/requests" className="cc-quick-card">
-                    <div className="cc-quick-icon" style={{ background: "var(--info-subtle)", color: "var(--info)" }}>
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="18" height="18">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                      </svg>
-                    </div>
-                    New Request
                   </Link>
                 </RoleGate>
                 <RoleGate allowed={["admin"]}>

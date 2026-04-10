@@ -447,7 +447,7 @@ func (s *EmployeeService) UpdateDepartment(orgID, deptID, name, description stri
 	if err == nil {
 		return nil, fmt.Errorf("%w: department %q already exists in this organization", ErrDuplicateDepartment, trimmedName)
 	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("failed to validate department uniqueness: %w", err)
 	}
 
@@ -513,7 +513,7 @@ func (s *EmployeeService) UpdateRole(orgID, roleID, name, description, updatedBy
 	if err == nil {
 		return nil, fmt.Errorf("%w: role %q already exists in this organization", ErrDuplicateRole, trimmedName)
 	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("failed to validate role uniqueness: %w", err)
 	}
 

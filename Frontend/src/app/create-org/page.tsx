@@ -5,23 +5,7 @@ import Link from "next/link";
 import { SignUp, useUser, useOrganizationList } from "@clerk/nextjs";
 import AuthDecorativePanel from "@/components/AuthDecorativePanel";
 import { useTheme } from "@/components/ThemeProvider";
-
-const industries = [
-  "Technology", "Finance & Banking", "Healthcare", "Manufacturing",
-  "Retail & E-commerce", "Education", "Media & Entertainment",
-  "Consulting", "Government", "Non-Profit", "Other",
-];
-
-const orgSizes = [
-  "1 – 10 employees", "11 – 50 employees", "51 – 200 employees",
-  "201 – 1,000 employees", "1,001 – 5,000 employees", "5,000+ employees",
-];
-
-const countries = [
-  "United States", "United Kingdom", "Canada", "Australia",
-  "Germany", "France", "India", "Japan", "Singapore",
-  "United Arab Emirates", "Other",
-];
+import { COUNTRY_OPTIONS, INDUSTRY_OPTIONS, ORG_SIZE_OPTIONS } from "@/lib/org-options";
 
 export default function CreateOrgPage() {
   const { theme, toggle } = useTheme();
@@ -175,14 +159,14 @@ export default function CreateOrgPage() {
                   <label className={labelCls} htmlFor="industry">Industry</label>
                   <select id="industry" value={industry} onChange={(e) => setIndustry(e.target.value)} className={selectCls} required>
                     <option value="" disabled>Select industry</option>
-                    {industries.map((i) => <option key={i}>{i}</option>)}
+                    {INDUSTRY_OPTIONS.map((i) => <option key={i}>{i}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className={labelCls} htmlFor="orgSize">Organisation Size</label>
                   <select id="orgSize" value={orgSize} onChange={(e) => setOrgSize(e.target.value)} className={selectCls} required>
                     <option value="" disabled>Select size</option>
-                    {orgSizes.map((s) => <option key={s}>{s}</option>)}
+                    {ORG_SIZE_OPTIONS.map((s) => <option key={s}>{s}</option>)}
                   </select>
                 </div>
               </div>
@@ -191,7 +175,7 @@ export default function CreateOrgPage() {
                 <label className={labelCls} htmlFor="country">Country / Region</label>
                 <select id="country" value={country} onChange={(e) => setCountry(e.target.value)} className={selectCls} required>
                   <option value="" disabled>Select country</option>
-                  {countries.map((c) => <option key={c}>{c}</option>)}
+                  {COUNTRY_OPTIONS.map((c) => <option key={c}>{c}</option>)}
                 </select>
               </div>
 

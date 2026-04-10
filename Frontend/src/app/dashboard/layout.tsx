@@ -11,7 +11,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { theme, toggle, mounted } = useTheme();
 
   return (
-    <RoleProvider defaultRole="admin">
+    <RoleProvider>
       <div className="dashboard-shell">
         {/* Unified top bar: brand + tabs + actions */}
         <header className="dashboard-topbar">

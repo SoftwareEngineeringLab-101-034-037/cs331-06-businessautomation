@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -21,8 +22,10 @@ import (
 const clerkBaseURL = "https://api.clerk.com/v1"
 
 var (
-	ErrDuplicateInvite = errors.New("duplicate invitation")
-	ErrNotFound        = errors.New("not found")
+	ErrDuplicateInvite                   = errors.New("duplicate invitation")
+	ErrAccountExists                     = errors.New("account already exists")
+	ErrNotFound                          = errors.New("not found")
+	ClerkRevokeOrgInvitationsByEmailFunc = revokeClerkOrgInvitationsByEmail
 )
 
 // InviteInput holds the parameters for creating a single employee invitation.
@@ -43,8 +46,20 @@ type InviteResult struct {
 }
 
 func (s *EmployeeService) InviteAndNotify(input InviteInput) (*InviteResult, error) {
-	var existing models.EmployeeInvitation
+	var existingUser models.User
 	err := s.db.Where(
+		"organization_id = ? AND lower(email) = lower(?)",
+		input.OrgID, input.Email,
+	).First(&existingUser).Error
+	if err == nil {
+		return nil, fmt.Errorf("%w: employee account already exists for %s", ErrAccountExists, input.Email)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("user lookup failed for %s in org %s: %w", input.Email, input.OrgID, err)
+	}
+
+	var existing models.EmployeeInvitation
+	err = s.db.Where(
 		"email = ? AND organization_id = ? AND status = ?",
 		input.Email, input.OrgID, "pending",
 	).First(&existing).Error
@@ -135,6 +150,127 @@ func (s *EmployeeService) sendClerkOrgInvitation(orgID, email string) error {
 	return nil
 }
 
+type clerkOrgInvitation struct {
+	ID           string `json:"id"`
+	EmailAddress string `json:"email_address"`
+	Status       string `json:"status"`
+}
+
+type clerkInvitationListPage struct {
+	Data       []clerkOrgInvitation `json:"data"`
+	TotalCount int                  `json:"totalCount"`
+}
+
+func revokeClerkOrgInvitationsByEmail(clerkSecretKey, orgID, email string) error {
+	if clerkSecretKey == "" {
+		return fmt.Errorf("clerk secret key not configured")
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	const pageLimit = 100
+	invites := make([]clerkOrgInvitation, 0)
+	for offset := 0; ; offset += pageLimit {
+		listURL := fmt.Sprintf("%s/organizations/%s/invitations?limit=%d&offset=%d", clerkBaseURL, orgID, pageLimit, offset)
+		listReq, err := http.NewRequest(http.MethodGet, listURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create Clerk list-invitations request: %w", err)
+		}
+		listReq.Header.Set("Authorization", "Bearer "+clerkSecretKey)
+
+		listResp, err := client.Do(listReq)
+		if err != nil {
+			return fmt.Errorf("clerk list invitations request failed: %w", err)
+		}
+		payload, err := io.ReadAll(listResp.Body)
+		listResp.Body.Close()
+		if err != nil {
+			return fmt.Errorf("failed to read clerk invitations response: %w", err)
+		}
+		if listResp.StatusCode >= 300 {
+			return fmt.Errorf("clerk list invitations returned status %d: %s", listResp.StatusCode, string(payload))
+		}
+
+		pageInvites, totalCount, err := decodeClerkInvitationPage(payload)
+		if err != nil {
+			return err
+		}
+		invites = append(invites, pageInvites...)
+
+		if len(pageInvites) == 0 {
+			break
+		}
+		if totalCount > 0 && offset+pageLimit >= totalCount {
+			break
+		}
+		if totalCount <= 0 && len(pageInvites) < pageLimit {
+			break
+		}
+	}
+
+	revokedCount := 0
+	for _, invitation := range invites {
+		if !strings.EqualFold(strings.TrimSpace(invitation.EmailAddress), strings.TrimSpace(email)) {
+			continue
+		}
+		if invitation.Status != "pending" {
+			continue
+		}
+
+		if err := revokeSingleClerkInvitation(client, clerkSecretKey, orgID, invitation.ID); err != nil {
+			return err
+		}
+		revokedCount++
+	}
+
+	if revokedCount == 0 {
+		return fmt.Errorf("no pending Clerk invitation found for %s in org %s", email, orgID)
+	}
+
+	return nil
+}
+
+func decodeClerkInvitationPage(payload []byte) ([]clerkOrgInvitation, int, error) {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return nil, 0, nil
+	}
+	if trimmed[0] == '[' {
+		var invites []clerkOrgInvitation
+		if err := json.Unmarshal(trimmed, &invites); err != nil {
+			return nil, 0, fmt.Errorf("failed to decode clerk invitations payload: %w", err)
+		}
+		return invites, 0, nil
+	}
+
+	var wrapped clerkInvitationListPage
+	if err := json.Unmarshal(trimmed, &wrapped); err != nil {
+		return nil, 0, fmt.Errorf("failed to decode clerk invitations payload: %w", err)
+	}
+	return wrapped.Data, wrapped.TotalCount, nil
+}
+
+func revokeSingleClerkInvitation(client *http.Client, clerkSecretKey, orgID, invitationID string) error {
+	revokeURL := fmt.Sprintf("%s/organizations/%s/invitations/%s/revoke", clerkBaseURL, orgID, invitationID)
+	req, err := http.NewRequest(http.MethodPost, revokeURL, bytes.NewBufferString("{}"))
+	if err != nil {
+		return fmt.Errorf("failed to create Clerk revoke request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+clerkSecretKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("clerk revoke invitation request failed: %w", err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode < 300 {
+		return nil
+	}
+
+	return fmt.Errorf("clerk revoke invitation %s returned status %d: %s", invitationID, resp.StatusCode, string(respBody))
+}
+
 // AcceptInvitationByEmail finds a pending invitation matching the email and
 // org, marks it as accepted, and assigns the department/role to the user.
 func (s *EmployeeService) AcceptInvitationByEmail(email, orgID, userID string) error {
@@ -172,6 +308,12 @@ func (s *EmployeeService) AcceptInvitationByEmail(email, orgID, userID string) e
 			"organization_id": invitation.OrganizationID,
 			"department_id":   invitation.DepartmentID,
 			"updated_at":      now,
+		}
+		if trimmedFirstName := strings.TrimSpace(invitation.FirstName); trimmedFirstName != "" {
+			userUpdates["first_name"] = trimmedFirstName
+		}
+		if trimmedLastName := strings.TrimSpace(invitation.LastName); trimmedLastName != "" {
+			userUpdates["last_name"] = trimmedLastName
 		}
 		if invitation.JobTitle != "" {
 			userUpdates["job_title"] = invitation.JobTitle

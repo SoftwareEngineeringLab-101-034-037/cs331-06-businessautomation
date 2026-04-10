@@ -7,35 +7,41 @@ on:
     branches: [ "main", "master" ]
 
 jobs:
-  backend-auth-lint:
-    name: Backend Auth Lint
+  go-services-lint:
+    name: Go Lint (${{ matrix.service }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: auth
+            path: backend/auth
+          - service: workflow
+            path: backend/workflow
+          - service: integrations
+            path: backend/integrations
     defaults:
       run:
-        working-directory: ./backend/auth
+        working-directory: ./${{ matrix.path }}
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache-dependency-path: './backend/auth/go.sum'
-          
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          # Pin to a specific version for deterministic CI. Review periodically.
-          version: v1.64.8
-          working-directory: backend/auth
-          install-mode: goinstall
-      
+          cache-dependency-path: ./${{ matrix.path }}/go.sum
+
       - name: Go fmt
         run: |
-          if [ "$(go fmt ./...)" ]; then
+          fmt_output=$(go fmt ./... 2>&1) || {
+            echo "go fmt execution failed: $fmt_output"
+            exit 1
+          }
+          if [ -n "$fmt_output" ]; then
             echo "Go code is not formatted. Run 'go fmt ./...' locally."
             exit 1
           fi
-          
+
       - name: Go vet
         run: go vet ./...

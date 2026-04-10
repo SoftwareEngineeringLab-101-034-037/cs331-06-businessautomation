@@ -113,7 +113,7 @@ export const CONNECTOR_CONFIG: Record<
   { label: string; icon: string; color: string; paramFields: ConnectorParamField[] }
 > = {
   email: {
-    label: "Send Email",
+    label: "Gmail Send Email",
     icon: "email",
     color: "#3b82f6",
     paramFields: [
@@ -121,6 +121,7 @@ export const CONNECTOR_CONFIG: Record<
       { key: "cc", label: "CC", placeholder: "cc@company.com (optional)" },
       { key: "subject", label: "Subject", placeholder: "Expense Request: {{data.title}}", required: true },
       { key: "body_template", label: "Body", placeholder: "Please review the expense of {{data.amount}}...", multiline: true, required: true },
+      { key: "from_account_id", label: "Send From Account", placeholder: "primary or connected Gmail account email" },
       { key: "from_name", label: "From Name", placeholder: "Workflow System" },
     ],
   },
@@ -183,6 +184,59 @@ export interface ConnectorParamField {
 export interface ConnectorConfigData {
   type: ConnectorType;
   params: Record<string, string>;
+}
+
+export type ConditionDataType =
+  | "text"
+  | "number"
+  | "boolean"
+  | "date"
+  | "datetime"
+  | "time";
+
+export type ConditionOperator =
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "contains"
+  | "not_contains"
+  | "starts_with"
+  | "ends_with"
+  | "is_empty"
+  | "is_not_empty";
+
+export type ConditionJoin = "and" | "or";
+
+export interface ConditionRule {
+  field: string;
+  dataType: ConditionDataType;
+  operator: ConditionOperator;
+  value?: string;
+}
+
+export interface ConditionConfig {
+  join: ConditionJoin;
+  logic?: string;
+  rules: ConditionRule[];
+}
+
+export interface WorkflowDataField {
+  key: string;
+  label?: string;
+  dataType: ConditionDataType;
+  source?: string;
+}
+
+export interface TriggerFieldSchemaItem {
+  question_id: string;
+  title: string;
+  required?: boolean;
+  field_type?: string;
+  variable?: string;
+  data_type?: ConditionDataType;
 }
 
 /** Allowed task actions the assignee can take */
@@ -278,6 +332,7 @@ export interface WorkflowStep {
   description: string;
 
   // ── Task assignment fields (type == "task") ───────────────
+  assignmentTargets?: string[];
   assignedRole: string;
   assignedPosition?: string;
   assignedUser?: string;
@@ -298,6 +353,7 @@ export interface WorkflowStep {
 
   // ── Condition (type == "condition") ────────────────────────
   condition?: string;
+  conditionConfig?: ConditionConfig;
 
   // ── Parallel (type == "parallel") ─────────────────────────
   branches?: number;
@@ -362,6 +418,7 @@ export function createBlankStep(
     title: `Step ${normalizedOrder}`,
     description: "",
     actionType: "custom_task",
+    assignmentTargets: [],
     assignedRole: "",
     taskDataVisibility: "all",
     visibleDataKeys: [],

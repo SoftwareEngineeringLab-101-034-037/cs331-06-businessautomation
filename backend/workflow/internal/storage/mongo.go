@@ -73,6 +73,9 @@ func (m *MongoStore) ensureIndexes(ctx context.Context) error {
 	if err := m.ensureWorkflowFormResponseIndex(ictx); err != nil {
 		return err
 	}
+	if err := m.ensureWorkflowEmailMessageIndex(ictx); err != nil {
+		return err
+	}
 	if _, err := m.taskCol.Indexes().CreateMany(ictx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "assigned_role", Value: 1}, {Key: "status", Value: 1}}},
@@ -92,6 +95,32 @@ func (m *MongoStore) ensureWorkflowFormResponseIndex(ctx context.Context) error 
 			SetName(indexName).
 			SetUnique(true).
 			SetPartialFilterExpression(bson.M{"data.form_response_id": bson.M{"$type": "string", "$gt": ""}}),
+	}
+
+	if _, err := m.instCol.Indexes().CreateOne(ctx, model); err == nil {
+		return nil
+	} else if !isIndexConflictError(err) {
+		return err
+	}
+
+	if _, err := m.instCol.Indexes().DropOne(ctx, indexName); err != nil && !isIndexNotFoundError(err) {
+		return fmt.Errorf("drop conflicting index %s: %w", indexName, err)
+	}
+
+	if _, err := m.instCol.Indexes().CreateOne(ctx, model); err != nil {
+		return fmt.Errorf("create index %s after drop: %w", indexName, err)
+	}
+	return nil
+}
+
+func (m *MongoStore) ensureWorkflowEmailMessageIndex(ctx context.Context) error {
+	const indexName = "workflow_id_1_data.email_message_id_1"
+	model := mongo.IndexModel{
+		Keys: bson.D{{Key: "workflow_id", Value: 1}, {Key: "data.email_message_id", Value: 1}},
+		Options: options.Index().
+			SetName(indexName).
+			SetUnique(true).
+			SetPartialFilterExpression(bson.M{"data.email_message_id": bson.M{"$type": "string", "$gt": ""}}),
 	}
 
 	if _, err := m.instCol.Indexes().CreateOne(ctx, model); err == nil {
@@ -242,11 +271,51 @@ func (m *MongoStore) FindInstanceByWorkflowAndFormResponse(workflowID, formRespo
 	return inst, true, nil
 }
 
+func (m *MongoStore) FindInstanceByWorkflowAndEmailMessageID(workflowID, emailMessageID string) (models.Instance, bool, error) {
+	if strings.TrimSpace(emailMessageID) == "" {
+		return models.Instance{}, false, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var inst models.Instance
+	err := m.instCol.FindOne(ctx, bson.M{
+		"workflow_id":           workflowID,
+		"data.email_message_id": emailMessageID,
+	}).Decode(&inst)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return models.Instance{}, false, nil
+		}
+		return models.Instance{}, false, err
+	}
+	return inst, true, nil
+}
+
 func (m *MongoStore) ListInstancesByWorkflow(workflowID string) ([]models.Instance, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cursor, err := m.instCol.Find(ctx, bson.M{"workflow_id": workflowID},
 		options.Find().SetSort(bson.D{{Key: "started_at", Value: -1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var out []models.Instance
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (m *MongoStore) ListInstancesByWorkflowCompact(workflowID string) ([]models.Instance, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := m.instCol.Find(ctx, bson.M{"workflow_id": workflowID},
+		options.Find().
+			SetSort(bson.D{{Key: "started_at", Value: -1}}).
+			SetProjection(compactInstanceProjection()))
 	if err != nil {
 		return nil, err
 	}
@@ -272,6 +341,39 @@ func (m *MongoStore) ListInstancesByOrg(orgID string) ([]models.Instance, error)
 		return nil, err
 	}
 	return out, nil
+}
+
+func (m *MongoStore) ListInstancesByOrgCompact(orgID string) ([]models.Instance, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := m.instCol.Find(ctx, bson.M{"org_id": orgID},
+		options.Find().
+			SetSort(bson.D{{Key: "started_at", Value: -1}}).
+			SetProjection(compactInstanceProjection()))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var out []models.Instance
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func compactInstanceProjection() bson.M {
+	return bson.M{
+		"_id":          0,
+		"id":           1,
+		"org_id":       1,
+		"workflow_id":  1,
+		"status":       1,
+		"current_node": 1,
+		"node_states":  1,
+		"audit_log":    1,
+		"started_at":   1,
+		"completed_at": 1,
+	}
 }
 
 // -- Tasks --
@@ -329,8 +431,11 @@ func (m *MongoStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAss
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cursor, err := m.taskCol.Find(ctx, bson.M{
-		"org_id":        orgID,
-		"assigned_user": userID,
+		"org_id": orgID,
+		"$or": []bson.M{
+			{"assigned_user": userID},
+			{"assigned_users": userID, "status": string(models.TaskPending)},
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -347,9 +452,37 @@ func (m *MongoStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignmen
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cursor, err := m.taskCol.Find(ctx, bson.M{
-		"org_id":        orgID,
-		"assigned_role": role,
-		"status":        string(models.TaskPending),
+		"org_id": orgID,
+		"status": string(models.TaskPending),
+		"$or": []bson.M{
+			{"assigned_role": role},
+			{"assigned_roles": role},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var out []models.TaskAssignment
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (m *MongoStore) ListTasksByRoles(orgID string, roles []string) ([]models.TaskAssignment, error) {
+	if len(roles) == 0 {
+		return []models.TaskAssignment{}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := m.taskCol.Find(ctx, bson.M{
+		"org_id": orgID,
+		"status": string(models.TaskPending),
+		"$or": []bson.M{
+			{"assigned_role": bson.M{"$in": roles}},
+			{"assigned_roles": bson.M{"$in": roles}},
+		},
 	})
 	if err != nil {
 		return nil, err

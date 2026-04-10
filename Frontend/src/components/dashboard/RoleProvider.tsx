@@ -1,10 +1,12 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from "react";
+import { useAuth } from "@clerk/nextjs";
 import type { UserRole } from "@/types/dashboard";
 
 interface RoleContextValue {
-  role: UserRole;
+  role: UserRole | null;
+  roleResolved: boolean;
   setRole: (r: UserRole) => void;
   hasAccess: (allowed: UserRole[]) => boolean;
 }
@@ -18,20 +20,39 @@ const RoleContext = createContext<RoleContextValue | null>(null);
  */
 export function RoleProvider({
   children,
-  defaultRole = "admin",
+  allowClientOverride = false,
 }: {
   children: ReactNode;
-  defaultRole?: UserRole;
+  allowClientOverride?: boolean;
 }) {
-  const [role, setRole] = useState<UserRole>(defaultRole);
+  const { orgRole, isLoaded } = useAuth();
+  const [manualRole, setManualRole] = useState<UserRole | null>(null);
+  const roleResolved = isLoaded;
+  const canOverrideRole = process.env.NODE_ENV !== "production" || allowClientOverride;
+
+  const derivedRole = useMemo<UserRole | null>(() => {
+    if (!roleResolved) return null;
+    if (orgRole === "org:admin" || orgRole === "org:owner") return "admin";
+    if (orgRole === "org:member") return "employee";
+    return null;
+  }, [roleResolved, orgRole]);
+
+  const role = manualRole ?? derivedRole;
+
+  const setRole = useCallback((nextRole: UserRole) => {
+    if (!canOverrideRole) {
+      return;
+    }
+    setManualRole(nextRole);
+  }, [canOverrideRole]);
 
   const hasAccess = useCallback(
-    (allowed: UserRole[]) => allowed.includes(role),
-    [role],
+    (allowed: UserRole[]) => roleResolved && role !== null && allowed.includes(role),
+    [roleResolved, role],
   );
 
   return (
-    <RoleContext.Provider value={{ role, setRole, hasAccess }}>
+    <RoleContext.Provider value={{ role, roleResolved, setRole, hasAccess }}>
       {children}
     </RoleContext.Provider>
   );
@@ -56,7 +77,9 @@ export function RoleGate({
   children: ReactNode;
   fallback?: ReactNode;
 }) {
-  const { hasAccess } = useRole();
+  const { role, roleResolved, hasAccess } = useRole();
+  if (!roleResolved && role === null) return null;
+  if (roleResolved && role === null) return fallback ?? null;
   if (!hasAccess(allowed)) return fallback ?? null;
   return <>{children}</>;
 }

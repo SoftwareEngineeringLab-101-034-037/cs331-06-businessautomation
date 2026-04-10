@@ -1,6 +1,5 @@
 import type {
   Task,
-  WorkflowRequest,
   ActivityItem,
   Department,
   TeamMember,
@@ -155,76 +154,6 @@ export const MOCK_TASKS: Task[] = [
   },
 ];
 
-// ─── Mock Requests ─────────────────────────────────────────────
-export const MOCK_REQUESTS: WorkflowRequest[] = [
-  {
-    id: "REQ-501",
-    title: "New laptop request",
-    workflowName: "IT Asset Request",
-    status: "in_progress",
-    submittedBy: "user_1",
-    submittedByName: "You",
-    submittedAt: "2026-02-14T10:00:00Z",
-    currentStep: "Manager Approval",
-    totalSteps: 4,
-    completedSteps: 1,
-    lastUpdated: "2026-02-15T14:20:00Z",
-  },
-  {
-    id: "REQ-502",
-    title: "Travel reimbursement — NYC conference",
-    workflowName: "Expense Reporting",
-    status: "approved",
-    submittedBy: "user_1",
-    submittedByName: "You",
-    submittedAt: "2026-02-10T08:30:00Z",
-    currentStep: "Finance Processing",
-    totalSteps: 3,
-    completedSteps: 3,
-    lastUpdated: "2026-02-13T16:45:00Z",
-    approver: "Amy Liu",
-  },
-  {
-    id: "REQ-503",
-    title: "Office space relocation",
-    workflowName: "Facilities Management",
-    status: "submitted",
-    submittedBy: "user_1",
-    submittedByName: "You",
-    submittedAt: "2026-02-16T07:00:00Z",
-    currentStep: "Awaiting Review",
-    totalSteps: 5,
-    completedSteps: 0,
-    lastUpdated: "2026-02-16T07:00:00Z",
-  },
-  {
-    id: "REQ-490",
-    title: "Software license — Figma Enterprise",
-    workflowName: "IT Asset Request",
-    status: "rejected",
-    submittedBy: "user_1",
-    submittedByName: "You",
-    submittedAt: "2026-02-05T09:00:00Z",
-    currentStep: "Closed",
-    totalSteps: 4,
-    completedSteps: 2,
-    lastUpdated: "2026-02-07T11:00:00Z",
-  },
-  {
-    id: "REQ-505",
-    title: "Annual performance review submission",
-    workflowName: "Performance Review",
-    status: "completed",
-    submittedBy: "user_1",
-    submittedByName: "You",
-    submittedAt: "2026-02-01T10:00:00Z",
-    currentStep: "Completed",
-    totalSteps: 3,
-    completedSteps: 3,
-    lastUpdated: "2026-02-08T14:00:00Z",
-  },
-];
-
 // ─── Mock Activity Feed ────────────────────────────────────────
 export const MOCK_ACTIVITY: ActivityItem[] = [
   {
@@ -234,14 +163,6 @@ export const MOCK_ACTIVITY: ActivityItem[] = [
     actor: "Sarah Chen",
     timestamp: "2026-02-16T09:30:00Z",
     relatedId: "TSK-1024",
-  },
-  {
-    id: "act-2",
-    type: "request_approved",
-    message: 'Your request "Travel reimbursement" was approved',
-    actor: "Amy Liu",
-    timestamp: "2026-02-15T16:45:00Z",
-    relatedId: "REQ-502",
   },
   {
     id: "act-3",
@@ -272,14 +193,6 @@ export const MOCK_ACTIVITY: ActivityItem[] = [
     message: 'Workflow "Vendor Management v2" published by admin',
     actor: "David Kim",
     timestamp: "2026-02-12T15:00:00Z",
-  },
-  {
-    id: "act-7",
-    type: "request_submitted",
-    message: 'New request submitted: "Office space relocation"',
-    actor: "You",
-    timestamp: "2026-02-16T07:00:00Z",
-    relatedId: "REQ-503",
   },
 ];
 

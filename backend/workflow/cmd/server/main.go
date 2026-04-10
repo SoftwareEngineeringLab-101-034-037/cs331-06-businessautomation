@@ -29,21 +29,39 @@ func main() {
 		log.Fatalf("WORKFLOW_INTEGRATION_KEY must be set")
 	}
 
-	// Connect to MongoDB (required)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	store, err := storage.NewMongoStore(ctx, cfg.MongoURI)
-	if err != nil {
-		log.Fatalf("Failed to connect to MongoDB: %v", err)
+	// Connect to MongoDB (required) with retries for transient Atlas topology issues.
+	var store *storage.MongoStore
+	var lastMongoErr error
+	for attempt := 1; attempt <= 6; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		store, err = storage.NewMongoStore(ctx, cfg.MongoURI)
+		cancel()
+		if err == nil {
+			lastMongoErr = nil
+			break
+		}
+		lastMongoErr = err
+		log.Printf("Mongo connect attempt %d/6 failed: %v", attempt, err)
+		if attempt < 6 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+	}
+
+	if lastMongoErr != nil {
+		log.Fatalf("Failed to connect to MongoDB after retries: %v", lastMongoErr)
+	}
+
+	if store == nil {
+		log.Fatalf("Failed to connect to MongoDB: unknown error")
 	}
 	log.Printf("Connected to MongoDB succesfully")
 
-	email := connectors.NewMockEmail()
+	email := connectors.NewIntegrationsGmailConnector(cfg.IntegrationsURL, cfg.IntegrationKey)
 	roleDirectory, err := executor.NewHTTPRoleDirectory(cfg.AuthServiceURL, cfg.AuthServiceToken)
 	if err != nil {
 		log.Fatalf("Failed to configure role directory: %v", err)
 	}
-	assigneeSelector := executor.NewRandomRoleAssigneeSelector(roleDirectory)
+	assigneeSelector := executor.NewBalancedRoleAssigneeSelector(roleDirectory, store)
 	exec := executor.NewExecutor(store, email, assigneeSelector)
 
 	workflowHandler := handler.NewWorkflowHandler(store)
@@ -78,6 +96,7 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 	r.POST("/integrations/google-forms/events", instanceHandler.StartFromGoogleForms)
+	r.POST("/integrations/gmail/events", instanceHandler.StartFromGmail)
 
 	// Protected
 	api := r.Group("/api")
@@ -95,6 +114,7 @@ func main() {
 
 			// Instance management
 			orgApi.POST("/instances", instanceHandler.Start)
+			orgApi.POST("/instances/:id/restart", instanceHandler.Restart)
 			orgApi.GET("/instances", instanceHandler.List)
 			orgApi.GET("/instances/:id", instanceHandler.Get)
 

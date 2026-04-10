@@ -16,8 +16,18 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const configuredAppBaseUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  const appBaseUrl = configuredAppBaseUrl || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "");
+  const afterSignOutUrl = appBaseUrl ? `${appBaseUrl}/join` : "/join";
+
   return (
-    <ClerkProvider>
+    <ClerkProvider
+      signInForceRedirectUrl="/dashboard"
+      signInFallbackRedirectUrl="/dashboard"
+      signUpForceRedirectUrl="/dashboard"
+      signUpFallbackRedirectUrl="/dashboard"
+      afterSignOutUrl={afterSignOutUrl}
+    >
       <html lang="en" suppressHydrationWarning>
         <head>
           <script

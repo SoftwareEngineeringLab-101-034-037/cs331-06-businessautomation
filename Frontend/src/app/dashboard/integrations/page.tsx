@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
 
-const GF_API = process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
+const GF_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "http://localhost:8086";
 
 type IntegrationStatus = {
 	service?: string;
@@ -31,6 +31,22 @@ type IntegrationDescriptor = {
   tags: string[];
 };
 
+function settledReasonToMessage(reason: unknown): string {
+  if (reason instanceof Error) {
+    return reason.message || "status check failed";
+  }
+  if (typeof reason === "string") {
+    return reason;
+  }
+  if (reason && typeof reason === "object") {
+    const payload = reason as Record<string, unknown>;
+    if (typeof payload.message === "string") {
+      return payload.message;
+    }
+  }
+  return "status check failed";
+}
+
 const INTEGRATIONS: IntegrationDescriptor[] = [
   {
     id: "google_forms",
@@ -39,6 +55,14 @@ const INTEGRATIONS: IntegrationDescriptor[] = [
     icon: "forms",
     href: "/dashboard/integrations/google-forms",
     tags: ["forms", "automation", "google", "responses"],
+  },
+  {
+    id: "gmail",
+    name: "Gmail",
+    description: "Connect Gmail accounts for inbound triggers and automated email actions.",
+    icon: "gmail",
+    href: "/dashboard/integrations/gmail",
+    tags: ["email", "gmail", "automation", "notifications"],
   },
 ];
 
@@ -50,16 +74,22 @@ export default function IntegrationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
+  const getTokenRef = useRef(getToken);
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
+
   const authFetch = useCallback(async (input: string, init: RequestInit = {}) => {
-    const token = await getToken();
+    const token = await getTokenRef.current();
+    const headers = new Headers(init.headers);
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
     return fetch(input, {
       ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
+      headers,
     });
-  }, [getToken]);
+  }, []);
 
   const loadStatuses = useCallback(async () => {
     if (!organization?.id) return;
@@ -69,8 +99,7 @@ export default function IntegrationsPage() {
     try {
       const settled = await Promise.allSettled(
         INTEGRATIONS.map(async (integration) => {
-          if (integration.id !== "google_forms") return [integration.id, {} as IntegrationStatus] as const;
-          const res = await authFetch(`${GF_API}/integration/status?org_id=${encodeURIComponent(organization.id)}`);
+          const res = await authFetch(`${GF_API}/integrations/${encodeURIComponent(integration.id)}/status?org_id=${encodeURIComponent(organization.id)}`);
           if (!res.ok) {
             const body = await res.text();
             throw new Error(`${res.status} ${body}`);
@@ -85,7 +114,11 @@ export default function IntegrationsPage() {
         if (result.status === "fulfilled") {
           return result.value;
         }
-        return [integration.id, { service: integration.id, oauth_error: "status check failed" } as IntegrationStatus] as const;
+        return [integration.id, {
+          service: integration.id,
+          connected: false,
+          oauth_error: settledReasonToMessage(result.reason),
+        } as IntegrationStatus] as const;
       });
 
       setStatuses(Object.fromEntries(responses));
@@ -161,7 +194,7 @@ export default function IntegrationsPage() {
               <Link key={integration.id} href={integration.href} className="integration-catalog-card">
                 <div className="integration-catalog-head">
                   <span className="integration-catalog-icon" aria-hidden>
-                    {integration.icon === "forms" ? <FormsIcon /> : <PlugIcon />}
+                    {integration.icon === "forms" ? <FormsIcon /> : integration.icon === "gmail" ? <MailIcon /> : <PlugIcon />}
                   </span>
                   <div>
                     <h3 className="section-title">{integration.name}</h3>
@@ -192,6 +225,15 @@ export default function IntegrationsPage() {
         )}
       </div>
     </RoleGate>
+  );
+}
+
+function MailIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6.75A1.75 1.75 0 0 1 4.75 5h14.5A1.75 1.75 0 0 1 21 6.75v10.5A1.75 1.75 0 0 1 19.25 19H4.75A1.75 1.75 0 0 1 3 17.25V6.75Z" />
+      <path d="m4 7 8 6 8-6" />
+    </svg>
   );
 }
 

@@ -18,6 +18,51 @@ func NewEmployeeHandler(svc *service.EmployeeService) *EmployeeHandler {
 	return &EmployeeHandler{Service: svc}
 }
 
+// GET /api/orgs/:orgId/settings
+func (h *EmployeeHandler) GetOrganizationSettings(c *gin.Context) {
+	orgID := c.Param("orgId")
+	settings, err := h.Service.GetOrganizationSettings(orgID)
+	if err != nil {
+		log.Printf("GetOrganizationSettings error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, settings)
+}
+
+// PUT /api/orgs/:orgId/settings
+func (h *EmployeeHandler) UpdateOrganizationSettings(c *gin.Context) {
+	orgID := c.Param("orgId")
+	var body struct {
+		Domain   string `json:"domain"`
+		Industry string `json:"industry"`
+		Size     string `json:"size"`
+		Country  string `json:"country"`
+		UseCase  string `json:"use_case"`
+	}
+
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	settings, err := h.Service.UpdateOrganizationSettings(orgID, service.OrganizationSettingsUpdateInput{
+		Domain:   body.Domain,
+		Industry: body.Industry,
+		Size:     body.Size,
+		Country:  body.Country,
+		UseCase:  body.UseCase,
+	})
+	if err != nil {
+		log.Printf("UpdateOrganizationSettings error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, settings)
+}
+
 // POST /api/orgs/:orgId/departments
 func (h *EmployeeHandler) CreateDepartment(c *gin.Context) {
 	orgID := c.Param("orgId")
@@ -133,10 +178,8 @@ func (h *EmployeeHandler) CreateRole(c *gin.Context) {
 
 // GET /api/orgs/:orgId/roles
 func (h *EmployeeHandler) ListRoles(c *gin.Context) {
-	// This handler is intentionally user-context only via OrgMemberOnly().
-	// Workflow initiations that need role resolution must propagate the original
-	// user Authorization header, or add a separate service-token endpoint for
-	// non-user-initiated execution paths.
+	// Public route: user-context only via OrgMemberOnly().
+	// Automated workflow execution should use the system service-key route.
 	orgID := c.Param("orgId")
 	roles, err := h.Service.ListRoleSummaries(orgID)
 	if err != nil {
@@ -227,6 +270,8 @@ func (h *EmployeeHandler) InviteSingle(c *gin.Context) {
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrAccountExists):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		case errors.Is(err, service.ErrDuplicateInvite):
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		case errors.Is(err, service.ErrNotFound):
@@ -338,6 +383,28 @@ func (h *EmployeeHandler) ListEmployees(c *gin.Context) {
 	c.JSON(http.StatusOK, employees)
 }
 
+// DELETE /api/orgs/:orgId/employees/:employeeId
+func (h *EmployeeHandler) DeleteEmployee(c *gin.Context) {
+	orgID := c.Param("orgId")
+	employeeID := c.Param("employeeId")
+	actorUserID := c.GetString("user_id")
+
+	if err := h.Service.RemoveEmployee(orgID, employeeID, actorUserID); err != nil {
+		switch {
+		case errors.Is(err, service.ErrNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrCannotRemoveAdmin), errors.Is(err, service.ErrCannotRemoveSelf):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			log.Printf("DeleteEmployee error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Employee removed"})
+}
+
 // GET /api/orgs/:orgId/departments/:deptID
 func (h *EmployeeHandler) GetDepartment(c *gin.Context) {
 	orgID := c.Param("orgId")
@@ -376,4 +443,24 @@ func (h *EmployeeHandler) AcceptInvitation(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Invitation accepted successfully"})
+}
+
+// GET /api/orgs/:orgId/me/profile
+func (h *EmployeeHandler) GetMyProfile(c *gin.Context) {
+	orgID := c.Param("orgId")
+	userID := c.GetString("user_id")
+
+	profile, err := h.Service.GetMemberProfile(orgID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		default:
+			log.Printf("GetMyProfile error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, profile)
 }

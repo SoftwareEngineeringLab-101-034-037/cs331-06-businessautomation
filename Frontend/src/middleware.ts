@@ -1,6 +1,34 @@
-import { clerkMiddleware } from '@clerk/nextjs/server';
+import { NextResponse } from "next/server";
+import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
-export default clerkMiddleware();
+const isPublicRoute = createRouteMatcher([
+  "/",
+  "/join(.*)",
+  "/create-org(.*)",
+]);
+
+export default clerkMiddleware(async (auth, req) => {
+  if (isPublicRoute(req)) {
+    return NextResponse.next();
+  }
+
+  const { userId } = await auth();
+  if (userId) {
+    return NextResponse.next();
+  }
+
+  const pathname = req.nextUrl.pathname;
+  const isAPIRoute = pathname === "/api" || pathname.startsWith("/api/");
+  const isTRPCRoute = pathname === "/trpc" || pathname.startsWith("/trpc/");
+  if (isAPIRoute || isTRPCRoute) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const landingURL = new URL("/join", req.url);
+  const destination = `${req.nextUrl.pathname}${req.nextUrl.search}`;
+  landingURL.searchParams.set("redirect_to", destination);
+  return NextResponse.redirect(landingURL);
+});
 
 export const config = {
   matcher: [

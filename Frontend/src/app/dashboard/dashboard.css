@@ -345,6 +345,15 @@
   color: var(--text-muted);
 }
 
+.status-dot.pending {
+  color: #d97706;
+}
+
+.status-dot.pending::before {
+  background: #d97706;
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.2);
+}
+
 .status-dot.draft {
   color: #a78bfa;
 }
@@ -1999,10 +2008,32 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 20px;
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 14px;
   transition: var(--transition);
+}
+
+.obs-team-card-self {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-subtle) inset;
+}
+
+.obs-you-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .obs-team-card:hover {
@@ -2133,6 +2164,46 @@
 .team-observatory .obs-metrics-row {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
+}
+
+.team-view-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 10px 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.team-view-tab {
+  position: relative;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 0;
+  padding: 10px 14px 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 0.18s ease;
+}
+
+.team-view-tab:hover {
+  color: var(--text-primary);
+}
+
+.team-view-tab.active {
+  color: var(--text-primary);
+}
+
+.team-view-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
 }
 
 .team-observatory .obs-metric-card {
@@ -3053,6 +3124,24 @@
   word-break: normal;
 }
 
+.workflow-data-link {
+  display: inline-block;
+  max-width: 100%;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+}
+
+.workflow-data-link:hover {
+  color: color-mix(in srgb, var(--accent) 80%, black 20%);
+}
+
 .workflow-data-empty {
   font-size: 0.8rem;
   color: var(--text-muted);
@@ -3102,6 +3191,19 @@
   hyphens: auto;
 }
 
+.workflow-data-chip-link {
+  display: inline-block;
+  max-width: min(100%, 280px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
+}
+
+.workflow-data-chip-link:hover {
+  text-decoration: underline;
+}
+
 .workflow-data-subgrid {
   display: grid;
   gap: 6px;
@@ -3129,6 +3231,28 @@
 .workflow-data-details {
   border-top: 1px dashed var(--border);
   padding-top: 6px;
+}
+
+.workflow-uploaded-files {
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.workflow-uploaded-files-title {
+  margin: 0;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.workflow-uploaded-files-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .workflow-data-details summary {
@@ -3239,6 +3363,13 @@
   border-color: var(--accent);
   color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.step-dot.completed.current {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+  box-shadow: 0 0 0 3px var(--accent-subtle), 0 0 0 1px rgba(255, 255, 255, 0.55) inset;
 }
 
 /* Drawer info grid */
@@ -3444,6 +3575,46 @@
 
 .employee-drawer-header {
   align-items: flex-start;
+}
+
+.employee-drawer-menu-wrap {
+  position: relative;
+  margin-left: auto;
+  margin-right: 8px;
+}
+
+.employee-member-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 150px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  z-index: 20;
+}
+
+.employee-member-menu-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.employee-member-menu-item:hover {
+  background: var(--surface-alt);
+}
+
+.employee-member-menu-item.danger {
+  color: #dc2626;
 }
 
 .employee-drawer-identity {
@@ -5111,6 +5282,41 @@
 
 .settings-panel-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-org-setup-intro {
+  border-bottom: none;
+  padding-bottom: 8px;
+}
+
+.settings-org-setup-intro-info {
+  width: 100%;
+}
+
+.settings-org-setup-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 20px 10px;
+}
+
+.settings-org-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.settings-org-setup-field,
+.settings-org-setup-usecase {
+  margin: 0;
+}
+
+.settings-org-setup-footer {
+  justify-content: space-between;
+}
+
+.settings-org-setup-meta {
+  display: grid;
+  gap: 4px;
 }
 
 .settings-list-shell {
@@ -6863,18 +7069,25 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 12px 20px;
-  min-width: 90px;
-  max-width: 140px;
+  gap: 8px;
+  padding: 14px 22px;
+  min-width: 112px;
+  max-width: 160px;
   border-radius: 50px;
   text-align: center;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.14);
+  transition: transform 140ms ease, box-shadow 140ms ease;
 }
 
 .rf-node-start {
   background: linear-gradient(135deg, #22c55e, #16a34a);
   border-color: #16a34a;
   color: #fff;
+}
+
+.rf-node-start:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(22, 163, 74, 0.3);
 }
 
 .rf-node-end {
@@ -6901,7 +7114,7 @@
   font-size: 0.78rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
 }
 
 /* ── Task & Action Nodes ── */
@@ -7799,6 +8012,16 @@
     white-space: normal;
   }
 
+  .team-view-tabs {
+    display: flex;
+    width: 100%;
+  }
+
+  .team-view-tab {
+    flex: 1;
+    text-align: center;
+  }
+
   .employee-drawer-identity {
     flex-direction: column;
     gap: 12px;
@@ -8421,6 +8644,15 @@
 
   .settings-row-actions {
     justify-content: flex-start;
+  }
+
+  .settings-org-setup-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-org-setup-footer {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 

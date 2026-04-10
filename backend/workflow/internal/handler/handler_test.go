@@ -18,6 +18,20 @@ import (
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/workflow/internal/models"
 )
 
+type flipFlopRoleMemberSelectionStrategy struct {
+	selectedUserID string
+	callCount      int
+}
+
+func (s *flipFlopRoleMemberSelectionStrategy) Select(memberIDs []string) string {
+	_ = memberIDs
+	s.callCount++
+	if s.callCount == 1 {
+		return ""
+	}
+	return s.selectedUserID
+}
+
 type handlerStore struct {
 	mu sync.RWMutex
 
@@ -148,6 +162,24 @@ func (s *handlerStore) FindInstanceByWorkflowAndFormResponse(workflowID, formRes
 	return models.Instance{}, false, nil
 }
 
+func (s *handlerStore) FindInstanceByWorkflowAndEmailMessageID(workflowID, emailMessageID string) (models.Instance, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, inst := range s.instances {
+		if inst.WorkflowID != workflowID || inst.Data == nil {
+			continue
+		}
+		value, ok := inst.Data["email_message_id"]
+		if !ok || value == nil {
+			continue
+		}
+		if fmt.Sprint(value) == emailMessageID {
+			return inst, true, nil
+		}
+	}
+	return models.Instance{}, false, nil
+}
+
 func (s *handlerStore) ListInstancesByWorkflow(workflowID string) ([]models.Instance, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -188,6 +220,12 @@ func (s *handlerStore) GetTask(id string) (models.TaskAssignment, bool) {
 	defer s.mu.RUnlock()
 	task, ok := s.tasks[id]
 	return task, ok
+}
+
+func (s *handlerStore) TaskCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.tasks)
 }
 
 func (s *handlerStore) CompareAndSwapTask(task models.TaskAssignment, expectedStatus models.TaskStatus) (bool, error) {
@@ -276,6 +314,34 @@ func (s *handlerStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignm
 	out := make([]models.TaskAssignment, 0)
 	for _, task := range s.tasks {
 		if task.OrgID == orgID && task.AssignedRole == role {
+			out = append(out, task)
+		}
+	}
+	return out, nil
+}
+
+func (s *handlerStore) ListTasksByRoles(orgID string, roles []string) ([]models.TaskAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.listTasksByRoleErr != nil {
+		return nil, s.listTasksByRoleErr
+	}
+	if len(roles) == 0 {
+		return []models.TaskAssignment{}, nil
+	}
+	allowed := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		allowed[role] = struct{}{}
+	}
+	out := make([]models.TaskAssignment, 0)
+	for _, task := range s.tasks {
+		if task.OrgID != orgID {
+			continue
+		}
+		if task.Status != models.TaskPending {
+			continue
+		}
+		if _, ok := allowed[task.AssignedRole]; ok {
 			out = append(out, task)
 		}
 	}
@@ -648,6 +714,94 @@ func TestInstanceHandlerStartAndGet(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 for get instance, got %d", rec.Code)
 	}
+}
+
+func TestInstanceHandlerRestartFailedInstance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newHandlerStore()
+	strategy := &flipFlopRoleMemberSelectionStrategy{selectedUserID: "user-1", callCount: 1}
+	exec := executor.NewExecutor(store, &noopEmail{}, executor.NewRandomRoleAssigneeSelectorWithStrategy(executor.NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {
+			"manager": {"user-1"},
+		},
+	}), strategy))
+
+	wf := models.Workflow{
+		ID:    "wf-restart-handler",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{
+			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "task"},
+			{ID: "task", Type: models.NodeTask, Title: "Review", AssignedRole: "manager", TaskActions: []string{"approve"}, Next: "end"},
+			{ID: "end", Type: models.NodeEnd, Title: "End"},
+		},
+	}
+	store.workflows[wf.ID] = wf
+	instanceID, err := store.SaveInstance(models.Instance{
+		ID:          "seed-instance",
+		OrgID:       "org-1",
+		WorkflowID:  wf.ID,
+		Status:      models.InstanceFailed,
+		CurrentNode: "task",
+		Data:        map[string]interface{}{"request_id": "req-1"},
+		NodeStates: map[string]models.NodeState{
+			"task": {Status: "failed"},
+		},
+		AuditLog:  []models.AuditEntry{{Timestamp: time.Now(), NodeID: "task", Action: "instance_failed", Details: map[string]interface{}{"reason": "assignee lookup failed"}}},
+		StartedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("failed to seed failed instance: %v", err)
+	}
+
+	h := NewInstanceHandler(store, exec)
+	r := gin.New()
+	r.POST("/api/orgs/:orgId/instances/:id/restart", func(c *gin.Context) {
+		c.Set(middleware.UserIDKey, "user-1")
+		h.Restart(c)
+	})
+
+	rec := testRequest(t, r, http.MethodPost, "/api/orgs/org-1/instances/"+instanceID+"/restart", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for restart, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var restarted models.Instance
+	if err := json.Unmarshal(rec.Body.Bytes(), &restarted); err != nil {
+		t.Fatalf("decode restart response: %v", err)
+	}
+	if restarted.Status != models.InstanceRunning {
+		t.Fatalf("expected response instance to be running, got %s", restarted.Status)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		updated, _ := store.GetInstance(instanceID)
+		if updated.Status == models.InstanceWaiting {
+			taskCount := store.TaskCount()
+			if taskCount != 1 {
+				t.Fatalf("expected one task after restart, got %d", taskCount)
+			}
+			if updated.CurrentNode != "task" {
+				t.Fatalf("expected current node to stay on task, got %q", updated.CurrentNode)
+			}
+			foundRestart := false
+			for _, entry := range updated.AuditLog {
+				if entry.Action == "instance_restarted" {
+					foundRestart = true
+					break
+				}
+			}
+			if !foundRestart {
+				t.Fatalf("expected instance_restarted audit entry, got %+v", updated.AuditLog)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	updated, _ := store.GetInstance(instanceID)
+	t.Fatalf("timed out waiting for restart to reach waiting state, last status=%s tasks=%d", updated.Status, store.TaskCount())
 }
 
 func TestTaskHandlerListAndAction(t *testing.T) {

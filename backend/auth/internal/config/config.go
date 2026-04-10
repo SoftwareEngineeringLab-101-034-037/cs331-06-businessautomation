@@ -10,11 +10,12 @@ import (
 
 // Config holds all configuration for the auth service
 type Config struct {
-	ClerkSecretKey     string
-	ClerkWebhookSecret string
-	ClerkIssuerURL     string
-	DatabaseURL        string
-	Port               string
+	ClerkSecretKey       string
+	ClerkWebhookSecret   string
+	ClerkIssuerURL       string
+	DatabaseURL          string
+	WorkflowServiceToken string
+	Port                 string
 }
 
 func Load() (*Config, error) {
@@ -32,11 +33,12 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		ClerkSecretKey:     strings.TrimSpace(getEnv("CLERK_SECRET_KEY", "")),
-		ClerkWebhookSecret: strings.TrimSpace(getEnv("CLERK_WEBHOOK_SECRET", "")),
-		ClerkIssuerURL:     strings.TrimSpace(getEnv("CLERK_ISSUER_URL", "")),
-		DatabaseURL:        strings.TrimSpace(getEnv("DATABASE_URL", "")),
-		Port:               strings.TrimSpace(getEnv("PORT", "8080")),
+		ClerkSecretKey:       strings.TrimSpace(getEnv("CLERK_SECRET_KEY", "")),
+		ClerkWebhookSecret:   strings.TrimSpace(getEnv("CLERK_WEBHOOK_SECRET", "")),
+		ClerkIssuerURL:       strings.TrimSpace(getEnv("CLERK_ISSUER_URL", "")),
+		DatabaseURL:          strings.TrimSpace(getEnv("DATABASE_URL", "")),
+		WorkflowServiceToken: strings.TrimSpace(getEnv("AUTH_SERVICE_TOKEN", "")),
+		Port:                 strings.TrimSpace(getEnv("PORT", "8080")),
 	}
 
 	//If any required env vars are missing we return an error
@@ -52,6 +54,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.DatabaseURL == "" {
 		missing = append(missing, "DATABASE_URL")
+	}
+	if cfg.WorkflowServiceToken == "" {
+		missing = append(missing, "AUTH_SERVICE_TOKEN")
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8080" // Default port

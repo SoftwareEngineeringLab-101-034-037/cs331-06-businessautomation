@@ -20,7 +20,7 @@ import (
 )
 
 func main() {
-	runMigrations := flag.Bool("migrate", false, "run database migrations on startup")
+	skipMigrations := flag.Bool("skip-migrate", false, "skip database migrations on startup")
 	flag.Parse()
 
 	//Load env vars
@@ -35,12 +35,12 @@ func main() {
 	}
 
 	// Run migrations by default so workflow-role membership support is always available.
-	if *runMigrations {
+	if !*skipMigrations {
 		if err := database.Migrate(); err != nil {
 			log.Fatalf("Failed to run migrations: %v", err)
 		}
 	} else {
-		log.Println("Skipping database migrations (-migrate=false)")
+		log.Println("Skipping database migrations (-skip-migrate=true)")
 	}
 
 	cleanup.Start(cleanup.DefaultConfig())
@@ -86,6 +86,7 @@ func main() {
 		memberOrgAPI := api.Group("/orgs/:orgId")
 		memberOrgAPI.Use(middleware.OrgMemberOnly())
 		{
+			memberOrgAPI.GET("/me/profile", employeeHandler.GetMyProfile)
 			// Workflow callers that depend on role lookup must forward the original user
 			// Authorization header into StartInstance()/downstream execution. This route
 			// requires a user JWT, so non-user-initiated workflows need a separate
@@ -97,6 +98,8 @@ func main() {
 		orgApi := api.Group("/orgs/:orgId")
 		orgApi.Use(middleware.OrgAdminOnly())
 		{
+			orgApi.GET("/settings", employeeHandler.GetOrganizationSettings)
+			orgApi.PUT("/settings", employeeHandler.UpdateOrganizationSettings)
 			orgApi.POST("/departments", employeeHandler.CreateDepartment)
 			orgApi.GET("/departments", employeeHandler.ListDepartments)
 			orgApi.GET("/departments/:deptID", employeeHandler.GetDepartment)
@@ -108,9 +111,19 @@ func main() {
 			orgApi.POST("/employees/invite", employeeHandler.InviteSingle)
 			orgApi.POST("/employees/invite/bulk", employeeHandler.InviteBulk)
 			orgApi.GET("/employees", employeeHandler.ListEmployees)
+			orgApi.DELETE("/employees/:employeeId", employeeHandler.DeleteEmployee)
 			orgApi.GET("/invitations", employeeHandler.ListInvitations)
 			orgApi.DELETE("/invitations/:invitationId", employeeHandler.RevokeInvitation)
 		}
+	}
+
+	if strings.TrimSpace(cfg.WorkflowServiceToken) == "" {
+		log.Fatal("AUTH_SERVICE_TOKEN / workflow service token is required to enable /api/system routes")
+	}
+	systemAPI := r.Group("/api/system")
+	systemAPI.Use(middleware.SystemServiceKeyMiddleware(cfg.WorkflowServiceToken, "workflow-service"))
+	{
+		systemAPI.GET("/orgs/:orgId/roles", employeeHandler.ListRoles)
 	}
 
 	addr := ":" + cfg.Port

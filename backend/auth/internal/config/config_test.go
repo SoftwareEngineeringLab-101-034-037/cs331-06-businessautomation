@@ -12,6 +12,7 @@ const (
 	clerkWebhookSecretEnv = "CLERK_WEBHOOK_SECRET"
 	clerkIssuerURLEnv     = "CLERK_ISSUER_URL"
 	databaseURLEnv        = "DATABASE_URL"
+	authServiceTokenEnv   = "AUTH_SERVICE_TOKEN"
 	portEnv               = "PORT"
 )
 
@@ -39,6 +40,7 @@ func TestLoadReturnsErrorWhenRequiredVarsMissing(t *testing.T) {
 	unsetEnv(t, clerkWebhookSecretEnv)
 	unsetEnv(t, clerkIssuerURLEnv)
 	unsetEnv(t, databaseURLEnv)
+	unsetEnv(t, authServiceTokenEnv)
 	unsetEnv(t, portEnv)
 
 	cfg, err := Load()
@@ -57,6 +59,9 @@ func TestLoadReturnsErrorWhenRequiredVarsMissing(t *testing.T) {
 	if !strings.Contains(err.Error(), databaseURLEnv) {
 		t.Fatalf("expected missing %s in error, got %v", databaseURLEnv, err)
 	}
+	if !strings.Contains(err.Error(), authServiceTokenEnv) {
+		t.Fatalf("expected missing %s in error, got %v", authServiceTokenEnv, err)
+	}
 }
 
 func TestLoadTrimsValuesAndDefaultsPortAfterTrim(t *testing.T) {
@@ -71,6 +76,7 @@ func TestLoadTrimsValuesAndDefaultsPortAfterTrim(t *testing.T) {
 	t.Setenv(clerkWebhookSecretEnv, "  whsec_test  ")
 	t.Setenv(clerkIssuerURLEnv, "  https://test.clerk.accounts.dev  ")
 	t.Setenv(databaseURLEnv, "  postgres://example  ")
+	t.Setenv(authServiceTokenEnv, "  workflow_token  ")
 	t.Setenv(portEnv, "   ")
 
 	cfg, err := Load()
@@ -104,6 +110,7 @@ func TestLoadFallsBackToParentEnvPath(t *testing.T) {
 	unsetEnv(t, clerkWebhookSecretEnv)
 	unsetEnv(t, clerkIssuerURLEnv)
 	unsetEnv(t, databaseURLEnv)
+	unsetEnv(t, authServiceTokenEnv)
 	unsetEnv(t, portEnv)
 
 	parentEnv := strings.Join([]string{
@@ -111,6 +118,7 @@ func TestLoadFallsBackToParentEnvPath(t *testing.T) {
 		clerkWebhookSecretEnv + "=whsec_parent",
 		clerkIssuerURLEnv + "=https://parent.clerk.accounts.dev",
 		databaseURLEnv + "=postgres://parent",
+		authServiceTokenEnv + "=workflow_parent",
 		portEnv + "=9001",
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(root, ".env"), []byte(parentEnv), 0o644); err != nil {
@@ -141,6 +149,7 @@ func TestLoadStopsAfterFirstEnvFile(t *testing.T) {
 	unsetEnv(t, clerkWebhookSecretEnv)
 	unsetEnv(t, clerkIssuerURLEnv)
 	unsetEnv(t, databaseURLEnv)
+	unsetEnv(t, authServiceTokenEnv)
 	unsetEnv(t, portEnv)
 
 	firstEnv := strings.Join([]string{

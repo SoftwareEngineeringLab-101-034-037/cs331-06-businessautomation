@@ -4,14 +4,15 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { ToastContainer, useToast } from "@/components/Toast";
 import TaskDetailDrawer from "@/components/dashboard/TaskDetailDrawer";
-import { MOCK_TASKS } from "@/lib/mock-data";
+import { authFetch as authFetchWithToken } from "@/lib/auth-fetch";
 import { computeHeightBasedProgress, type WorkflowProgressNode } from "@/lib/workflow-progress";
 import type { Task, TaskStatus, TaskPriority } from "@/types/dashboard";
 import { PRIORITY_CONFIG } from "@/types/dashboard";
 
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
-const DEMO_TASKS_ENABLED = process.env.NEXT_PUBLIC_ENABLE_DEMO_TASKS === "true";
+const ROLE_CACHE_TTL_MS = 2 * 60 * 1000;
+const WORKFLOW_CACHE_TTL_MS = 2 * 60 * 1000;
 
 type FilterPriority = "all" | TaskPriority;
 
@@ -45,6 +46,12 @@ type BackendWorkflow = {
 
 type BackendNodeState = {
   status?: string;
+  output?: string;
+};
+
+type BackendAuditEntry = {
+  action?: string;
+  details?: Record<string, unknown>;
 };
 
 type BackendInstance = {
@@ -53,6 +60,7 @@ type BackendInstance = {
   node_states?: Record<string, BackendNodeState>;
   current_node?: string;
   status?: string;
+  audit_log?: BackendAuditEntry[];
 };
 
 type BackendRoleMember = {
@@ -72,7 +80,7 @@ const KANBAN_COLUMNS: { key: "pending" | "in_progress" | "completed"; label: str
 ];
 
 function mapBackendStatus(status: string): TaskStatus {
-  switch (status) {
+  switch (status.trim().toLowerCase()) {
     case "pending":
       return "pending";
     case "in_progress":
@@ -99,6 +107,23 @@ function priorityFromSLA(slaDays?: number): TaskPriority {
   return "low";
 }
 
+function formatTaskActionLabel(action: string): string {
+  switch (action.trim().toLowerCase()) {
+    case "start":
+      return "started";
+    case "approve":
+      return "approved";
+    case "reject":
+      return "rejected";
+    case "clarify":
+      return "sent back for clarification";
+    case "complete":
+      return "completed";
+    default:
+      return action.replaceAll("_", " ");
+  }
+}
+
 function computeInstanceProgress(instance: BackendInstance | undefined, workflow: BackendWorkflow | undefined): { stepNumber: number; totalSteps: number } {
   const progress = computeHeightBasedProgress(
     workflow?.nodes,
@@ -110,6 +135,105 @@ function computeInstanceProgress(instance: BackendInstance | undefined, workflow
     stepNumber: progress.checkpointNumber,
     totalSteps: progress.totalCheckpoints,
   };
+}
+
+function parseBodyError(raw: string): string | null {
+  // Some backend errors are flattened like "... body={...}".
+  const bodyMarker = " body=";
+  const markerIndex = raw.indexOf(bodyMarker);
+  if (markerIndex < 0) return null;
+  const prefix = raw.slice(0, markerIndex).trim();
+  const bodyRaw = raw.slice(markerIndex + bodyMarker.length).trim();
+  try {
+    const parsed = JSON.parse(bodyRaw) as Record<string, unknown>;
+    const nested = typeof parsed.error === "string"
+      ? parsed.error.trim()
+      : typeof parsed.message === "string"
+        ? parsed.message.trim()
+        : "";
+    if (!nested) return null;
+    return prefix ? `${prefix} - ${nested}` : nested;
+  } catch {
+    return null;
+  }
+}
+
+function unknownToErrorString(value: unknown): string {
+  if (typeof value === "string") {
+    const raw = value.trim();
+    if (!raw) return "";
+    const parsedBodyError = parseBodyError(raw);
+    if (parsedBodyError) return parsedBodyError;
+    return raw;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value && typeof value === "object") {
+    const payload = value as Record<string, unknown>;
+    if (typeof payload.error === "string" && payload.error.trim()) {
+      return payload.error.trim();
+    }
+    if (typeof payload.message === "string" && payload.message.trim()) {
+      return payload.message.trim();
+    }
+    if (typeof payload.reason === "string" && payload.reason.trim()) {
+      return payload.reason.trim();
+    }
+    if (typeof payload.body === "string" && payload.body.trim()) {
+      return unknownToErrorString(payload.body);
+    }
+    if (payload.body && typeof payload.body === "object") {
+      return unknownToErrorString(payload.body);
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function extractInstanceError(instance: BackendInstance | undefined): string | undefined {
+  if (!instance) {
+    return undefined;
+  }
+
+  const auditLog = Array.isArray(instance.audit_log) ? instance.audit_log : [];
+  for (let idx = auditLog.length - 1; idx >= 0; idx -= 1) {
+    const entry = auditLog[idx];
+    if (!entry) {
+      continue;
+    }
+    const details = entry.details || {};
+    if (entry.action === "instance_failed") {
+      const reason = unknownToErrorString(details.reason);
+      if (reason) {
+        return reason;
+      }
+    }
+    if (entry.action === "action_failed") {
+      const reason = unknownToErrorString(details.error) || unknownToErrorString(details.reason);
+      if (reason) {
+        return reason;
+      }
+    }
+  }
+
+  const nodeStates = Object.values(instance.node_states || {});
+  for (let idx = nodeStates.length - 1; idx >= 0; idx -= 1) {
+    const nodeState = nodeStates[idx];
+    if (nodeState?.status !== "failed") {
+      continue;
+    }
+    const output = unknownToErrorString(nodeState.output);
+    if (output) {
+      return output;
+    }
+  }
+
+  return undefined;
 }
 
 function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined, instance: BackendInstance | undefined): Task {
@@ -147,7 +271,59 @@ function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined, inst
     nodeId: task.node_id,
     orgId: task.org_id,
     instanceId: task.instance_id,
+    instanceStatus: instance?.status,
+    instanceError: extractInstanceError(instance),
   };
+}
+
+function formatRelativeTime(iso?: string): string {
+  if (!iso) return "just now";
+  const time = new Date(iso).getTime();
+  if (Number.isNaN(time)) return "just now";
+
+  const diffMs = Date.now() - time;
+  if (diffMs <= 0) return "just now";
+
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}w ago`;
+
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+
+  const years = Math.floor(days / 365);
+  return `${years}y ago`;
+}
+
+function getTaskRecency(task: Task): { label: string; at: number } {
+  const createdAt = new Date(task.createdAt).getTime();
+  const completedAt = task.completedAt ? new Date(task.completedAt).getTime() : Number.NaN;
+
+  const hasCompletedAt = Number.isFinite(completedAt);
+  const hasCreatedAt = Number.isFinite(createdAt);
+
+  if (task.status === "completed" && hasCompletedAt) {
+    return { label: `Completed ${formatRelativeTime(task.completedAt)}`, at: completedAt };
+  }
+
+  if ((task.status === "rejected" || task.status === "escalated" || task.status === "sent_back") && hasCompletedAt) {
+    return { label: `Updated ${formatRelativeTime(task.completedAt)}`, at: completedAt };
+  }
+
+  if (task.status === "in_progress") {
+    return { label: `Started ${formatRelativeTime(task.createdAt)}`, at: hasCreatedAt ? createdAt : 0 };
+  }
+
+  return { label: `Created ${formatRelativeTime(task.createdAt)}`, at: hasCreatedAt ? createdAt : 0 };
 }
 
 function TaskCard({
@@ -170,6 +346,7 @@ function TaskCard({
         : task.status === "sent_back"
           ? "kanban-card-sent-back"
           : "";
+  const recency = getTaskRecency(task);
 
   return (
     <div
@@ -200,6 +377,7 @@ function TaskCard({
       )}
       <div className="kanban-card-meta">
         <div className="kanban-card-meta-item">{task.departmentOrigin}</div>
+        <div className="kanban-card-meta-item">{recency.label}</div>
         <div className="kanban-card-meta-item">
           {new Date(task.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
         </div>
@@ -239,27 +417,6 @@ function TaskCard({
   );
 }
 
-function mergeSignals(signals: Array<AbortSignal | null | undefined>): AbortSignal | undefined {
-  const activeSignals = signals.filter(Boolean) as AbortSignal[];
-  if (activeSignals.length === 0) {
-    return undefined;
-  }
-  if (activeSignals.length === 1) {
-    return activeSignals[0];
-  }
-
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  for (const signal of activeSignals) {
-    if (signal.aborted) {
-      controller.abort();
-      break;
-    }
-    signal.addEventListener("abort", abort, { once: true });
-  }
-  return controller.signal;
-}
-
 export default function TasksPage() {
   const { getToken, userId } = useAuth();
   const { organization } = useOrganization();
@@ -272,59 +429,109 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestVersionRef = useRef(0);
+  const hasLoadedOnceRef = useRef(false);
+  const roleCacheRef = useRef<{ orgId: string; userId: string; roles: string[]; fetchedAt: number } | null>(null);
+  const workflowCacheRef = useRef<{ orgId: string; workflows: BackendWorkflow[]; fetchedAt: number } | null>(null);
 
   const authFetch = useCallback(async (
     input: string,
     init: RequestInit = {},
     timeoutMs = 10000,
   ): Promise<Response> => {
-    const token = await getToken();
-    const controller = new AbortController();
-    const timeoutID = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      return await fetch(input, {
-        ...init,
-        signal: mergeSignals([init.signal, controller.signal]),
-        headers: {
-          ...(init.headers ?? {}),
-          Authorization: `Bearer ${token}`,
-        },
-      });
-    } finally {
-      clearTimeout(timeoutID);
-    }
+    return authFetchWithToken(getToken, input, init, timeoutMs);
   }, [getToken]);
+
+  const loadMyRoles = useCallback(async (orgId: string, currentUserId: string): Promise<string[]> => {
+    const cached = roleCacheRef.current;
+    const now = Date.now();
+    if (
+      cached
+      && cached.orgId === orgId
+      && cached.userId === currentUserId
+      && (now - cached.fetchedAt) < ROLE_CACHE_TTL_MS
+    ) {
+      return cached.roles;
+    }
+
+    try {
+      const roleRes = await authFetch(`${AUTH_API}/api/orgs/${orgId}/roles`);
+      if (!roleRes.ok) {
+        const body = await roleRes.text();
+        throw new Error(`Failed to load roles (${roleRes.status}): ${body}`);
+      }
+
+      const roles = (await roleRes.json()) as BackendRoleSummary[];
+      const myRoleNames = (roles || [])
+        .filter((role) => (role.members || []).some((member) => member.id === currentUserId))
+        .map((role) => role.name)
+        .filter(Boolean);
+
+      roleCacheRef.current = {
+        orgId,
+        userId: currentUserId,
+        roles: myRoleNames,
+        fetchedAt: now,
+      };
+
+      return myRoleNames;
+    } catch (err) {
+      throw err instanceof Error ? err : new Error("Failed to load roles");
+    }
+  }, [authFetch]);
+
+  const loadWorkflowsCached = useCallback(async (orgId: string): Promise<BackendWorkflow[]> => {
+    const cached = workflowCacheRef.current;
+    const now = Date.now();
+    if (cached && cached.orgId === orgId && (now - cached.fetchedAt) < WORKFLOW_CACHE_TTL_MS) {
+      return cached.workflows;
+    }
+
+    const workflowRes = await authFetch(`${WF_API}/api/orgs/${orgId}/workflows`);
+    if (!workflowRes.ok) {
+      throw new Error(`Failed to load workflows (${workflowRes.status})`);
+    }
+    const workflows = (await workflowRes.json()) as BackendWorkflow[];
+    const normalized = workflows || [];
+    workflowCacheRef.current = {
+      orgId,
+      workflows: normalized,
+      fetchedAt: now,
+    };
+    return normalized;
+  }, [authFetch]);
 
   const loadTasks = useCallback(async () => {
     const requestVersion = requestVersionRef.current + 1;
     requestVersionRef.current = requestVersion;
 
-    if (!organization?.id || !userId) {
+    const orgId = organization?.id;
+    if (!orgId || !userId) {
       if (requestVersion === requestVersionRef.current) {
-        setTasks(DEMO_TASKS_ENABLED ? MOCK_TASKS : []);
+        setError(null);
+        setTasks([]);
         setLoading(false);
+        hasLoadedOnceRef.current = false;
       }
       return;
     }
 
     if (requestVersion === requestVersionRef.current) {
-      setLoading(true);
+      // Keep initial-load feedback, but avoid layout shifts during background auto-refresh.
+      setLoading(!hasLoadedOnceRef.current);
       setError(null);
     }
     try {
-      const [taskRes, workflowRes] = await Promise.all([
-        authFetch(`${WF_API}/api/orgs/${organization.id}/tasks?assigned_user=${encodeURIComponent(userId)}`),
-        authFetch(`${WF_API}/api/orgs/${organization.id}/workflows`),
+      const [taskRes, instanceRes, workflows] = await Promise.all([
+        authFetch(`${WF_API}/api/orgs/${orgId}/tasks?assigned_user=${encodeURIComponent(userId)}`),
+        authFetch(`${WF_API}/api/orgs/${orgId}/instances?compact=true`),
+        loadWorkflowsCached(orgId),
       ]);
 
-      const instanceRes = await authFetch(`${WF_API}/api/orgs/${organization.id}/instances`);
-
-      if (!taskRes.ok || !workflowRes.ok || !instanceRes.ok) {
-        throw new Error(`Failed to load tasks (${taskRes.status}/${workflowRes.status}/${instanceRes.status})`);
+      if (!taskRes.ok || !instanceRes.ok) {
+        throw new Error(`Failed to load tasks (${taskRes.status}/${instanceRes.status})`);
       }
 
       const backendTasks = (await taskRes.json()) as BackendTask[];
-      const workflows = (await workflowRes.json()) as BackendWorkflow[];
       const instances = (await instanceRes.json()) as BackendInstance[];
       const wfMap = new Map(workflows.map((w) => [w.id, w]));
       const instanceMap = new Map(instances.map((inst) => [inst.id, inst]));
@@ -335,42 +542,23 @@ export default function TasksPage() {
       }
 
       try {
-        const roleRes = await authFetch(`${AUTH_API}/api/orgs/${organization.id}/roles`);
+        const myRoleNames = await loadMyRoles(orgId, userId);
         if (requestVersion !== requestVersionRef.current) {
           return;
         }
-        if (roleRes.ok) {
-          const roles = (await roleRes.json()) as BackendRoleSummary[];
-          const myRoleNames = (roles || [])
-            .filter((role) => (role.members || []).some((member) => member.id === userId))
-            .map((role) => role.name)
-            .filter(Boolean);
 
-          if (myRoleNames.length > 0) {
-            const roleTaskResponses = await Promise.allSettled(
-              myRoleNames.map(async (roleName) => {
-                const response = await authFetch(`${WF_API}/api/orgs/${organization.id}/tasks?role=${encodeURIComponent(roleName)}`);
-                if (!response.ok) {
-                  throw new Error(`Failed to load role tasks for ${roleName}`);
-                }
-                return await response.json() as BackendTask[];
-              }),
-            );
-
-            if (requestVersion !== requestVersionRef.current) {
-              return;
-            }
-
-            for (const result of roleTaskResponses) {
-              if (result.status !== "fulfilled") {
+        if (myRoleNames.length > 0) {
+          const roleTaskRes = await authFetch(`${WF_API}/api/orgs/${orgId}/tasks?roles=${encodeURIComponent(myRoleNames.join(","))}`);
+          if (requestVersion !== requestVersionRef.current) {
+            return;
+          }
+          if (roleTaskRes.ok) {
+            const roleTasks = (await roleTaskRes.json()) as BackendTask[];
+            for (const task of roleTasks || []) {
+              if (task.assigned_user && task.assigned_user !== userId) {
                 continue;
               }
-              for (const task of result.value || []) {
-                if (task.assigned_user && task.assigned_user !== userId) {
-                  continue;
-                }
-                taskMap.set(task.id, task);
-              }
+              taskMap.set(task.id, task);
             }
           }
         }
@@ -385,14 +573,15 @@ export default function TasksPage() {
     } catch (err: any) {
       if (requestVersion === requestVersionRef.current) {
         setError(err?.message || "Could not load tasks");
-        setTasks(DEMO_TASKS_ENABLED ? MOCK_TASKS : []);
+        setTasks((current) => (hasLoadedOnceRef.current && current.length > 0 ? current : []));
       }
     } finally {
       if (requestVersion === requestVersionRef.current) {
         setLoading(false);
+        hasLoadedOnceRef.current = true;
       }
     }
-  }, [authFetch, organization?.id, userId]);
+  }, [authFetch, organization?.id, userId, loadMyRoles, loadWorkflowsCached]);
 
   useEffect(() => {
     loadTasks();
@@ -432,6 +621,7 @@ export default function TasksPage() {
       }
       await loadTasks();
       setSelectedTask(null);
+      showToast(`Task "${task.title}" ${formatTaskActionLabel(action)} successfully.`, "success");
     } catch (err: any) {
       console.error("Task action failed", err);
       showToast(
@@ -469,7 +659,7 @@ export default function TasksPage() {
       tasks: filtered
         .filter((t) => col.statuses.includes(t.status))
         .sort((a, b) => {
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+          return getTaskRecency(b).at - getTaskRecency(a).at;
         }),
     }));
   }, [filtered]);

@@ -2,7 +2,7 @@
 
 import { memo, Fragment } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import type { WorkflowStep } from "@/types/workflow";
+import type { WorkflowStep, WorkflowTrigger } from "@/types/workflow";
 import { NODE_TYPE_CONFIG, STEP_ACTION_CONFIG, TASK_ACTION_OPTIONS, CONNECTOR_CONFIG } from "@/types/workflow";
 
 export type FlowNodeData = WorkflowStep & {
@@ -10,6 +10,10 @@ export type FlowNodeData = WorkflowStep & {
   onDelete?: () => void;
   /** Source handle IDs that already have an outgoing edge — used to hide handle labels */
   connectedHandles?: string[];
+  /** Trigger info for start nodes */
+  trigger?: WorkflowTrigger;
+  /** Callback when start node is clicked */
+  onConfigureTrigger?: () => void;
 };
 
 /* ─── Reusable node delete button ─── */
@@ -30,8 +34,13 @@ function NodeDeleteBtn({ onDelete }: { onDelete: () => void }) {
    ─────────────────────────────────────────────────────── */
 export const StartNode = memo(function StartNode({ data }: NodeProps) {
   const d = data as unknown as FlowNodeData;
+  
   return (
-    <div className="rf-node rf-node-start">
+    <div
+      className="rf-node rf-node-start"
+      title="Configure trigger"
+      style={{ cursor: d.onConfigureTrigger ? "pointer" : "default" }}
+    >
       <div className="rf-node-icon">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="#fff" width="20" height="20">
           <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
@@ -177,7 +186,6 @@ export const ConditionNode = memo(function ConditionNode({ data }: NodeProps) {
             <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" />
           </svg>
           <span className="rf-node-title" style={{ textAlign: "center", fontSize: "0.75rem" }}>{d.title || "Condition"}</span>
-          {d.condition && <span className="rf-condition-expr">{d.condition}</span>}
         </div>
       </div>
 

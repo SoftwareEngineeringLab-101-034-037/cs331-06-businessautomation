@@ -17,14 +17,46 @@ type emailCall struct {
 }
 
 type mockEmail struct {
-	mu    sync.Mutex
-	calls []emailCall
+	mu      sync.Mutex
+	calls   []emailCall
+	sendErr error
+}
+
+type mockOrgEmail struct {
+	mockEmail
+	sendForOrgErr error
+}
+
+type fixedRoleMemberSelectionStrategy struct {
+	selectedUserID string
+}
+
+func (s fixedRoleMemberSelectionStrategy) Select(memberIDs []string) string {
+	_ = memberIDs
+	return s.selectedUserID
+}
+
+type flipFlopRoleMemberSelectionStrategy struct {
+	selectedUserID string
+	callCount      int
+}
+
+func (s *flipFlopRoleMemberSelectionStrategy) Select(memberIDs []string) string {
+	_ = memberIDs
+	s.callCount++
+	if s.callCount == 1 {
+		return ""
+	}
+	return s.selectedUserID
 }
 
 func (m *mockEmail) Send(to, subject, body string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, emailCall{to: to, subject: subject, body: body})
+	if m.sendErr != nil {
+		return m.sendErr
+	}
 	return nil
 }
 
@@ -41,6 +73,20 @@ func (m *mockEmail) first() emailCall {
 		return emailCall{}
 	}
 	return m.calls[0]
+}
+
+func (m *mockOrgEmail) SendForOrg(orgID, to, cc, subject, body, fromName, fromAccountID string) error {
+	_ = orgID
+	_ = cc
+	_ = fromName
+	_ = fromAccountID
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, emailCall{to: to, subject: subject, body: body})
+	if m.sendForOrgErr != nil {
+		return m.sendForOrgErr
+	}
+	return nil
 }
 
 type mockStore struct {
@@ -169,6 +215,24 @@ func (m *mockStore) FindInstanceByWorkflowAndFormResponse(workflowID, formRespon
 	return models.Instance{}, false, nil
 }
 
+func (m *mockStore) FindInstanceByWorkflowAndEmailMessageID(workflowID, emailMessageID string) (models.Instance, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, inst := range m.instances {
+		if inst.WorkflowID != workflowID || inst.Data == nil {
+			continue
+		}
+		value, ok := inst.Data["email_message_id"]
+		if !ok || value == nil {
+			continue
+		}
+		if fmt.Sprint(value) == emailMessageID {
+			return inst, true, nil
+		}
+	}
+	return models.Instance{}, false, nil
+}
+
 func (m *mockStore) ListInstancesByWorkflow(workflowID string) ([]models.Instance, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -251,8 +315,20 @@ func (m *mockStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAssi
 	}
 	var out []models.TaskAssignment
 	for _, task := range m.tasks {
-		if task.OrgID == orgID && task.AssignedUser == userID {
+		if task.OrgID != orgID {
+			continue
+		}
+		if task.AssignedUser == userID {
 			out = append(out, task)
+			continue
+		}
+		if task.Status == models.TaskPending {
+			for _, allowedUser := range task.AssignedUsers {
+				if allowedUser == userID {
+					out = append(out, task)
+					break
+				}
+			}
 		}
 	}
 	return out, nil
@@ -266,8 +342,53 @@ func (m *mockStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignment
 	}
 	var out []models.TaskAssignment
 	for _, task := range m.tasks {
-		if task.OrgID == orgID && task.AssignedRole == role {
+		if task.OrgID != orgID {
+			continue
+		}
+		if task.AssignedRole == role {
 			out = append(out, task)
+			continue
+		}
+		for _, assignedRole := range task.AssignedRoles {
+			if assignedRole == role {
+				out = append(out, task)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStore) ListTasksByRoles(orgID string, roles []string) ([]models.TaskAssignment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.listTaskErr != nil {
+		return nil, m.listTaskErr
+	}
+	if len(roles) == 0 {
+		return []models.TaskAssignment{}, nil
+	}
+	allowed := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		allowed[role] = struct{}{}
+	}
+	var out []models.TaskAssignment
+	for _, task := range m.tasks {
+		if task.OrgID != orgID {
+			continue
+		}
+		if task.Status != models.TaskPending {
+			continue
+		}
+		if _, ok := allowed[task.AssignedRole]; ok {
+			out = append(out, task)
+			continue
+		}
+		for _, assignedRole := range task.AssignedRoles {
+			if _, ok := allowed[assignedRole]; ok {
+				out = append(out, task)
+				break
+			}
 		}
 	}
 	return out, nil
@@ -355,28 +476,161 @@ func TestResolveParam(t *testing.T) {
 	}
 }
 
-func TestEvalCondition(t *testing.T) {
+func TestEvalConditionForNodeStructured(t *testing.T) {
 	e := NewExecutor(newMockStore(), &mockEmail{}, nil)
+	wf := &models.Workflow{
+		Trigger: models.Trigger{
+			Type: models.TriggerFormSubmit,
+			Config: map[string]string{
+				"field_schema": `[
+					{"question_id":"q_amount","title":"Amount","field_type":"scale","variable":"amount","data_type":"number"},
+					{"question_id":"q_dept","title":"Department","field_type":"text","variable":"department","data_type":"text"}
+				]`,
+			},
+		},
+	}
+
 	tests := []struct {
-		name string
-		cond string
-		data map[string]interface{}
-		want string
+		name        string
+		node        *models.WorkflowNode
+		data        map[string]interface{}
+		wantBranch  string
+		wantJoin    string
+		wantLogic   string
+		wantReason  string
+		wantMatched int
 	}{
-		{name: "empty condition", cond: "", data: map[string]interface{}{}, want: "yes"},
-		{name: "equals true", cond: "status == approved", data: map[string]interface{}{"status": "approved"}, want: "yes"},
-		{name: "not equals true", cond: "status != rejected", data: map[string]interface{}{"status": "approved"}, want: "yes"},
-		{name: "greater than true", cond: "amount > 100", data: map[string]interface{}{"amount": 150}, want: "yes"},
-		{name: "less than false", cond: "amount < 100", data: map[string]interface{}{"amount": 150}, want: "no"},
-		{name: "invalid expression falls back", cond: "this is invalid", data: map[string]interface{}{}, want: "no"},
-		{name: "invalid numeric comparison returns no", cond: "amount > nope", data: map[string]interface{}{"amount": 150}, want: "no"},
+		{
+			name: "single number rule",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join: models.ConditionJoinAnd,
+				Rules: []models.ConditionRule{{
+					Field:    "amount",
+					DataType: models.ConditionDataTypeNumber,
+					Operator: models.ConditionOperatorGreaterThan,
+					Value:    "100",
+				}},
+			}},
+			data:        map[string]interface{}{"amount": 120},
+			wantBranch:  "yes",
+			wantJoin:    "and",
+			wantMatched: 1,
+		},
+		{
+			name: "and combination with two matching rules",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join: models.ConditionJoinAnd,
+				Rules: []models.ConditionRule{
+					{Field: "amount", DataType: models.ConditionDataTypeNumber, Operator: models.ConditionOperatorGreaterEq, Value: "100"},
+					{Field: "department", DataType: models.ConditionDataTypeText, Operator: models.ConditionOperatorContains, Value: "fin"},
+				},
+			}},
+			data:        map[string]interface{}{"amount": 120, "department": "Finance"},
+			wantBranch:  "yes",
+			wantJoin:    "and",
+			wantMatched: 2,
+		},
+		{
+			name: "or combination with one matching rule",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join: models.ConditionJoinOr,
+				Rules: []models.ConditionRule{
+					{Field: "amount", DataType: models.ConditionDataTypeNumber, Operator: models.ConditionOperatorGreaterThan, Value: "1000"},
+					{Field: "department", DataType: models.ConditionDataTypeText, Operator: models.ConditionOperatorContains, Value: "fin"},
+				},
+			}},
+			data:        map[string]interface{}{"amount": 120, "department": "Finance"},
+			wantBranch:  "yes",
+			wantJoin:    "or",
+			wantMatched: 1,
+		},
+		{
+			name: "type mismatch routes no",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join: models.ConditionJoinAnd,
+				Rules: []models.ConditionRule{{
+					Field:    "amount",
+					DataType: models.ConditionDataTypeNumber,
+					Operator: models.ConditionOperatorGreaterThan,
+					Value:    "100",
+				}},
+			}},
+			data:       map[string]interface{}{"amount": "not-a-number"},
+			wantBranch: "no",
+			wantJoin:   "and",
+			wantReason: "type_mismatch",
+		},
+		{
+			name: "nested logic expression supports parentheses",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join:  models.ConditionJoinAnd,
+				Logic: "1 AND 2 AND (3 OR 4)",
+				Rules: []models.ConditionRule{
+					{Field: "amount", DataType: models.ConditionDataTypeNumber, Operator: models.ConditionOperatorGreaterEq, Value: "100"},
+					{Field: "department", DataType: models.ConditionDataTypeText, Operator: models.ConditionOperatorContains, Value: "fin"},
+					{Field: "amount", DataType: models.ConditionDataTypeNumber, Operator: models.ConditionOperatorLessThan, Value: "100"},
+					{Field: "department", DataType: models.ConditionDataTypeText, Operator: models.ConditionOperatorContains, Value: "fin"},
+				},
+			}},
+			data:        map[string]interface{}{"amount": 120, "department": "Finance"},
+			wantBranch:  "yes",
+			wantJoin:    "and",
+			wantLogic:   "1 AND 2 AND (3 OR 4)",
+			wantMatched: 3,
+		},
+		{
+			name: "invalid logic expression routes no",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join:  models.ConditionJoinAnd,
+				Logic: "1 AND (2 OR 9)",
+				Rules: []models.ConditionRule{
+					{Field: "amount", DataType: models.ConditionDataTypeNumber, Operator: models.ConditionOperatorGreaterEq, Value: "100"},
+					{Field: "department", DataType: models.ConditionDataTypeText, Operator: models.ConditionOperatorContains, Value: "fin"},
+				},
+			}},
+			data:       map[string]interface{}{"amount": 120, "department": "Finance"},
+			wantBranch: "no",
+			wantJoin:   "and",
+			wantLogic:  "1 AND (2 OR 9)",
+			wantReason: "invalid_logic_expression",
+		},
+		{
+			name:       "missing condition config routes no",
+			node:       &models.WorkflowNode{},
+			data:       map[string]interface{}{"amount": 100},
+			wantBranch: "no",
+			wantReason: "missing_condition_config",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := e.evalCondition(tt.cond, tt.data)
-			if got != tt.want {
-				t.Fatalf("evalCondition(%q) = %q, want %q", tt.cond, got, tt.want)
+			branch, details := e.evalConditionForNode(tt.node, wf, tt.data)
+			if branch != tt.wantBranch {
+				t.Fatalf("branch=%q want=%q details=%v", branch, tt.wantBranch, details)
+			}
+			if mode := fmt.Sprintf("%v", details["mode"]); mode != "structured" {
+				t.Fatalf("mode=%q want=%q details=%v", mode, "structured", details)
+			}
+			if tt.wantJoin != "" {
+				if join := fmt.Sprintf("%v", details["join"]); join != tt.wantJoin {
+					t.Fatalf("join=%q want=%q details=%v", join, tt.wantJoin, details)
+				}
+			}
+			if tt.wantLogic != "" {
+				if logic := fmt.Sprintf("%v", details["logic"]); logic != tt.wantLogic {
+					t.Fatalf("logic=%q want=%q details=%v", logic, tt.wantLogic, details)
+				}
+			}
+			if tt.wantReason != "" {
+				if reason := fmt.Sprintf("%v", details["reason"]); reason != tt.wantReason {
+					t.Fatalf("reason=%q want=%q details=%v", reason, tt.wantReason, details)
+				}
+			}
+			if tt.wantMatched > 0 {
+				if matched := fmt.Sprintf("%v", details["matched_rules"]); matched != fmt.Sprintf("%d", tt.wantMatched) {
+					t.Fatalf("matched_rules=%q want=%d details=%v", matched, tt.wantMatched, details)
+				}
 			}
 		})
 	}
@@ -812,7 +1066,8 @@ func mustGetInstance(t *testing.T, store *mockStore, instanceID string) models.I
 
 func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 	store := newMockStore()
-	exec := NewExecutor(store, &mockEmail{}, nil)
+	email := &mockEmail{}
+	exec := NewExecutor(store, email, nil)
 
 	wf := models.Workflow{
 		ID:    "wf-parallel",
@@ -820,8 +1075,8 @@ func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 		Nodes: []models.WorkflowNode{
 			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "parallel"},
 			{ID: "parallel", Type: models.NodeParallel, Title: "Parallel", NextBranches: []string{"a", "b"}},
-			{ID: "a", Type: models.NodeAction, Title: "A", Next: "merge"},
-			{ID: "b", Type: models.NodeAction, Title: "B", Next: "merge"},
+			{ID: "a", Type: models.NodeAction, Title: "A", Connector: &models.ConnectorConfig{Type: models.ConnectorEmail, Params: map[string]interface{}{"to": "a@example.com", "subject": "A", "body_template": "A"}}, Next: "merge"},
+			{ID: "b", Type: models.NodeAction, Title: "B", Connector: &models.ConnectorConfig{Type: models.ConnectorEmail, Params: map[string]interface{}{"to": "b@example.com", "subject": "B", "body_template": "B"}}, Next: "merge"},
 			{ID: "merge", Type: models.NodeMerge, Title: "Merge", RequiredInputs: []string{"a", "b"}, Next: "end"},
 			{ID: "end", Type: models.NodeEnd, Title: "End"},
 		},
@@ -840,9 +1095,12 @@ func TestRunParallelMergeCompletesAfterBothBranches(t *testing.T) {
 	if got := countAuditAction(inst, "merge_completed"); got != 1 {
 		t.Fatalf("expected one merge_completed audit event, got %d", got)
 	}
+	if email.count() != 2 {
+		t.Fatalf("expected two email calls, got %d", email.count())
+	}
 }
 
-func TestRunActionSkippedForUnknownAndMissingConnector(t *testing.T) {
+func TestRunActionFailureMarksInstanceFailedAndStopsProgress(t *testing.T) {
 	store := newMockStore()
 	exec := NewExecutor(store, &mockEmail{}, nil)
 
@@ -869,7 +1127,343 @@ func TestRunActionSkippedForUnknownAndMissingConnector(t *testing.T) {
 	exec.run(instanceID, wf, map[string]interface{}{}, "")
 
 	inst, _ := store.GetInstance(instanceID)
-	if got := countAuditAction(inst, "action_skipped"); got != 2 {
-		t.Fatalf("expected two action_skipped audit events, got %d", got)
+	if inst.Status != models.InstanceFailed {
+		t.Fatalf("expected failed status, got %s", inst.Status)
+	}
+	if got := countAuditAction(inst, "instance_failed"); got != 1 {
+		t.Fatalf("expected one instance_failed audit event, got %d", got)
+	}
+	if state := inst.NodeStates["unknown"]; state.Status != "failed" {
+		t.Fatalf("expected unknown node failed state, got %+v", state)
+	}
+	if _, ok := inst.NodeStates["missing"]; ok {
+		t.Fatalf("expected execution to stop before missing node")
+	}
+	if _, ok := inst.NodeStates["end"]; ok {
+		t.Fatalf("expected execution to stop before end node")
+	}
+}
+
+func TestRunActionSendErrorMarksFailedAndDoesNotAdvance(t *testing.T) {
+	store := newMockStore()
+	email := &mockEmail{sendErr: errors.New("gmail send denied")}
+	exec := NewExecutor(store, email, nil)
+
+	wf := models.Workflow{
+		ID:    "wf-action-send-fail",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{
+			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "email"},
+			{
+				ID:    "email",
+				Type:  models.NodeAction,
+				Title: "Send Email",
+				Connector: &models.ConnectorConfig{
+					Type: models.ConnectorEmail,
+					Params: map[string]interface{}{
+						"to":            "alice@example.com",
+						"subject":       "Subject",
+						"body_template": "Body",
+					},
+				},
+				Next: "end",
+			},
+			{ID: "end", Type: models.NodeEnd, Title: "End"},
+		},
+	}
+
+	instanceID := seedInstance(t, store, wf, map[string]interface{}{})
+
+	exec.run(instanceID, wf, map[string]interface{}{}, "")
+
+	inst, _ := store.GetInstance(instanceID)
+	if inst.Status != models.InstanceFailed {
+		t.Fatalf("expected failed status, got %s", inst.Status)
+	}
+	if got := countAuditAction(inst, "action_failed"); got != 1 {
+		t.Fatalf("expected one action_failed audit event, got %d", got)
+	}
+	if got := countAuditAction(inst, "instance_failed"); got != 1 {
+		t.Fatalf("expected one instance_failed audit event, got %d", got)
+	}
+	if _, ok := inst.NodeStates["end"]; ok {
+		t.Fatalf("expected execution not to reach end node")
+	}
+}
+
+func TestRunActionSendForOrgErrorMarksFailedAndDoesNotAdvance(t *testing.T) {
+	store := newMockStore()
+	email := &mockOrgEmail{sendForOrgErr: errors.New("gmail org send denied")}
+	exec := NewExecutor(store, email, nil)
+
+	wf := models.Workflow{
+		ID:    "wf-action-sendfororg-fail",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{
+			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "email"},
+			{
+				ID:    "email",
+				Type:  models.NodeAction,
+				Title: "Send Email",
+				Connector: &models.ConnectorConfig{
+					Type: models.ConnectorEmail,
+					Params: map[string]interface{}{
+						"to":            "alice@example.com",
+						"subject":       "Subject",
+						"body_template": "Body",
+						"from_name":     "Workflow Bot",
+					},
+				},
+				Next: "end",
+			},
+			{ID: "end", Type: models.NodeEnd, Title: "End"},
+		},
+	}
+
+	instanceID := seedInstance(t, store, wf, map[string]interface{}{})
+
+	exec.run(instanceID, wf, map[string]interface{}{}, "")
+
+	inst, _ := store.GetInstance(instanceID)
+	if inst.Status != models.InstanceFailed {
+		t.Fatalf("expected failed status, got %s", inst.Status)
+	}
+	if got := countAuditAction(inst, "action_failed"); got != 1 {
+		t.Fatalf("expected one action_failed audit event, got %d", got)
+	}
+	if got := countAuditAction(inst, "instance_failed"); got != 1 {
+		t.Fatalf("expected one instance_failed audit event, got %d", got)
+	}
+	if _, ok := inst.NodeStates["end"]; ok {
+		t.Fatalf("expected execution not to reach end node")
+	}
+}
+
+func TestRunTaskFailsWhenRoleAssigneeCannotBeResolved(t *testing.T) {
+	store := newMockStore()
+	exec := NewExecutor(store, &mockEmail{}, NewRandomRoleAssigneeSelector(NewStaticRoleMemberDirectory(map[string]map[string][]string{})))
+
+	wf := models.Workflow{
+		ID:    "wf-task-no-assignee",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{
+			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "task"},
+			{ID: "task", Type: models.NodeTask, Title: "Manager Task", AssignedRole: "manager", TaskActions: []string{"approve"}, Next: "end"},
+			{ID: "end", Type: models.NodeEnd, Title: "End"},
+		},
+	}
+	instanceID := seedInstance(t, store, wf, map[string]interface{}{"request_id": "r-404"})
+
+	exec.run(instanceID, wf, map[string]interface{}{"request_id": "r-404"}, "")
+
+	inst, ok := store.GetInstance(instanceID)
+	if !ok {
+		t.Fatalf("instance not found")
+	}
+	if inst.Status != models.InstanceFailed {
+		t.Fatalf("expected failed status when assignee cannot be resolved, got %s", inst.Status)
+	}
+	if len(store.tasks) != 0 {
+		t.Fatalf("expected no task to be persisted when role assignee is unresolved, got %d", len(store.tasks))
+	}
+	if got := countAuditAction(inst, "assignee_unresolved"); got != 1 {
+		t.Fatalf("expected assignee_unresolved audit entry, got %d", got)
+	}
+}
+
+func TestExecuteTaskUsesInjectedRoleSelectionStrategy(t *testing.T) {
+	store := newMockStore()
+	directory := NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {
+			"manager": {"user-a", "user-b"},
+		},
+	})
+	selector := NewRandomRoleAssigneeSelectorWithStrategy(directory, fixedRoleMemberSelectionStrategy{selectedUserID: "user-b"})
+	exec := NewExecutor(store, &mockEmail{}, selector)
+
+	wf := models.Workflow{ID: "wf-fixed-selector", OrgID: "org-1"}
+	node := models.WorkflowNode{ID: "task", Type: models.NodeTask, Title: "Task", AssignedRole: "manager", TaskActions: []string{"approve"}}
+
+	if _, err := exec.executeTask("inst-fixed", &wf, &node, map[string]interface{}{"x": 1}, ""); err != nil {
+		t.Fatalf("executeTask failed: %v", err)
+	}
+	if len(store.tasks) != 1 {
+		t.Fatalf("expected one saved task, got %d", len(store.tasks))
+	}
+	for _, task := range store.tasks {
+		if task.AssignedUser != "user-b" {
+			t.Fatalf("expected injected strategy to pick user-b, got %q", task.AssignedUser)
+		}
+	}
+}
+
+func TestExecuteTaskRoleSelectionOverridesPreferredUser(t *testing.T) {
+	store := newMockStore()
+	directory := NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {
+			"manager": {"user-a", "user-b"},
+		},
+	})
+	selector := NewRandomRoleAssigneeSelectorWithStrategy(directory, fixedRoleMemberSelectionStrategy{selectedUserID: "user-b"})
+	exec := NewExecutor(store, &mockEmail{}, selector)
+
+	wf := models.Workflow{ID: "wf-role-preferred", OrgID: "org-1"}
+	node := models.WorkflowNode{
+		ID:           "task",
+		Type:         models.NodeTask,
+		Title:        "Task",
+		AssignedRole: "manager",
+		AssignedUser: "user-a",
+		TaskActions:  []string{"approve"},
+	}
+
+	if _, err := exec.executeTask("inst-role-preferred", &wf, &node, map[string]interface{}{"x": 1}, ""); err != nil {
+		t.Fatalf("executeTask failed: %v", err)
+	}
+	if len(store.tasks) != 1 {
+		t.Fatalf("expected one saved task, got %d", len(store.tasks))
+	}
+	for _, task := range store.tasks {
+		if task.AssignedUser != "user-b" {
+			t.Fatalf("expected role-based strategy to override preferred user and pick user-b, got %q", task.AssignedUser)
+		}
+	}
+}
+
+func TestSelectorUsesPreferredUserWhenRoleIsEmpty(t *testing.T) {
+	selector := NewRandomRoleAssigneeSelectorWithStrategy(
+		NewStaticRoleMemberDirectory(map[string]map[string][]string{}),
+		fixedRoleMemberSelectionStrategy{selectedUserID: "user-b"},
+	)
+
+	assignee, err := selector.Select("org-1", "", "user-a")
+	if err != nil {
+		t.Fatalf("selector returned error: %v", err)
+	}
+	if assignee != "user-a" {
+		t.Fatalf("expected preferred user fallback when role is empty, got %q", assignee)
+	}
+}
+
+func TestBalancedSelectorPrefersLeastAssignedMember(t *testing.T) {
+	store := newMockStore()
+	seedTask := func(id, user string, createdAt time.Time) {
+		store.tasks[id] = models.TaskAssignment{
+			ID:           id,
+			OrgID:        "org-1",
+			AssignedRole: "manager",
+			AssignedUser: user,
+			Status:       models.TaskCompleted,
+			CreatedAt:    createdAt,
+		}
+	}
+	now := time.Now()
+	seedTask("t-1", "user-a", now.Add(-5*time.Minute))
+	seedTask("t-2", "user-a", now.Add(-4*time.Minute))
+	seedTask("t-3", "user-a", now.Add(-3*time.Minute))
+	seedTask("t-4", "user-b", now.Add(-2*time.Minute))
+
+	directory := NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {"manager": {"user-a", "user-b"}},
+	})
+	selector := NewBalancedRoleAssigneeSelector(directory, store)
+	selector.strategy = fixedRoleMemberSelectionStrategy{selectedUserID: "user-b"}
+
+	assignee, err := selector.Select("org-1", "manager", "")
+	if err != nil {
+		t.Fatalf("selector returned error: %v", err)
+	}
+	if assignee != "user-b" {
+		t.Fatalf("expected least-assigned member user-b, got %q", assignee)
+	}
+}
+
+func TestBalancedSelectorTieBreakUsesStrategy(t *testing.T) {
+	store := newMockStore()
+	seedTask := func(id, user string, createdAt time.Time) {
+		store.tasks[id] = models.TaskAssignment{
+			ID:           id,
+			OrgID:        "org-1",
+			AssignedRole: "manager",
+			AssignedUser: user,
+			Status:       models.TaskCompleted,
+			CreatedAt:    createdAt,
+		}
+	}
+	now := time.Now()
+	seedTask("t-1", "user-a", now.Add(-2*time.Minute))
+	seedTask("t-2", "user-b", now.Add(-1*time.Minute))
+
+	directory := NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {"manager": {"user-a", "user-b"}},
+	})
+	selector := NewBalancedRoleAssigneeSelector(directory, store)
+	selector.strategy = fixedRoleMemberSelectionStrategy{selectedUserID: "user-b"}
+
+	assignee, err := selector.Select("org-1", "manager", "")
+	if err != nil {
+		t.Fatalf("selector returned error: %v", err)
+	}
+	if assignee != "user-b" {
+		t.Fatalf("expected tie-break strategy to select user-b, got %q", assignee)
+	}
+}
+
+func TestRestartFailedInstanceResumesFromFailedTaskNode(t *testing.T) {
+	store := newMockStore()
+	strategy := &flipFlopRoleMemberSelectionStrategy{selectedUserID: "user-b"}
+	exec := NewExecutor(store, &mockEmail{}, NewRandomRoleAssigneeSelectorWithStrategy(NewStaticRoleMemberDirectory(map[string]map[string][]string{
+		"org-1": {
+			"manager": {"user-b"},
+		},
+	}), strategy))
+
+	wf := models.Workflow{
+		ID:    "wf-restart",
+		OrgID: "org-1",
+		Nodes: []models.WorkflowNode{
+			{ID: "start", Type: models.NodeStart, Title: "Start", Next: "task"},
+			{ID: "task", Type: models.NodeTask, Title: "Review", AssignedRole: "manager", TaskActions: []string{"approve"}, Next: "end"},
+			{ID: "end", Type: models.NodeEnd, Title: "End"},
+		},
+	}
+	store.workflows[wf.ID] = wf
+	instanceID := seedInstance(t, store, wf, map[string]interface{}{"request_id": "r-1"})
+
+	exec.run(instanceID, wf, map[string]interface{}{"request_id": "r-1"}, "")
+
+	inst, ok := store.GetInstance(instanceID)
+	if !ok {
+		t.Fatalf("instance not found")
+	}
+	if inst.Status != models.InstanceFailed {
+		t.Fatalf("expected failed status before restart, got %s", inst.Status)
+	}
+
+	restarted, err := exec.RestartFailedInstance(instanceID, "Bearer user-token")
+	if err != nil {
+		t.Fatalf("RestartFailedInstance returned error: %v", err)
+	}
+	if restarted.Status != models.InstanceRunning {
+		t.Fatalf("expected running status immediately after restart, got %s", restarted.Status)
+	}
+
+	inst = waitForInstanceStatus(t, store, instanceID, models.InstanceWaiting)
+	if inst.Status != models.InstanceWaiting {
+		t.Fatalf("expected waiting status after restart resumed task node, got %s", inst.Status)
+	}
+	if inst.CurrentNode != "task" {
+		t.Fatalf("expected current node to remain task, got %q", inst.CurrentNode)
+	}
+	if countAuditAction(inst, "instance_restarted") != 1 {
+		t.Fatalf("expected instance_restarted audit entry, got %+v", inst.AuditLog)
+	}
+	if len(store.tasks) != 1 {
+		t.Fatalf("expected one task after restart, got %d", len(store.tasks))
+	}
+	for _, task := range store.tasks {
+		if task.AssignedUser != "user-b" {
+			t.Fatalf("expected restarted task to be assigned to user-b, got %q", task.AssignedUser)
+		}
 	}
 }
