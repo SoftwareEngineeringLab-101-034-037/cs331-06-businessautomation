@@ -2326,7 +2326,65 @@
   overflow-x: auto;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  border-bottom: none;
+}
+
+.timeline-header-wrap {
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.timeline-header-actions {
+  margin-left: auto;
+}
+
+.timeline-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.timeline-nav-btn {
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--text-secondary);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.timeline-nav-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.timeline-nav-current {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.timeline-nav-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.timeline-nav-label {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  min-width: 152px;
+  text-align: center;
+}
+
+.timeline-week-shell {
+  position: relative;
 }
 
 /* Timeline header with date columns */
@@ -2389,15 +2447,28 @@
 
 /* Timeline body rows */
 .timeline-body {
+  --timeline-row-height: 64px;
   display: flex;
   flex-direction: column;
   position: relative;
+  min-height: calc(var(--timeline-row-height) * 5);
+  max-height: calc(var(--timeline-row-height) * 5);
+  overflow-y: auto;
+}
+
+.timeline-empty {
+  min-height: 100%;
+  padding: 20px 16px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
 }
 
 .timeline-row {
   display: flex;
   border-bottom: 1px solid var(--border-subtle);
-  min-height: 52px;
+  min-height: var(--timeline-row-height);
   transition: var(--transition);
   cursor: pointer;
 }
@@ -2415,16 +2486,16 @@
   width: 220px;
   min-width: 220px;
   flex-shrink: 0;
-  padding: 10px 16px;
+  padding: 12px 16px;
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 2px;
+  gap: 4px;
 }
 
 .timeline-row-title {
-  font-size: 0.82rem;
+  font-size: 0.9rem;
   font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
@@ -2439,14 +2510,14 @@
 }
 
 .timeline-row-id {
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   color: var(--text-muted);
   font-weight: 500;
   font-family: var(--font-mono, monospace);
 }
 
 .timeline-row-priority {
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   font-weight: 700;
 }
 
@@ -2455,6 +2526,13 @@
   flex: 1;
   position: relative;
   min-width: 0;
+  background-image: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent calc(14.285714% - 1px),
+    var(--border-subtle) calc(14.285714% - 1px),
+    var(--border-subtle) 14.285714%
+  );
 }
 
 .timeline-task-label {
@@ -2494,12 +2572,12 @@
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  height: 26px;
+  height: 32px;
   border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.68rem;
+  font-size: 0.74rem;
   font-weight: 600;
   color: #fff;
   min-width: 24px;
@@ -2559,27 +2637,6 @@
 }
 
 /* SLA marker */
-.timeline-sla-marker {
-  position: absolute;
-  top: 4px;
-  bottom: 4px;
-  width: 2px;
-  background: #ef4444;
-  z-index: 2;
-}
-
-.timeline-sla-marker::after {
-  content: "SLA";
-  position: absolute;
-  top: -16px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 0.6rem;
-  font-weight: 700;
-  color: #ef4444;
-  white-space: nowrap;
-}
-
 /* Today marker */
 .timeline-today-marker {
   position: absolute;
@@ -2638,7 +2695,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.65rem;
+  font-size: 0.72rem;
   font-weight: 700;
   color: #fff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -2664,7 +2721,8 @@
   align-items: center;
   gap: 24px;
   padding: 16px 20px;
-  border-top: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-top: 1px solid var(--border-subtle);
   background: var(--surface-alt);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
   flex-wrap: wrap;
@@ -2688,6 +2746,27 @@
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+@media (max-width: 768px) {
+  .timeline-header-actions {
+    width: 100%;
+  }
+
+  .timeline-nav {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .timeline-nav-label {
+    order: -1;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+  }
+
 }
 
 /* ─────────────────────────────────────────────
