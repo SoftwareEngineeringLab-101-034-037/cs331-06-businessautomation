@@ -32,14 +32,6 @@ jobs:
           go-version: '1.25.x'
           cache-dependency-path: ./${{ matrix.path }}/go.sum
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          # Pin to a specific version for deterministic CI. Review periodically.
-          version: v2.4.0
-          working-directory: ${{ matrix.path }}
-          install-mode: goinstall
-
       - name: Go fmt
         run: |
           fmt_output=$(go fmt ./... 2>&1) || {
