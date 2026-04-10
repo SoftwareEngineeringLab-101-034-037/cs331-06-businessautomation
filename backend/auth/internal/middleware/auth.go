@@ -61,6 +61,7 @@ func ClerkAuthMiddleware(keyFunc jwt.Keyfunc, issuerURL string) gin.HandlerFunc 
 		c.Next()
 	}
 }
+
 // SystemServiceKeyMiddleware authorizes machine-to-machine requests using
 // an explicit shared key header, without requiring JWT parsing.
 func SystemServiceKeyMiddleware(expectedKey string, allowedCallers ...string) gin.HandlerFunc {
