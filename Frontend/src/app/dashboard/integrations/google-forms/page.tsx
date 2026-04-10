@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate } from "@/components/dashboard/RoleProvider";
+import { ToastContainer, useToast } from "@/components/Toast";
 
 const GF_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || "";
 const GF_API_MISSING_ERROR = "NEXT_PUBLIC_INTEGRATIONS_API (or NEXT_PUBLIC_GOOGLE_FORMS_API) is not configured.";
@@ -39,12 +40,14 @@ type ConnectedAccount = {
 export default function GoogleFormsIntegrationPage() {
   const { getToken } = useAuth();
   const { organization } = useOrganization();
+  const { toasts, showToast, dismissToast } = useToast();
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [error, setError] = useState<string | null>(null);
   const loadDataRequestIdRef = useRef(0);
   const oauthPollRef = useRef<number | null>(null);
+  const oauthPopupRef = useRef<Window | null>(null);
   const getTokenRef = useRef(getToken);
   const gfApiBase = (GF_API || "").trim();
 
@@ -124,14 +127,92 @@ export default function GoogleFormsIntegrationPage() {
   }, [gfApiBase, organization?.id, authFetch]);
 
   useEffect(() => {
-    return () => {
+    const clearOAuthPoll = () => {
       if (oauthPollRef.current !== null) {
         window.clearInterval(oauthPollRef.current);
         oauthPollRef.current = null;
       }
+    };
+
+    return () => {
+      clearOAuthPoll();
+      if (oauthPopupRef.current && !oauthPopupRef.current.closed) {
+        oauthPopupRef.current.close();
+      }
+      oauthPopupRef.current = null;
       loadDataRequestIdRef.current += 1;
     };
   }, []);
+
+  useEffect(() => {
+    if (!gfApiBase) {
+      return;
+    }
+
+    let allowedOrigin = "";
+    try {
+      allowedOrigin = new URL(gfApiBase).origin;
+    } catch {
+      return;
+    }
+
+    const onOAuthMessage = (event: MessageEvent) => {
+      if (event.origin !== allowedOrigin) {
+        return;
+      }
+
+      const payload = event.data as Record<string, unknown> | null;
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
+
+      const type = typeof payload.type === "string" ? payload.type : "";
+      if (type !== "integration_oauth_result") {
+        return;
+      }
+
+      const service = typeof payload.service === "string" ? payload.service : "";
+      if (service && service !== "google_forms") {
+        return;
+      }
+
+      const orgID = typeof payload.org_id === "string" ? payload.org_id : "";
+      if (orgID && organization?.id && orgID !== organization.id) {
+        return;
+      }
+
+      if (oauthPollRef.current !== null) {
+        window.clearInterval(oauthPollRef.current);
+        oauthPollRef.current = null;
+      }
+      if (oauthPopupRef.current && !oauthPopupRef.current.closed) {
+        oauthPopupRef.current.close();
+      }
+      oauthPopupRef.current = null;
+
+      const statusValue = typeof payload.status === "string" ? payload.status : "";
+      if (statusValue === "connected") {
+        showToast("Google Forms account connected successfully.", "success");
+        setError(null);
+        void loadData();
+        return;
+      }
+
+      const message = typeof payload.error === "string"
+        ? payload.error
+        : typeof payload.message === "string"
+          ? payload.message
+          : "Google OAuth connection failed";
+      showToast(message, "error");
+      setError(message);
+      void loadData();
+    };
+
+    window.addEventListener("message", onOAuthMessage);
+    return () => {
+      window.removeEventListener("message", onOAuthMessage);
+    };
+  }, [gfApiBase, organization?.id, loadData, showToast]);
 
   useEffect(() => {
     if (!gfApiBase) {
@@ -235,6 +316,7 @@ export default function GoogleFormsIntegrationPage() {
                   setError("Popup was blocked by the browser. Please allow popups and try again.");
                   return;
                 }
+                oauthPopupRef.current = popup;
                 try {
                   const res = await authFetch(connectUrl, { credentials: "include" });
                   if (!res.ok) {
@@ -252,6 +334,9 @@ export default function GoogleFormsIntegrationPage() {
                         window.clearInterval(oauthPollRef.current);
                         oauthPollRef.current = null;
                       }
+                      if (oauthPopupRef.current === popup) {
+                        oauthPopupRef.current = null;
+                      }
                       void loadData();
                     }
                   }, 1000);
@@ -263,7 +348,12 @@ export default function GoogleFormsIntegrationPage() {
                     window.clearInterval(oauthPollRef.current);
                     oauthPollRef.current = null;
                   }
-                  popup.close();
+                  if (!popup.closed) {
+                    popup.close();
+                  }
+                  if (oauthPopupRef.current === popup) {
+                    oauthPopupRef.current = null;
+                  }
                   setError(err?.message || "Failed to start Google OAuth connect flow");
                 }
               }}
@@ -404,6 +494,7 @@ export default function GoogleFormsIntegrationPage() {
             </div>
           )}
         </section>
+        <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       </div>
     </RoleGate>
   );
