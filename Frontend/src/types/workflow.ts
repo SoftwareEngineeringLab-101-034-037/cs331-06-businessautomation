@@ -186,6 +186,59 @@ export interface ConnectorConfigData {
   params: Record<string, string>;
 }
 
+export type ConditionDataType =
+  | "text"
+  | "number"
+  | "boolean"
+  | "date"
+  | "datetime"
+  | "time";
+
+export type ConditionOperator =
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "contains"
+  | "not_contains"
+  | "starts_with"
+  | "ends_with"
+  | "is_empty"
+  | "is_not_empty";
+
+export type ConditionJoin = "and" | "or";
+
+export interface ConditionRule {
+  field: string;
+  dataType: ConditionDataType;
+  operator: ConditionOperator;
+  value?: string;
+}
+
+export interface ConditionConfig {
+  join: ConditionJoin;
+  logic?: string;
+  rules: ConditionRule[];
+}
+
+export interface WorkflowDataField {
+  key: string;
+  label?: string;
+  dataType: ConditionDataType;
+  source?: string;
+}
+
+export interface TriggerFieldSchemaItem {
+  question_id: string;
+  title: string;
+  required?: boolean;
+  field_type?: string;
+  variable?: string;
+  data_type?: ConditionDataType;
+}
+
 /** Allowed task actions the assignee can take */
 export type TaskAction = "approve" | "reject" | "clarify" | "complete";
 
@@ -279,6 +332,7 @@ export interface WorkflowStep {
   description: string;
 
   // ── Task assignment fields (type == "task") ───────────────
+  assignmentTargets?: string[];
   assignedRole: string;
   assignedPosition?: string;
   assignedUser?: string;
@@ -299,6 +353,7 @@ export interface WorkflowStep {
 
   // ── Condition (type == "condition") ────────────────────────
   condition?: string;
+  conditionConfig?: ConditionConfig;
 
   // ── Parallel (type == "parallel") ─────────────────────────
   branches?: number;
@@ -363,6 +418,7 @@ export function createBlankStep(
     title: `Step ${normalizedOrder}`,
     description: "",
     actionType: "custom_task",
+    assignmentTargets: [],
     assignedRole: "",
     taskDataVisibility: "all",
     visibleDataKeys: [],
