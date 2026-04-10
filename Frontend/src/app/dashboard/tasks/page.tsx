@@ -107,6 +107,23 @@ function priorityFromSLA(slaDays?: number): TaskPriority {
   return "low";
 }
 
+function formatTaskActionLabel(action: string): string {
+  switch (action.trim().toLowerCase()) {
+    case "start":
+      return "started";
+    case "approve":
+      return "approved";
+    case "reject":
+      return "rejected";
+    case "clarify":
+      return "sent back for clarification";
+    case "complete":
+      return "completed";
+    default:
+      return action.replaceAll("_", " ");
+  }
+}
+
 function computeInstanceProgress(instance: BackendInstance | undefined, workflow: BackendWorkflow | undefined): { stepNumber: number; totalSteps: number } {
   const progress = computeHeightBasedProgress(
     workflow?.nodes,
@@ -600,6 +617,7 @@ export default function TasksPage() {
       }
       await loadTasks();
       setSelectedTask(null);
+      showToast(`Task "${task.title}" ${formatTaskActionLabel(action)} successfully.`, "success");
     } catch (err: any) {
       console.error("Task action failed", err);
       showToast(
