@@ -402,7 +402,9 @@ export default function WorkstationPage() {
   const fetchWorkflows = useCallback(async () => {
     if (!organization?.id) return;
     const requestID = ++workflowsRequestIdRef.current;
+    const instanceRequestID = ++refreshInstancesRequestIdRef.current;
     const isLatest = () => workflowsRequestIdRef.current === requestID;
+    const isLatestInstance = () => refreshInstancesRequestIdRef.current === instanceRequestID;
     setLoading(true);
     setError(null);
     try {
@@ -419,7 +421,9 @@ export default function WorkstationPage() {
 
       if (!isLatest()) return;
       setWorkflows(wfData ?? []);
+      if (isLatestInstance()) {
       setInstances(instData ?? []);
+      }
 
       // Load directory data in the background so the table renders faster.
       void (async () => {
@@ -478,7 +482,9 @@ export default function WorkstationPage() {
     if (!organization?.id) return;
     const requestID = ++refreshInstancesRequestIdRef.current;
     const isLatest = () => refreshInstancesRequestIdRef.current === requestID;
+    if (!silent) {
     setRefreshingInstances(true);
+    }
     try {
       const instRes = await authFetch(`${orgApiBase}/instances?compact=true`);
       if (!instRes.ok) throw new Error(`HTTP ${instRes.status}`);
@@ -491,7 +497,7 @@ export default function WorkstationPage() {
         showToast(`Failed to refresh instances: ${err?.message || err}`, "error");
       }
     } finally {
-      if (isLatest()) {
+    if (!silent && isLatest()) {
         setRefreshingInstances(false);
       }
     }

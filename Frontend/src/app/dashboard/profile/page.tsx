@@ -173,6 +173,7 @@ export default function ProfilePage() {
         ? "Unknown"
         : "Unknown";
   const loadingHint = dataLoading ? "Refreshing from database..." : profileSyncError ? "Database sync failed." : "Synced with database.";
+  const activityStatsUnavailable = true;
 
   return (
     <div className="dashboard-page">
@@ -277,20 +278,20 @@ export default function ProfilePage() {
           </div>
           <div className="profile-stats-row">
             <div className="profile-stat">
-              <span className="profile-stat-value">12</span>
+              <span className="profile-stat-value">{activityStatsUnavailable ? "--" : "0"}</span>
               <span className="profile-stat-label">Tasks Completed</span>
             </div>
             <div className="profile-stat">
-              <span className="profile-stat-value">3</span>
+              <span className="profile-stat-value">{activityStatsUnavailable ? "--" : "0"}</span>
               <span className="profile-stat-label">In Progress</span>
             </div>
             <div className="profile-stat">
-              <span className="profile-stat-value">5</span>
+              <span className="profile-stat-value">{activityStatsUnavailable ? "--" : "0"}</span>
               <span className="profile-stat-label">Requests Submitted</span>
             </div>
             <div className="profile-stat">
-              <span className="profile-stat-value">96%</span>
-              <span className="profile-stat-label">On-Time Rate</span>
+              <span className="profile-stat-value">{activityStatsUnavailable ? "--" : "0%"}</span>
+              <span className="profile-stat-label">On-Time Rate (pending backend metrics)</span>
             </div>
           </div>
         </div>

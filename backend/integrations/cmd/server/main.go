@@ -10,14 +10,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/business-automation/backend/integrations/internal/api"
-	"github.com/example/business-automation/backend/integrations/internal/config"
-	"github.com/example/business-automation/backend/integrations/internal/integrations"
-	"github.com/example/business-automation/backend/integrations/internal/oauth"
-	"github.com/example/business-automation/backend/integrations/internal/poller"
-	providergmail "github.com/example/business-automation/backend/integrations/internal/providers/gmail"
-	providergoogleforms "github.com/example/business-automation/backend/integrations/internal/providers/googleforms"
-	"github.com/example/business-automation/backend/integrations/internal/storage"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/api"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/config"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/integrations"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/oauth"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/poller"
+	providergmail "github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/providers/gmail"
+	providergoogleforms "github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/providers/googleforms"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/storage"
 )
 
 func main() {

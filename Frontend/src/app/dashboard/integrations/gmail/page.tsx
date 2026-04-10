@@ -251,19 +251,19 @@ export default function GmailIntegrationPage() {
       return;
     }
 
+    const recipients = sendTo
+      .split(/[;,]/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (recipients.length === 0) {
+      setError("Recipient is required.");
+      return;
+    }
+
     setSending(true);
     setError(null);
 
     try {
-      const recipients = sendTo
-        .split(/[;,]/)
-        .map((value) => value.trim())
-        .filter(Boolean);
-      if (recipients.length === 0) {
-        setError("Recipient is required.");
-        return;
-      }
-
       const res = await authFetch(`${apiBase}/integrations/gmail/send?org_id=${encodeURIComponent(organization.id)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

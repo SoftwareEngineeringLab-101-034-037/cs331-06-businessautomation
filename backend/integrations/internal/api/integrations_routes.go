@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	providergmail "github.com/example/business-automation/backend/integrations/internal/providers/gmail"
+	providergmail "github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/providers/gmail"
 )
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {

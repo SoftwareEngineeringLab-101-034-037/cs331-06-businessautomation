@@ -19,8 +19,8 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
-	"github.com/example/business-automation/backend/integrations/internal/models"
-	"github.com/example/business-automation/backend/integrations/internal/storage"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/storage"
 )
 
 var identityScopes = []string{

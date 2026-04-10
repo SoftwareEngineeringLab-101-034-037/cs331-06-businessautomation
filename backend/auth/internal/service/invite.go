@@ -212,7 +212,7 @@ func revokeClerkOrgInvitationsByEmail(clerkSecretKey, orgID, email string) error
 		if !strings.EqualFold(strings.TrimSpace(invitation.EmailAddress), strings.TrimSpace(email)) {
 			continue
 		}
-		if invitation.Status != "pending" && invitation.Status != "" {
+		if invitation.Status != "pending" {
 			continue
 		}
 

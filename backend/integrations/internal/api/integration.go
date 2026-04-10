@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/business-automation/backend/integrations/internal/models"
-	providergoogleforms "github.com/example/business-automation/backend/integrations/internal/providers/googleforms"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/models"
+	providergoogleforms "github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/providers/googleforms"
 )
 
 func (s *Server) handleIntegrationStatus(w http.ResponseWriter, r *http.Request) {

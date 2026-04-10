@@ -8,14 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/business-automation/backend/integrations/internal/config"
-	"github.com/example/business-automation/backend/integrations/internal/integrations"
-	"github.com/example/business-automation/backend/integrations/internal/oauth"
-	providergmail "github.com/example/business-automation/backend/integrations/internal/providers/gmail"
-	gmailhttp "github.com/example/business-automation/backend/integrations/internal/providers/gmail/httpapi"
-	providergoogleforms "github.com/example/business-automation/backend/integrations/internal/providers/googleforms"
-	googleformshttp "github.com/example/business-automation/backend/integrations/internal/providers/googleforms/httpapi"
-	"github.com/example/business-automation/backend/integrations/internal/storage"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/config"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/integrations"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/oauth"
+	providergmail "github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/providers/gmail"
+	gmailhttp "github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/providers/gmail/httpapi"
+	providergoogleforms "github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/providers/googleforms"
+	googleformshttp "github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/providers/googleforms/httpapi"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/storage"
 )
 
 type Server struct {

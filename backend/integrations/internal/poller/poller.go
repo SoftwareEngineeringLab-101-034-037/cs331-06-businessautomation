@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/business-automation/backend/integrations/internal/googleapi"
-	"github.com/example/business-automation/backend/integrations/internal/models"
-	"github.com/example/business-automation/backend/integrations/internal/oauth"
-	providergoogleforms "github.com/example/business-automation/backend/integrations/internal/providers/googleforms"
-	"github.com/example/business-automation/backend/integrations/internal/storage"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/googleapi"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/oauth"
+	providergoogleforms "github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/providers/googleforms"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/storage"
 )
 
 type Poller struct {

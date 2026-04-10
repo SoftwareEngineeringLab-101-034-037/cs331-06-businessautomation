@@ -222,6 +222,12 @@ func (s *handlerStore) GetTask(id string) (models.TaskAssignment, bool) {
 	return task, ok
 }
 
+func (s *handlerStore) TaskCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.tasks)
+}
+
 func (s *handlerStore) CompareAndSwapTask(task models.TaskAssignment, expectedStatus models.TaskStatus) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -772,8 +778,9 @@ func TestInstanceHandlerRestartFailedInstance(t *testing.T) {
 	for time.Now().Before(deadline) {
 		updated, _ := store.GetInstance(instanceID)
 		if updated.Status == models.InstanceWaiting {
-			if len(store.tasks) != 1 {
-				t.Fatalf("expected one task after restart, got %d", len(store.tasks))
+			taskCount := store.TaskCount()
+			if taskCount != 1 {
+				t.Fatalf("expected one task after restart, got %d", taskCount)
 			}
 			if updated.CurrentNode != "task" {
 				t.Fatalf("expected current node to stay on task, got %q", updated.CurrentNode)
@@ -794,7 +801,7 @@ func TestInstanceHandlerRestartFailedInstance(t *testing.T) {
 	}
 
 	updated, _ := store.GetInstance(instanceID)
-	t.Fatalf("timed out waiting for restart to reach waiting state, last status=%s tasks=%d", updated.Status, len(store.tasks))
+	t.Fatalf("timed out waiting for restart to reach waiting state, last status=%s tasks=%d", updated.Status, store.TaskCount())
 }
 
 func TestTaskHandlerListAndAction(t *testing.T) {

@@ -3,7 +3,7 @@ package gmail
 import (
 	"testing"
 
-	"github.com/example/business-automation/backend/integrations/internal/oauth"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/oauth"
 )
 
 func TestProviderIdentityAndActions(t *testing.T) {

@@ -55,6 +55,9 @@ func Load() (*Config, error) {
 	if cfg.DatabaseURL == "" {
 		missing = append(missing, "DATABASE_URL")
 	}
+	if cfg.WorkflowServiceToken == "" {
+		missing = append(missing, "AUTH_SERVICE_TOKEN")
+	}
 	if cfg.Port == "" {
 		cfg.Port = "8080" // Default port
 	}

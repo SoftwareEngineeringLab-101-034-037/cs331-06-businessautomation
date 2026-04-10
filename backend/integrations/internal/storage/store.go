@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	"github.com/example/business-automation/backend/integrations/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/models"
 )
 
 type Store interface {

@@ -105,6 +105,10 @@ func (h *InstanceHandler) StartFromGoogleForms(c *gin.Context) {
 			responseID = strings.TrimSpace(fmt.Sprint(responseVal))
 		}
 	}
+	if responseID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "form response id is required"})
+		return
+	}
 
 	instID, deduped, err := h.Exec.FindOrStartInstanceByFormResponse(wf, normalizedData, responseID, middleware.GetAuthorizationHeader(c))
 	if err != nil {

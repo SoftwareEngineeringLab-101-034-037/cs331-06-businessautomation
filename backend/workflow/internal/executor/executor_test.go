@@ -377,6 +377,9 @@ func (m *mockStore) ListTasksByRoles(orgID string, roles []string) ([]models.Tas
 		if task.OrgID != orgID {
 			continue
 		}
+		if task.Status != models.TaskPending {
+			continue
+		}
 		if _, ok := allowed[task.AssignedRole]; ok {
 			out = append(out, task)
 			continue

@@ -12,7 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"github.com/example/business-automation/backend/integrations/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/models"
 )
 
 const defaultWatchProvider = "google_forms"
@@ -67,7 +67,8 @@ func (s *MongoStore) ensureIndexes(ctx context.Context) error {
 		return fmt.Errorf("create oauth_tokens org_id index: %w", err)
 	}
 	if err := createOneIndex(ctx, s.tokens, mongo.IndexModel{
-		Keys: bson.D{{Key: "org_id", Value: 1}, {Key: "provider", Value: 1}, {Key: "is_primary", Value: 1}},
+		Keys:    bson.D{{Key: "org_id", Value: 1}, {Key: "provider", Value: 1}, {Key: "is_primary", Value: 1}},
+		Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"is_primary": true}),
 	}); err != nil {
 		return fmt.Errorf("create oauth_tokens primary sort index: %w", err)
 	}
@@ -220,10 +221,13 @@ func (s *MongoStore) GetWatch(ctx context.Context, id string) (*models.FormWatch
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(w.Provider) == "" {
 		w.Provider = defaultWatchProvider
 	}
-	return &w, err
+	return &w, nil
 }
 
 func (s *MongoStore) ListWatches(ctx context.Context, orgID string) ([]*models.FormWatch, error) {
@@ -327,7 +331,10 @@ func (s *MongoStore) GetGmailWatch(ctx context.Context, id string) (*models.Gmai
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil
 	}
-	return &watch, err
+	if err != nil {
+		return nil, err
+	}
+	return &watch, nil
 }
 
 func (s *MongoStore) ListGmailWatches(ctx context.Context, orgID string) ([]*models.GmailWatch, error) {

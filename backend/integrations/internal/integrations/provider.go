@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/example/business-automation/backend/integrations/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/models"
 )
 
 type Provider interface {
@@ -48,6 +48,9 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(provider Provider) {
 	if r == nil || provider == nil {
 		return
+	}
+	if r.providers == nil {
+		r.providers = make(map[string]Provider)
 	}
 	value := reflect.ValueOf(provider)
 	switch value.Kind() {

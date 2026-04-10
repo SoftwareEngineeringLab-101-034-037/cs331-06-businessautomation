@@ -228,7 +228,7 @@ export default function WorkflowCanvas({
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
       const nodeData = node.data as unknown as FlowNodeData | undefined;
-      if (node.type === "start") {
+      if (node.type === "start" && nodeData?.onConfigureTrigger) {
         nodeData?.onConfigureTrigger?.();
         onSelectStep(null);
         setSelectedEdgeId(null);

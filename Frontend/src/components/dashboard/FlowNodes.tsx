@@ -36,12 +36,8 @@ export const StartNode = memo(function StartNode({ data }: NodeProps) {
   const d = data as unknown as FlowNodeData;
   
   return (
-    <div 
-      className="rf-node rf-node-start" 
-      onClick={(e) => {
-        e.stopPropagation();
-        d.onConfigureTrigger?.();
-      }}
+    <div
+      className="rf-node rf-node-start"
       title="Configure trigger"
       style={{ cursor: d.onConfigureTrigger ? "pointer" : "default" }}
     >

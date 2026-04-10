@@ -3,8 +3,8 @@ package googleforms
 import (
 	"testing"
 
-	"github.com/example/business-automation/backend/integrations/internal/integrations"
-	"github.com/example/business-automation/backend/integrations/internal/oauth"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/integrations"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/oauth"
 )
 
 func TestProviderIdentityAndDefaults(t *testing.T) {

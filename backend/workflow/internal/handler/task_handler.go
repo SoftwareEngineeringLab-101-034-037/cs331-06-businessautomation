@@ -257,9 +257,8 @@ func canActOnTaskWithoutExecutor(actorUserID string, task models.TaskAssignment,
 	}
 
 	if len(task.AssignedRoles) > 0 || strings.TrimSpace(task.AssignedRole) != "" {
-		// Without executor role-directory lookups, we cannot verify role membership here.
-		// Allow start and defer strict membership checks to the configured executor path.
-		return nil
+		// Without executor role-directory lookups, we cannot verify role membership safely.
+		return executor.ErrForbiddenTaskAction
 	}
 
 	return nil

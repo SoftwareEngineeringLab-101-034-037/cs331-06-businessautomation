@@ -36,13 +36,17 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           # Pin to a specific version for deterministic CI. Review periodically.
-          version: v1.64.8
+          version: v2.4.0
           working-directory: ${{ matrix.path }}
           install-mode: goinstall
 
       - name: Go fmt
         run: |
-          if [ "$(go fmt ./...)" ]; then
+          fmt_output=$(go fmt ./... 2>&1) || {
+            echo "go fmt execution failed: $fmt_output"
+            exit 1
+          }
+          if [ -n "$fmt_output" ]; then
             echo "Go code is not formatted. Run 'go fmt ./...' locally."
             exit 1
           fi

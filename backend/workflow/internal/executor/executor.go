@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,8 @@ var (
 	ErrPendingTaskStartOnly = errors.New("pending tasks can only be started")
 	ErrNoEligibleAssignee   = errors.New("no eligible assignee found for task")
 )
+
+const numberComparisonEpsilon = 1e-9
 
 func NewExecutor(s storage.Store, e connectors.EmailConnector, selector TaskAssigneeSelector) *Executor {
 	return &Executor{
@@ -1293,9 +1296,9 @@ func evaluateTypedCondition(dataType models.ConditionDataType, operator models.C
 		}
 		switch operator {
 		case models.ConditionOperatorEquals:
-			return leftNum == rightNum, ""
+			return nearlyEqualFloat(leftNum, rightNum), ""
 		case models.ConditionOperatorNotEquals:
-			return leftNum != rightNum, ""
+			return !nearlyEqualFloat(leftNum, rightNum), ""
 		case models.ConditionOperatorGreaterThan:
 			return leftNum > rightNum, ""
 		case models.ConditionOperatorGreaterEq:
@@ -1349,6 +1352,10 @@ func evaluateTypedCondition(dataType models.ConditionDataType, operator models.C
 	}
 
 	return false, "unsupported_data_type"
+}
+
+func nearlyEqualFloat(left, right float64) bool {
+	return math.Abs(left-right) <= numberComparisonEpsilon
 }
 
 func compareTimes(left, right time.Time, operator models.ConditionOperator) (bool, string) {

@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/example/business-automation/backend/integrations/internal/config"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/config"
 )
 
 func TestWithOrgAuthorizationRequiresOrgID(t *testing.T) {

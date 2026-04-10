@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/example/business-automation/backend/integrations/internal/googleapi"
-	"github.com/example/business-automation/backend/integrations/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/googleapi"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/models"
 )
 
 func TestNewPollerDefaultTriggerPath(t *testing.T) {

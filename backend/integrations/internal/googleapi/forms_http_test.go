@@ -46,16 +46,25 @@ func TestFormsAPIHelpers(t *testing.T) {
 			if req.URL.Query().Get("pageToken") == "" {
 				return jsonResponse(http.StatusOK, `{"files":[{"id":"form_1","name":"Survey","webViewLink":"https://edit/1","modifiedTime":"2026-04-06T00:00:00Z"}],"nextPageToken":"next"}`), nil
 			}
-			return jsonResponse(http.StatusOK, `{"files":[]}`), nil
+			if req.URL.Query().Get("pageToken") == "next" {
+				return jsonResponse(http.StatusOK, `{"files":[{"id":"form_2","name":"Survey 2","webViewLink":"https://edit/2","modifiedTime":"2026-04-07T00:00:00Z"}]}`), nil
+			}
+			t.Fatalf("unexpected forms pageToken: %q", req.URL.Query().Get("pageToken"))
+			return nil, nil
 		case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/responses"):
 			if req.URL.Query().Get("pageToken") == "" {
 				return jsonResponse(http.StatusOK, `{"responses":[{"responseId":"resp_1","respondentEmail":"u@example.com","createTime":"2026-04-06T00:00:00Z","lastSubmittedTime":"2026-04-06T00:00:00Z","answers":{"q1":{"questionId":"q1","textAnswers":{"answers":[{"value":"yes"}]}},"q_upload":{"questionId":"q_upload","fileUploadAnswers":{"answers":[{"fileId":"file_1","fileName":"resume.pdf","mimeType":"application/pdf"}]}}}}],"nextPageToken":"next"}`), nil
 			}
-			return jsonResponse(http.StatusOK, `{"responses":[]}`), nil
+			if req.URL.Query().Get("pageToken") == "next" {
+				return jsonResponse(http.StatusOK, `{"responses":[{"responseId":"resp_2","respondentEmail":"v@example.com","createTime":"2026-04-07T00:00:00Z","lastSubmittedTime":"2026-04-07T00:00:00Z","answers":{"q1":{"questionId":"q1","textAnswers":{"answers":[{"value":"no"}]}}}}]}`), nil
+			}
+			t.Fatalf("unexpected responses pageToken: %q", req.URL.Query().Get("pageToken"))
+			return nil, nil
 		case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/responses/resp_1"):
 			return jsonResponse(http.StatusOK, `{"responseId":"resp_1","respondentEmail":"u@example.com","createTime":"2026-04-06T00:00:00Z","lastSubmittedTime":"2026-04-06T00:00:00Z","answers":{"q1":{"questionId":"q1","textAnswers":{"answers":[{"value":"yes"}]}},"q_upload":{"questionId":"q_upload","fileUploadAnswers":{"answers":[{"fileId":"file_1","fileName":"resume.pdf","mimeType":"application/pdf"}]}}}}`), nil
 		default:
-			return jsonResponse(http.StatusNotFound, `{}`), nil
+			t.Fatalf("unexpected request: method=%s host=%s path=%s rawQuery=%s", req.Method, req.URL.Host, req.URL.Path, req.URL.RawQuery)
+			return nil, nil
 		}
 	})}
 
@@ -81,7 +90,7 @@ func TestFormsAPIHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListForms failed: %v", err)
 	}
-	if len(forms) != 1 || forms[0].FormID != "form_1" {
+	if len(forms) != 2 || forms[0].FormID != "form_1" || forms[1].FormID != "form_2" {
 		t.Fatalf("unexpected listed forms: %#v", forms)
 	}
 
@@ -89,7 +98,7 @@ func TestFormsAPIHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListResponses failed: %v", err)
 	}
-	if len(responses) != 1 || responses[0].ResponseID != "resp_1" {
+	if len(responses) != 2 || responses[0].ResponseID != "resp_1" || responses[1].ResponseID != "resp_2" {
 		t.Fatalf("unexpected responses: %#v", responses)
 	}
 	if responses[0].RespondentEmail != "u@example.com" {

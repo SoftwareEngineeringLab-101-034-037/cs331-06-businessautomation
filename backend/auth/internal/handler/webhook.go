@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"encoding/json"
@@ -495,15 +496,18 @@ func (h *WebhookHandler) handleInvitationAccepted(data json.RawMessage) error {
 	} else {
 		if h.employeeService != nil {
 			if err := h.employeeService.AcceptInvitationByEmail(email, orgID, user.ID); err != nil {
-				log.Printf("Rejected invitation.accepted without valid local invitation for %s in org %s: %v", email, orgID, err)
-				if user.OrganizationID == nil || *user.OrganizationID == "" {
-					if delErr := database.DB.Where("id = ? AND (organization_id IS NULL OR organization_id = '')", user.ID).Delete(&models.User{}).Error; delErr != nil {
-						log.Printf("Failed to cleanup orphan user %s after rejected invitation.accepted: %v", user.ID, delErr)
-					} else {
-						log.Printf("Removed orphan user %s created from invalid/revoked invite acceptance", user.ID)
+				if isExpectedInvitationAcceptanceRejection(err) {
+					log.Printf("Rejected invitation.accepted without valid local invitation for %s in org %s: %v", email, orgID, err)
+					if user.OrganizationID == nil || *user.OrganizationID == "" {
+						if delErr := database.DB.Where("id = ? AND (organization_id IS NULL OR organization_id = '')", user.ID).Delete(&models.User{}).Error; delErr != nil {
+							log.Printf("Failed to cleanup orphan user %s after rejected invitation.accepted: %v", user.ID, delErr)
+						} else {
+							log.Printf("Removed orphan user %s created from invalid/revoked invite acceptance", user.ID)
+						}
 					}
+					return nil
 				}
-				return nil
+				return err
 			}
 		} else {
 			updates := map[string]interface{}{
@@ -521,6 +525,14 @@ func (h *WebhookHandler) handleInvitationAccepted(data json.RawMessage) error {
 
 	log.Printf("Invitation accepted: user %s (%s) joined org %s", user.ID, email, orgID)
 	return nil
+}
+
+func isExpectedInvitationAcceptanceRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "no pending invitation found") || strings.Contains(msg, "has expired")
 }
 
 func getString(m map[string]interface{}, key string) string {

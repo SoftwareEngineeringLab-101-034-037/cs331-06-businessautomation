@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/example/business-automation/backend/integrations/internal/googleapi"
-	"github.com/example/business-automation/backend/integrations/internal/integrations"
-	"github.com/example/business-automation/backend/integrations/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/googleapi"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/integrations"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/models"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 

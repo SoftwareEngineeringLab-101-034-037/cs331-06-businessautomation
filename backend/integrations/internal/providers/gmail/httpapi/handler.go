@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/example/business-automation/backend/integrations/internal/googleapi"
-	"github.com/example/business-automation/backend/integrations/internal/integrations"
-	"github.com/example/business-automation/backend/integrations/internal/models"
-	"github.com/example/business-automation/backend/integrations/internal/oauth"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/googleapi"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/integrations"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/models"
+	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/integrations/internal/oauth"
 )
 
 type OrgIDExtractor func(ctx context.Context) string
@@ -126,7 +126,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	messages, err := googleapi.ListMessages(client, query, afterTS, maxResults)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		log.Printf("gmail.HandleMessages failed org_id=%q query=%q after_ts=%d max=%d: %v", orgID, query, afterTS, maxResults, err)
+		writeError(w, http.StatusBadGateway, "failed to list gmail messages")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -273,10 +274,10 @@ func (h *Handler) updateWatch(w http.ResponseWriter, r *http.Request, id string)
 	}
 
 	var patch struct {
-		WorkflowID string `json:"workflow_id"`
-		Query      string `json:"query"`
-		Active     *bool  `json:"active"`
-		AccountID  string `json:"account_id"`
+		WorkflowID string  `json:"workflow_id"`
+		Query      string  `json:"query"`
+		Active     *bool   `json:"active"`
+		AccountID  *string `json:"account_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -288,7 +289,9 @@ func (h *Handler) updateWatch(w http.ResponseWriter, r *http.Request, id string)
 	if strings.TrimSpace(patch.Query) != "" {
 		watch.Query = strings.TrimSpace(patch.Query)
 	}
-	watch.AccountID = strings.TrimSpace(patch.AccountID)
+	if patch.AccountID != nil {
+		watch.AccountID = strings.TrimSpace(*patch.AccountID)
+	}
 	if patch.Active != nil {
 		watch.Active = *patch.Active
 	}

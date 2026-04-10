@@ -1145,11 +1145,15 @@ export default function WorkflowBuilderPage() {
         if (!cancelled && deptsRes.ok) {
           const deptsData = await deptsRes.json();
           setDepartments(Array.isArray(deptsData) ? deptsData : []);
+        } else if (!cancelled) {
+          setDepartments([]);
         }
 
         if (!cancelled && rolesRes.ok) {
           const rolesData = await rolesRes.json();
           setRoles(Array.isArray(rolesData) ? rolesData : []);
+        } else if (!cancelled) {
+          setRoles([]);
         }
 
         if (!cancelled && employeesRes.ok) {
