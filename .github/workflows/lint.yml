@@ -34,12 +34,12 @@ jobs:
 
       - name: Go fmt
         run: |
-          fmt_output=$(go fmt ./... 2>&1) || {
-            echo "go fmt execution failed: $fmt_output"
-            exit 1
-          }
-          if [ -n "$fmt_output" ]; then
+          go fmt ./...
+
+          # Fail only when go fmt actually rewrites files.
+          if [ -n "$(git status --porcelain -- '*.go')" ]; then
             echo "Go code is not formatted. Run 'go fmt ./...' locally."
+            git --no-pager diff -- '*.go'
             exit 1
           fi
 
