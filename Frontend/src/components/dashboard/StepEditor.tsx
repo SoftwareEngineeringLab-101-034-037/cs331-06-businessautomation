@@ -861,9 +861,18 @@ export function TriggerEditor({
                     className="wf-input"
                     placeholder="questionId:name, amountQuestion:amount"
                     value={trigger.config.field_mapping || ""}
-                    onChange={(e) =>
-                      onChange({ ...trigger, config: { ...trigger.config, field_mapping: e.target.value } })
-                    }
+                    onChange={(e) => {
+                      const rawMapping = e.target.value;
+                      const parsedMapping = parseFieldMapping(rawMapping);
+                      onChange({
+                        ...trigger,
+                        config: {
+                          ...trigger.config,
+                          field_mapping: rawMapping,
+                          field_schema: rebuildSchema(parsedMapping),
+                        },
+                      });
+                    }}
                   />
 
                   {manualMappingRows.length > 0 && (
@@ -1116,12 +1125,16 @@ export function StepEditor({
     const normalizedJoin: ConditionJoin = next.join === "or" ? "or" : "and";
     const normalizedRules = next.rules.map((rule) => normalizeRule(rule));
     const hasLogic = typeof next.logic === "string";
-    const normalizedLogic = hasLogic ? String(next.logic || "").trim() : undefined;
+    const logicCandidate = hasLogic ? String(next.logic || "").trim() : "";
+    const logicError = logicCandidate
+      ? validateConditionLogicExpression(logicCandidate, normalizedRules.length)
+      : "logic expression is empty";
+    const normalizedLogic = !logicError ? logicCandidate : undefined;
     const nextConditionConfig: ConditionConfig = {
       join: normalizedJoin,
       rules: normalizedRules,
     };
-    if (hasLogic) {
+    if (normalizedLogic) {
       nextConditionConfig.logic = normalizedLogic;
     }
 

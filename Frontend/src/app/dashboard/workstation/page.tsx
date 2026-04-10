@@ -329,6 +329,7 @@ export default function WorkstationPage() {
   const [restartingInstanceId, setRestartingInstanceId] = useState<string | null>(null);
   const instanceRequestControllerRef = useRef<AbortController | null>(null);
   const instanceRequestIdRef = useRef(0);
+  const refreshInstancesRequestIdRef = useRef(0);
   const workflowsRequestIdRef = useRef(0);
 
   const closeInstanceDrawer = useCallback(() => {
@@ -473,19 +474,27 @@ export default function WorkstationPage() {
     }
   }, [organization?.id, orgApiBase, authFetch, showToast]);
 
-  const refreshInstanceList = useCallback(async () => {
-  if (!organization?.id) return;
-  setRefreshingInstances(true);
-  try {
-    const instRes = await authFetch(`${orgApiBase}/instances?compact=true`);
-    if (!instRes.ok) throw new Error(`HTTP ${instRes.status}`);
-    const instData = (await instRes.json()) as BackendInstance[];
-    setInstances(instData ?? []);
-  } catch (err: any) {
-    showToast(`Failed to refresh instances: ${err?.message || err}`, "error");
-  } finally {
-    setRefreshingInstances(false);
-  }
+  const refreshInstanceList = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (!organization?.id) return;
+    const requestID = ++refreshInstancesRequestIdRef.current;
+    const isLatest = () => refreshInstancesRequestIdRef.current === requestID;
+    setRefreshingInstances(true);
+    try {
+      const instRes = await authFetch(`${orgApiBase}/instances?compact=true`);
+      if (!instRes.ok) throw new Error(`HTTP ${instRes.status}`);
+      const instData = (await instRes.json()) as BackendInstance[];
+      if (isLatest()) {
+        setInstances(instData ?? []);
+      }
+    } catch (err: any) {
+      if (isLatest() && !silent) {
+        showToast(`Failed to refresh instances: ${err?.message || err}`, "error");
+      }
+    } finally {
+      if (isLatest()) {
+        setRefreshingInstances(false);
+      }
+    }
   }, [organization?.id, orgApiBase, authFetch, showToast]);
 
   const restartFailedInstance = useCallback(async () => {
@@ -515,7 +524,7 @@ export default function WorkstationPage() {
       setSelectedInstance(restarted);
       setSelectedInstanceTasks([]);
       showToast("Instance restarted.", "success");
-      await refreshInstanceList();
+      await refreshInstanceList({ silent: true });
       await openInstanceDrawer(restarted);
     } catch (err: any) {
       showToast(`Failed to restart instance: ${err?.message || err}`, "error");
@@ -528,7 +537,7 @@ export default function WorkstationPage() {
     if (!organization?.id) return;
 
     const timer = window.setInterval(() => {
-      void refreshInstanceList();
+      void refreshInstanceList({ silent: true });
     }, 20000);
 
     return () => window.clearInterval(timer);
@@ -688,7 +697,7 @@ export default function WorkstationPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       showToast(`"${triggerTarget.name}" triggered successfully. Instance: ${data.instance_id}`, "success");
-      setTimeout(() => { void refreshInstanceList(); }, 500);
+      setTimeout(() => { void refreshInstanceList({ silent: true }); }, 500);
     } catch (err: any) {
       showToast("Failed to trigger workflow: " + (err.message || err), "error");
     } finally {
@@ -931,7 +940,7 @@ export default function WorkstationPage() {
                   Clear
                 </button>
               )}
-              <button className="action-btn action-btn-outline action-btn-sm" onClick={refreshInstanceList} disabled={refreshingInstances}>
+              <button className="action-btn action-btn-outline action-btn-sm" onClick={() => { void refreshInstanceList(); }} disabled={refreshingInstances}>
                 {refreshingInstances ? "Refreshing..." : "Refresh Instances"}
               </button>
             </div>

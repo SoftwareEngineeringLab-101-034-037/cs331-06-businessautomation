@@ -458,6 +458,7 @@ func watchProviderFilter(provider string) bson.M {
 		return bson.M{
 			"$or": []bson.M{
 				{"provider": defaultWatchProvider},
+				{"provider": ""},
 				{"provider": bson.M{"$exists": false}},
 			},
 		}

@@ -2,6 +2,7 @@ package poller
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/example/business-automation/backend/integrations/internal/googleapi"
@@ -12,6 +13,12 @@ func TestNewPollerDefaultTriggerPath(t *testing.T) {
 	p := New(nil, nil, "http://workflow", "", "", 10)
 	if p.triggerPath == "" {
 		t.Fatalf("expected default trigger path")
+	}
+	if !strings.HasPrefix(p.triggerPath, "/") {
+		t.Fatalf("expected trigger path with leading slash, got %q", p.triggerPath)
+	}
+	if p.triggerPath != "/integrations/google-forms/events" {
+		t.Fatalf("expected canonical default trigger path, got %q", p.triggerPath)
 	}
 }
 

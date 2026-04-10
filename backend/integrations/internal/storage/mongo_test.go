@@ -16,13 +16,13 @@ func TestWatchProviderFilterDefaultsToGoogleForms(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected default filter to include $or as []bson.M")
 	}
-	if len(orFilters) != 2 {
-		t.Fatalf("expected 2 default provider alternatives, got %d", len(orFilters))
+	if len(orFilters) != 3 {
+		t.Fatalf("expected 3 default provider alternatives, got %d", len(orFilters))
 	}
 	if orFilters[0]["provider"] != defaultWatchProvider {
 		t.Fatalf("expected first fallback provider %q, got %v", defaultWatchProvider, orFilters[0]["provider"])
 	}
-	if _, found := orFilters[1]["provider"]; !found {
+	if _, found := orFilters[2]["provider"]; !found {
 		t.Fatalf("expected default filter to include $or")
 	}
 }

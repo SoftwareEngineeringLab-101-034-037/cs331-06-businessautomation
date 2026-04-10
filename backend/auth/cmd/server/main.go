@@ -117,6 +117,9 @@ func main() {
 		}
 	}
 
+	if strings.TrimSpace(cfg.WorkflowServiceToken) == "" {
+		log.Fatal("AUTH_SERVICE_TOKEN / workflow service token is required to enable /api/system routes")
+	}
 	systemAPI := r.Group("/api/system")
 	systemAPI.Use(middleware.SystemServiceKeyMiddleware(cfg.WorkflowServiceToken, "workflow-service"))
 	{

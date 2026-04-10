@@ -1153,7 +1153,7 @@ func inferConditionDataTypeFromTriggerField(wf *models.Workflow, field string) m
 		return ""
 	}
 	for _, item := range schema {
-		if strings.TrimSpace(item.Variable) != field {
+		if strings.TrimSpace(item.Variable) != field && strings.TrimSpace(item.QuestionID) != field {
 			continue
 		}
 		if dataType := normalizeConditionDataType(item.DataType); dataType != "" {
@@ -1162,8 +1162,12 @@ func inferConditionDataTypeFromTriggerField(wf *models.Workflow, field string) m
 		switch strings.ToLower(strings.TrimSpace(item.FieldType)) {
 		case "scale":
 			return models.ConditionDataTypeNumber
+		case "boolean", "bool", "yes_no":
+			return models.ConditionDataTypeBoolean
 		case "date":
 			return models.ConditionDataTypeDate
+		case "datetime", "date_time", "timestamp", "iso8601":
+			return models.ConditionDataTypeDateTime
 		case "time":
 			return models.ConditionDataTypeTime
 		default:
@@ -1591,9 +1595,9 @@ func (e *Executor) canClaimTask(actorUserID string, task models.TaskAssignment, 
 
 	directory := e.roleDirectory()
 	if directory == nil {
-		log.Printf("executor: roleDirectory returned nil for role-restricted task claim roles=%v task_id=%q; allowing claim to avoid blocking workflow", allowedRoles, task.ID)
+		log.Printf("executor: roleDirectory returned nil for task claim roles=%v task_id=%q restricted=%v", allowedRoles, task.ID, restricted)
 		if restricted {
-			return true, nil
+			return false, fmt.Errorf("role directory unavailable for restricted task claim")
 		}
 		return true, nil
 	}

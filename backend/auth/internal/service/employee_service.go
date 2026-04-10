@@ -296,7 +296,8 @@ func (s *EmployeeService) RemoveEmployee(orgID, employeeID, actorUserID string) 
 	}
 
 	if err := s.deleteFromClerk(orgID, user.ID); err != nil {
-		return fmt.Errorf("employee removed from database but failed to delete from clerk: %w", err)
+		log.Printf("Warning: employee removed from database but failed to delete from Clerk org=%s user=%s: %v", orgID, user.ID, err)
+		// TODO: enqueue async retry/reconciliation for Clerk membership deletion.
 	}
 
 	log.Printf("Employee removed: user=%s org=%s", employeeID, orgID)

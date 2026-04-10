@@ -137,29 +137,33 @@ function computeInstanceProgress(instance: BackendInstance | undefined, workflow
   };
 }
 
+function parseBodyError(raw: string): string | null {
+  // Some backend errors are flattened like "... body={...}".
+  const bodyMarker = " body=";
+  const markerIndex = raw.indexOf(bodyMarker);
+  if (markerIndex < 0) return null;
+  const prefix = raw.slice(0, markerIndex).trim();
+  const bodyRaw = raw.slice(markerIndex + bodyMarker.length).trim();
+  try {
+    const parsed = JSON.parse(bodyRaw) as Record<string, unknown>;
+    const nested = typeof parsed.error === "string"
+      ? parsed.error.trim()
+      : typeof parsed.message === "string"
+        ? parsed.message.trim()
+        : "";
+    if (!nested) return null;
+    return prefix ? `${prefix} - ${nested}` : nested;
+  } catch {
+    return null;
+  }
+}
+
 function unknownToErrorString(value: unknown): string {
   if (typeof value === "string") {
     const raw = value.trim();
     if (!raw) return "";
-    const bodyMarker = " body=";
-    const markerIndex = raw.indexOf(bodyMarker);
-    if (markerIndex >= 0) {
-      const prefix = raw.slice(0, markerIndex).trim();
-      const bodyRaw = raw.slice(markerIndex + bodyMarker.length).trim();
-      try {
-        const parsed = JSON.parse(bodyRaw) as Record<string, unknown>;
-        const nested = typeof parsed.error === "string"
-          ? parsed.error.trim()
-          : typeof parsed.message === "string"
-            ? parsed.message.trim()
-            : "";
-        if (nested) {
-          return prefix ? `${prefix} - ${nested}` : nested;
-        }
-      } catch {
-        // Keep original string when body is not JSON.
-      }
-    }
+    const parsedBodyError = parseBodyError(raw);
+    if (parsedBodyError) return parsedBodyError;
     return raw;
   }
   if (typeof value === "number" || typeof value === "boolean") {

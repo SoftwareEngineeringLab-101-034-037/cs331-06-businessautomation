@@ -412,8 +412,8 @@ func (h *WebhookHandler) handleMembershipCreated(data json.RawMessage) error {
 
 		if h.employeeService != nil {
 			if err := h.employeeService.AcceptInvitationByEmail(user.Email, orgID, userID); err != nil {
-				log.Printf("Ignoring non-admin membership without valid local invitation for user %s in org %s: %v", userID, orgID, err)
-				return nil
+				log.Printf("Failed linking non-admin membership via local invitation for user %s in org %s: %v", userID, orgID, err)
+				return err
 			}
 			log.Printf("Membership created: user %s joined org %s via local invitation", userID, orgID)
 			return nil

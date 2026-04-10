@@ -260,6 +260,24 @@ func TestRemoveEmployee(t *testing.T) {
 			t.Fatalf("expected ErrCannotRemoveAdmin, got %v", err)
 		}
 	})
+
+	t.Run("reject self removal", func(t *testing.T) {
+		db := setupServiceTestDB(t)
+		svc := NewEmployeeService(db, "test_clerk_secret")
+
+		now := time.Now()
+		if err := db.Exec(`
+			INSERT INTO users (id, email, first_name, last_name, organization_id, is_admin, is_active, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, "user_self", "self@example.com", "Self", "User", "org_1", false, true, now, now).Error; err != nil {
+			t.Fatalf("failed seeding self user: %v", err)
+		}
+
+		err := svc.RemoveEmployee("org_1", "user_self", "user_self")
+		if err == nil || !errors.Is(err, ErrCannotRemoveSelf) {
+			t.Fatalf("expected ErrCannotRemoveSelf, got %v", err)
+		}
+	})
 }
 
 func TestListInvitations(t *testing.T) {

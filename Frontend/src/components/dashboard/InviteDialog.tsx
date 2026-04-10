@@ -289,8 +289,10 @@ export default function InviteDialog({ isOpen, onClose, onResult }: InviteDialog
     setDragOver(false);
     const droppedFile = e.dataTransfer.files[0];
     if (isValidExcelFile(droppedFile)) {
+      setBulkResult(null);
       setFile(droppedFile);
     } else {
+      setBulkResult(null);
       setFile(null);
       onResult("Please upload a valid Excel file (.xlsx or .xls).", "error");
     }
@@ -298,12 +300,15 @@ export default function InviteDialog({ isOpen, onClose, onResult }: InviteDialog
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
     if (!selected) {
+      setBulkResult(null);
       return;
     }
     if (isValidExcelFile(selected)) {
+      setBulkResult(null);
       setFile(selected);
       return;
     }
+    setBulkResult(null);
     setFile(null);
     onResult("Please select a valid Excel file.", "error");
     e.currentTarget.value = "";

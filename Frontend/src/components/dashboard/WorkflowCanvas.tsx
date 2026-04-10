@@ -230,6 +230,7 @@ export default function WorkflowCanvas({
       const nodeData = node.data as unknown as FlowNodeData | undefined;
       if (node.type === "start") {
         nodeData?.onConfigureTrigger?.();
+        onSelectStep(null);
         setSelectedEdgeId(null);
         return;
       }

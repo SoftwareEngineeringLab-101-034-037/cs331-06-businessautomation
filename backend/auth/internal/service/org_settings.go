@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/models"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type OrganizationSettingsUpdateInput struct {
@@ -23,25 +25,31 @@ func trimOrgSettingValue(value string) string {
 }
 
 func (s *EmployeeService) GetOrganizationSettings(orgID string) (*models.OrganizationSettings, error) {
-	if strings.TrimSpace(orgID) == "" {
+	normalizedOrgID := strings.TrimSpace(orgID)
+	if normalizedOrgID == "" {
 		return nil, fmt.Errorf("organization id is required")
 	}
 
-	var settings models.OrganizationSettings
-	err := s.db.Where("organization_id = ?", orgID).First(&settings).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		now := time.Now()
-		settings = models.OrganizationSettings{
-			OrganizationID: orgID,
-			CreatedAt:      now,
-			UpdatedAt:      now,
-		}
-		if createErr := s.db.Create(&settings).Error; createErr != nil {
-			return nil, fmt.Errorf("failed to create organization settings: %w", createErr)
-		}
-		return &settings, nil
+	now := time.Now()
+	seed := models.OrganizationSettings{
+		ID:             uuid.NewString(),
+		OrganizationID: normalizedOrgID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
+	if err := s.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "organization_id"}},
+		DoNothing: true,
+	}).Create(&seed).Error; err != nil {
+		return nil, fmt.Errorf("failed to ensure organization settings row: %w", err)
+	}
+
+	var settings models.OrganizationSettings
+	err := s.db.Where("organization_id = ?", normalizedOrgID).First(&settings).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("failed to load organization settings after upsert")
+		}
 		return nil, fmt.Errorf("failed to get organization settings: %w", err)
 	}
 
@@ -49,7 +57,8 @@ func (s *EmployeeService) GetOrganizationSettings(orgID string) (*models.Organiz
 }
 
 func (s *EmployeeService) UpdateOrganizationSettings(orgID string, input OrganizationSettingsUpdateInput) (*models.OrganizationSettings, error) {
-	settings, err := s.GetOrganizationSettings(orgID)
+	normalizedOrgID := strings.TrimSpace(orgID)
+	settings, err := s.GetOrganizationSettings(normalizedOrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -64,12 +73,12 @@ func (s *EmployeeService) UpdateOrganizationSettings(orgID string, input Organiz
 	}
 
 	if err := s.db.Model(&models.OrganizationSettings{}).
-		Where("organization_id = ?", orgID).
+		Where("organization_id = ?", normalizedOrgID).
 		Updates(updates).Error; err != nil {
 		return nil, fmt.Errorf("failed to update organization settings: %w", err)
 	}
 
-	if err := s.db.Where("organization_id = ?", orgID).First(&settings).Error; err != nil {
+	if err := s.db.Where("organization_id = ?", normalizedOrgID).First(&settings).Error; err != nil {
 		return nil, fmt.Errorf("failed to reload organization settings: %w", err)
 	}
 

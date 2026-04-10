@@ -72,6 +72,11 @@ func (h *InstanceHandler) StartFromGoogleForms(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow trigger config is required"})
 		return
 	}
+	if h.Exec == nil {
+		log.Printf("instance_handler.StartFromGoogleForms executor not configured workflow_id=%q org_id=%q", wf.ID, wf.OrgID)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "executor not configured"})
+		return
+	}
 	if configuredFormID := strings.TrimSpace(wf.Trigger.Config["form_id"]); configuredFormID != "" {
 		rawIncomingFormID := ""
 		if formIDVal, ok := req.Data["_form_id"]; ok && formIDVal != nil {
@@ -525,6 +530,11 @@ func (h *InstanceHandler) StartFromGmail(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow trigger is not email_received"})
 		return
 	}
+	if h.Exec == nil {
+		log.Printf("instance_handler.StartFromGmail executor not configured workflow_id=%q org_id=%q", wf.ID, wf.OrgID)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "executor not configured"})
+		return
+	}
 
 	if wf.Trigger.Config != nil {
 		incomingFrom := strings.ToLower(strings.TrimSpace(payloadStringValue(req.Data, "_from")))
@@ -684,6 +694,11 @@ func (h *InstanceHandler) Start(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow is not active"})
 		return
 	}
+	if h.Exec == nil {
+		log.Printf("instance_handler.Start executor not configured workflow_id=%q org_id=%q", wf.ID, wf.OrgID)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "executor not configured"})
+		return
+	}
 
 	instID, err := h.Exec.StartInstance(wf, req.Data, middleware.GetAuthorizationHeader(c))
 	if err != nil {
@@ -720,8 +735,10 @@ func (h *InstanceHandler) Restart(c *gin.Context) {
 	restarted, err := h.Exec.RestartFailedInstance(instanceID, middleware.GetAuthorizationHeader(c))
 	if err != nil {
 		switch err {
-		case executor.ErrInstanceNotFound, executor.ErrWorkflowNotFound, executor.ErrFailedNodeNotFound:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "restart failed"})
+		case executor.ErrInstanceNotFound, executor.ErrWorkflowNotFound:
+			c.JSON(http.StatusNotFound, gin.H{"error": "restart failed"})
+		case executor.ErrFailedNodeNotFound:
+			c.JSON(http.StatusConflict, gin.H{"error": "restart failed"})
 		case executor.ErrInstanceNotFailed:
 			c.JSON(http.StatusConflict, gin.H{"error": "instance is not failed"})
 		default:

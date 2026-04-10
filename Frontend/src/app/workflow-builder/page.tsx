@@ -198,6 +198,23 @@ function conditionOperatorRequiresValue(dataType: ConditionDataType, operator: C
   return meta.requiresValue !== false;
 }
 
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return isLeapYear(year) ? 29 : 28;
+  if ([4, 6, 9, 11].includes(month)) return 30;
+  return 31;
+}
+
+function isValidDateParts(year: number, month: number, day: number): boolean {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return false;
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > daysInMonth(year, month)) return false;
+  return true;
+}
+
 function isValidConditionValue(dataType: ConditionDataType, value: string): boolean {
   const raw = String(value || "").trim();
   if (!raw) return false;
@@ -210,16 +227,32 @@ function isValidConditionValue(dataType: ConditionDataType, value: string): bool
     case "boolean":
       return raw === "true" || raw === "false";
     case "date": {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return false;
-      const timestamp = Date.parse(`${raw}T00:00:00`);
-      return !Number.isNaN(timestamp);
+      const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!match) return false;
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      return isValidDateParts(year, month, day);
     }
-    case "time":
-      return /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(raw);
+    case "time": {
+      const match = raw.match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+      if (!match) return false;
+      const hour = Number(match[1]);
+      const minute = Number(match[2]);
+      const second = match[3] ? Number(match[3]) : 0;
+      return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 && second >= 0 && second <= 59;
+    }
     case "datetime": {
-      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(raw)) return false;
-      const timestamp = Date.parse(raw);
-      return !Number.isNaN(timestamp);
+      const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+      if (!match) return false;
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      const hour = Number(match[4]);
+      const minute = Number(match[5]);
+      const second = match[6] ? Number(match[6]) : 0;
+      if (!isValidDateParts(year, month, day)) return false;
+      return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 && second >= 0 && second <= 59;
     }
     case "text":
     default:
@@ -414,7 +447,8 @@ function validateConditionNodes(
     }
 
     if (rules.length > 1) {
-      const hasExplicitLogic = typeof s.conditionConfig?.logic === "string";
+      const hasExplicitLogic = typeof s.conditionConfig?.logic === "string"
+        && String(s.conditionConfig?.logic || "").trim() !== "";
       const logic = hasExplicitLogic
         ? String(s.conditionConfig?.logic || "").trim()
         : buildDefaultConditionLogic(rules.length, join);
@@ -1085,7 +1119,12 @@ export default function WorkflowBuilderPage() {
   }, [searchParams, showToast, authFetch, orgApiBase]);
 
   useEffect(() => {
-    if (!organization?.id) return;
+    if (!organization?.id) {
+      setDepartments([]);
+      setRoles([]);
+      setEmployees([]);
+      return;
+    }
     let cancelled = false;
 
     (async () => {
@@ -1116,6 +1155,8 @@ export default function WorkflowBuilderPage() {
         if (!cancelled && employeesRes.ok) {
           const employeesData = await employeesRes.json();
           setEmployees(Array.isArray(employeesData) ? employeesData : []);
+        } else if (!cancelled) {
+          setEmployees([]);
         }
       } catch {
         if (!cancelled) {
