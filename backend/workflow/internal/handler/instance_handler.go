@@ -2,9 +2,11 @@ package handler
 
 import (
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,6 +84,13 @@ func (h *InstanceHandler) StartFromGoogleForms(c *gin.Context) {
 	}
 
 	normalizedData := normalizeGoogleFormsData(wf.Trigger.Config, req.Data)
+	validatedData, validationErr := validateAndCoerceGoogleFormsData(wf.Trigger.Config, normalizedData)
+	if validationErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": validationErr.Error()})
+		return
+	}
+	normalizedData = validatedData
+
 	responseID := ""
 	if responseVal, ok := normalizedData["_response_id"]; ok && responseVal != nil {
 		responseID = strings.TrimSpace(fmt.Sprint(responseVal))
@@ -141,6 +150,338 @@ func normalizeGoogleFormsData(triggerConfig map[string]string, payload map[strin
 	}
 
 	return out
+}
+
+type triggerFieldSchemaItem struct {
+	QuestionID string `json:"question_id"`
+	Title      string `json:"title"`
+	Required   bool   `json:"required"`
+	FieldType  string `json:"field_type"`
+	Variable   string `json:"variable"`
+	DataType   string `json:"data_type"`
+}
+
+func validateAndCoerceGoogleFormsData(triggerConfig map[string]string, data map[string]interface{}) (map[string]interface{}, error) {
+	if triggerConfig == nil {
+		return data, nil
+	}
+	rawSchema := strings.TrimSpace(triggerConfig["field_schema"])
+	if rawSchema == "" {
+		return data, nil
+	}
+
+	var schema []triggerFieldSchemaItem
+	if err := json.Unmarshal([]byte(rawSchema), &schema); err != nil {
+		return nil, fmt.Errorf("invalid trigger field_schema")
+	}
+
+	out := make(map[string]interface{}, len(data))
+	for key, value := range data {
+		out[key] = value
+	}
+
+	for _, item := range schema {
+		fieldKey := strings.TrimSpace(item.Variable)
+		if fieldKey == "" {
+			fieldKey = strings.TrimSpace(item.QuestionID)
+		}
+		if fieldKey == "" {
+			continue
+		}
+
+		rawValue, exists := out[fieldKey]
+		if !exists || isEmptyTriggerValue(rawValue) {
+			if item.Required {
+				return nil, fmt.Errorf("required trigger field %q is missing", triggerFieldLabel(item, fieldKey))
+			}
+			continue
+		}
+
+		dataType := resolveTriggerFieldDataType(item)
+		coerced, ok := coerceTriggerValueByDataType(rawValue, dataType)
+		if !ok {
+			return nil, fmt.Errorf("trigger field %q must be %s", triggerFieldLabel(item, fieldKey), dataType)
+		}
+		out[fieldKey] = coerced
+	}
+
+	return out, nil
+}
+
+func triggerFieldLabel(item triggerFieldSchemaItem, fallback string) string {
+	if title := strings.TrimSpace(item.Title); title != "" {
+		return title
+	}
+	if variable := strings.TrimSpace(item.Variable); variable != "" {
+		return variable
+	}
+	if questionID := strings.TrimSpace(item.QuestionID); questionID != "" {
+		return questionID
+	}
+	return fallback
+}
+
+func resolveTriggerFieldDataType(item triggerFieldSchemaItem) string {
+	if explicit := normalizeTriggerDataType(item.DataType); explicit != "" {
+		return explicit
+	}
+	switch strings.ToLower(strings.TrimSpace(item.FieldType)) {
+	case "scale", "number", "numeric":
+		return "number"
+	case "date":
+		return "date"
+	case "time":
+		return "time"
+	case "datetime", "date_time", "timestamp":
+		return "datetime"
+	case "bool", "boolean", "yes_no":
+		return "boolean"
+	default:
+		return "text"
+	}
+}
+
+func normalizeTriggerDataType(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "number", "numeric", "int", "float", "decimal":
+		return "number"
+	case "boolean", "bool":
+		return "boolean"
+	case "date":
+		return "date"
+	case "time":
+		return "time"
+	case "datetime", "date_time", "timestamp":
+		return "datetime"
+	case "text", "string", "":
+		return "text"
+	default:
+		return "text"
+	}
+}
+
+func coerceTriggerValueByDataType(value interface{}, dataType string) (interface{}, bool) {
+	switch dataType {
+	case "number":
+		return coerceTriggerNumber(value)
+	case "boolean":
+		return coerceTriggerBoolean(value)
+	case "date":
+		return coerceTriggerDate(value)
+	case "time":
+		return coerceTriggerTime(value)
+	case "datetime":
+		return coerceTriggerDateTime(value)
+	case "text":
+		return strings.TrimSpace(fmt.Sprint(value)), true
+	default:
+		return strings.TrimSpace(fmt.Sprint(value)), true
+	}
+}
+
+func coerceTriggerNumber(value interface{}) (interface{}, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int8:
+		return float64(typed), true
+	case int16:
+		return float64(typed), true
+	case int32:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case uint:
+		return float64(typed), true
+	case uint8:
+		return float64(typed), true
+	case uint16:
+		return float64(typed), true
+	case uint32:
+		return float64(typed), true
+	case uint64:
+		return float64(typed), true
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err != nil {
+			return nil, false
+		}
+		return parsed, true
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err != nil {
+			return nil, false
+		}
+		return parsed, true
+	default:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(value)), 64)
+		if err != nil {
+			return nil, false
+		}
+		return parsed, true
+	}
+}
+
+func coerceTriggerBoolean(value interface{}) (interface{}, bool) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes", "y":
+			return true, true
+		case "false", "0", "no", "n":
+			return false, true
+		default:
+			return nil, false
+		}
+	case float64:
+		if typed == 1 {
+			return true, true
+		}
+		if typed == 0 {
+			return false, true
+		}
+		return nil, false
+	default:
+		text := strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+		switch text {
+		case "true", "1", "yes", "y":
+			return true, true
+		case "false", "0", "no", "n":
+			return false, true
+		default:
+			return nil, false
+		}
+	}
+}
+
+func coerceTriggerDate(value interface{}) (interface{}, bool) {
+	parsed, ok := parseTriggerDateValue(value)
+	if !ok {
+		return nil, false
+	}
+	return parsed.Format("2006-01-02"), true
+}
+
+func coerceTriggerTime(value interface{}) (interface{}, bool) {
+	parsed, ok := parseTriggerClockValue(value)
+	if !ok {
+		return nil, false
+	}
+	return parsed.Format("15:04:05"), true
+}
+
+func coerceTriggerDateTime(value interface{}) (interface{}, bool) {
+	parsed, ok := parseTriggerDateTimeValue(value)
+	if !ok {
+		return nil, false
+	}
+	return parsed.Format(time.RFC3339), true
+}
+
+func parseTriggerDateValue(value interface{}) (time.Time, bool) {
+	if value == nil {
+		return time.Time{}, false
+	}
+	if typed, ok := value.(time.Time); ok {
+		y, m, d := typed.Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC), true
+	}
+	raw := strings.TrimSpace(fmt.Sprint(value))
+	if raw == "" {
+		return time.Time{}, false
+	}
+
+	layouts := []string{
+		"2006-01-02",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04",
+		"2006-01-02T15:04:05",
+		time.RFC3339,
+	}
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, raw)
+		if err == nil {
+			y, m, d := parsed.Date()
+			return time.Date(y, m, d, 0, 0, 0, 0, time.UTC), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func parseTriggerDateTimeValue(value interface{}) (time.Time, bool) {
+	if value == nil {
+		return time.Time{}, false
+	}
+	if typed, ok := value.(time.Time); ok {
+		return typed, true
+	}
+	raw := strings.TrimSpace(fmt.Sprint(value))
+	if raw == "" {
+		return time.Time{}, false
+	}
+
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04",
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04",
+	}
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, raw)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func parseTriggerClockValue(value interface{}) (time.Time, bool) {
+	if value == nil {
+		return time.Time{}, false
+	}
+	raw := strings.TrimSpace(fmt.Sprint(value))
+	if raw == "" {
+		return time.Time{}, false
+	}
+
+	layouts := []string{
+		"15:04",
+		"15:04:05",
+		time.Kitchen,
+	}
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, raw)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func isEmptyTriggerValue(value interface{}) bool {
+	if value == nil {
+		return true
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed) == ""
+	case []interface{}:
+		return len(typed) == 0
+	case []string:
+		return len(typed) == 0
+	case map[string]interface{}:
+		return len(typed) == 0
+	default:
+		return false
+	}
 }
 
 func parseFieldMappingCSV(raw string) map[string]string {
