@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -323,11 +324,9 @@ func (e *Executor) walkNode(instanceID, nodeID string, wf *models.Workflow, data
 		return
 
 	case models.NodeCondition:
-		branch := e.evalCondition(node.Condition, data)
-		e.audit(instanceID, nodeID, "condition_evaluated", map[string]interface{}{
-			"expression": node.Condition,
-			"branch":     branch,
-		})
+		branch, details := e.evalConditionForNode(node, wf, data)
+		details["branch"] = branch
+		e.audit(instanceID, nodeID, "condition_evaluated", details)
 		e.setNodeState(instanceID, nodeID, "completed")
 		e.walkNext(instanceID, node, branch, wf, data, authHeader)
 		return
@@ -391,26 +390,50 @@ func (e *Executor) walkNext(instanceID string, node *models.WorkflowNode, result
 }
 
 func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *models.WorkflowNode, data map[string]interface{}, authHeader string) (string, error) {
-	assignedUser := node.AssignedUser
+	assignmentTargets, assignedRoles, assignedUsers := extractNodeAssignmentTargets(node)
+	hasExplicitTargetConfig := len(node.AssignedTargets) > 0 || len(node.AssignedRoles) > 0 || len(node.AssignedUsers) > 0
+
 	assignedRole := strings.TrimSpace(node.AssignedRole)
-	if e.assigneeSelector != nil {
-		resolvedUser, err := e.selectAssignee(wf.OrgID, node.AssignedRole, node.AssignedUser, authHeader)
-		if err != nil {
-			log.Printf("executor: assignee lookup failed for role=%q org=%q: %v", node.AssignedRole, wf.OrgID, err)
-			e.audit(instanceID, node.ID, "assignee_lookup_failed", map[string]interface{}{
-				"role":  node.AssignedRole,
-				"error": err.Error(),
+	if len(assignedRoles) > 0 {
+		assignedRole = assignedRoles[0]
+	}
+	assignedUser := strings.TrimSpace(node.AssignedUser)
+
+	if hasExplicitTargetConfig {
+		if len(assignedRoles) == 0 && len(assignedUsers) == 0 {
+			e.audit(instanceID, node.ID, "assignee_unresolved", map[string]interface{}{
+				"targets": assignmentTargets,
 			})
-			return "", fmt.Errorf("resolve assignee: %w", err)
+			return "", ErrNoEligibleAssignee
 		}
-		assignedUser = resolvedUser
+		assignedUser = ""
+	} else {
+		if e.assigneeSelector != nil {
+			resolvedUser, err := e.selectAssignee(wf.OrgID, node.AssignedRole, node.AssignedUser, authHeader)
+			if err != nil {
+				log.Printf("executor: assignee lookup failed for role=%q org=%q: %v", node.AssignedRole, wf.OrgID, err)
+				e.audit(instanceID, node.ID, "assignee_lookup_failed", map[string]interface{}{
+					"role":  node.AssignedRole,
+					"error": err.Error(),
+				})
+				return "", fmt.Errorf("resolve assignee: %w", err)
+			}
+			assignedUser = strings.TrimSpace(resolvedUser)
+		}
+
+		if assignedRole != "" && assignedUser == "" {
+			e.audit(instanceID, node.ID, "assignee_unresolved", map[string]interface{}{
+				"role": assignedRole,
+			})
+			return "", ErrNoEligibleAssignee
+		}
 	}
 
-	if assignedRole != "" && strings.TrimSpace(assignedUser) == "" {
-		e.audit(instanceID, node.ID, "assignee_unresolved", map[string]interface{}{
-			"role": node.AssignedRole,
-		})
-		return "", ErrNoEligibleAssignee
+	if len(assignedRoles) == 0 && assignedRole != "" {
+		assignedRoles = []string{assignedRole}
+	}
+	if len(assignedUsers) == 0 && strings.TrimSpace(node.AssignedUser) != "" {
+		assignedUsers = []string{strings.TrimSpace(node.AssignedUser)}
 	}
 
 	task := models.TaskAssignment{
@@ -420,7 +443,10 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 		NodeID:           node.ID,
 		Title:            node.Title,
 		Description:      node.Description,
-		AssignedRole:     node.AssignedRole,
+		AssignedRole:     assignedRole,
+		AssignedRoles:    assignedRoles,
+		AssignedUsers:    assignedUsers,
+		AssignedTargets:  assignmentTargets,
 		AssignedPosition: node.AssignedPosition,
 		AssignedUser:     assignedUser,
 		AllowedActions:   node.TaskActions,
@@ -437,10 +463,13 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 	}
 
 	e.audit(instanceID, node.ID, "task_assigned", map[string]interface{}{
-		"task_id":         taskID,
-		"assigned_role":   node.AssignedRole,
-		"assigned_user":   assignedUser,
-		"allowed_actions": node.TaskActions,
+		"task_id":          taskID,
+		"assigned_role":    task.AssignedRole,
+		"assigned_roles":   task.AssignedRoles,
+		"assigned_users":   task.AssignedUsers,
+		"assigned_targets": task.AssignedTargets,
+		"assigned_user":    task.AssignedUser,
+		"allowed_actions":  node.TaskActions,
 	})
 
 	if _, err := e.saveInstanceMutation(instanceID, func(inst *models.Instance) {
@@ -452,6 +481,98 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 
 	return "", nil
 }
+
+func extractNodeAssignmentTargets(node *models.WorkflowNode) ([]string, []string, []string) {
+	rawTargets := make([]string, 0, len(node.AssignedTargets))
+	rawTargets = append(rawTargets, node.AssignedTargets...)
+	if len(rawTargets) == 0 {
+		for _, role := range node.AssignedRoles {
+			role = strings.TrimSpace(role)
+			if role == "" {
+				continue
+			}
+			rawTargets = append(rawTargets, "#"+role)
+		}
+		for _, user := range node.AssignedUsers {
+			user = strings.TrimSpace(user)
+			if user == "" {
+				continue
+			}
+			rawTargets = append(rawTargets, "@"+user)
+		}
+	}
+	if len(rawTargets) == 0 {
+		if role := strings.TrimSpace(node.AssignedRole); role != "" {
+			rawTargets = append(rawTargets, "#"+role)
+		}
+		if user := strings.TrimSpace(node.AssignedUser); user != "" {
+			rawTargets = append(rawTargets, "@"+user)
+		}
+	}
+
+	targets := make([]string, 0, len(rawTargets))
+	roles := make([]string, 0, len(rawTargets))
+	users := make([]string, 0, len(rawTargets))
+	seenTargets := map[string]struct{}{}
+	seenRoles := map[string]struct{}{}
+	seenUsers := map[string]struct{}{}
+
+	for _, raw := range rawTargets {
+		token := normalizeAssignmentToken(raw)
+		if token == "" {
+			continue
+		}
+		targetKey := strings.ToLower(token)
+		if _, ok := seenTargets[targetKey]; ok {
+			continue
+		}
+		seenTargets[targetKey] = struct{}{}
+		targets = append(targets, token)
+
+		if strings.HasPrefix(token, "#") {
+			role := strings.TrimSpace(strings.TrimPrefix(token, "#"))
+			roleKey := strings.ToLower(role)
+			if role != "" {
+				if _, ok := seenRoles[roleKey]; !ok {
+					seenRoles[roleKey] = struct{}{}
+					roles = append(roles, role)
+				}
+			}
+			continue
+		}
+
+		if strings.HasPrefix(token, "@") {
+			user := strings.TrimSpace(strings.TrimPrefix(token, "@"))
+			userKey := strings.ToLower(user)
+			if user != "" {
+				if _, ok := seenUsers[userKey]; !ok {
+					seenUsers[userKey] = struct{}{}
+					users = append(users, user)
+				}
+			}
+		}
+	}
+
+	return targets, roles, users
+}
+
+func normalizeAssignmentToken(raw string) string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return ""
+	}
+	if !strings.HasPrefix(text, "#") && !strings.HasPrefix(text, "@") {
+		return ""
+	}
+	prefix := text[:1]
+	body := strings.TrimSpace(text[1:])
+	body = strings.Join(strings.Fields(body), " ")
+	if body == "" {
+		return ""
+	}
+	return prefix + body
+}
+
 func (e *Executor) executeAction(instanceID, orgID string, node *models.WorkflowNode, data map[string]interface{}) error {
 	if node.Connector == nil {
 		return fmt.Errorf("missing connector configuration")
@@ -710,68 +831,650 @@ func (e *Executor) markNodeFailed(instanceID, nodeID, output string) {
 	}
 }
 
-func (e *Executor) evalCondition(condition string, data map[string]interface{}) string {
-	condition = strings.TrimSpace(condition)
-	if condition == "" {
-		return "yes"
+func (e *Executor) evalConditionForNode(node *models.WorkflowNode, wf *models.Workflow, data map[string]interface{}) (string, map[string]interface{}) {
+	details := map[string]interface{}{
+		"mode": "structured",
+	}
+	if node == nil || node.ConditionConfig == nil {
+		details["reason"] = "missing_condition_config"
+		return "no", details
 	}
 
-	ops := []string{"==", "!=", ">=", "<=", ">", "<"}
-	for _, op := range ops {
-		parts := strings.Split(condition, op)
-		if len(parts) != 2 {
+	cfg := node.ConditionConfig
+	join := strings.ToLower(strings.TrimSpace(string(cfg.Join)))
+	if join != string(models.ConditionJoinOr) {
+		join = string(models.ConditionJoinAnd)
+	}
+	details["join"] = join
+
+	rules := make([]models.ConditionRule, 0, len(cfg.Rules))
+	for _, rule := range cfg.Rules {
+		if strings.TrimSpace(rule.Field) == "" {
 			continue
 		}
-		left := strings.TrimSpace(parts[0])
-		right := strings.TrimSpace(parts[1])
-		v, ok := data[left]
-		if !ok {
-			return "no"
+		if strings.TrimSpace(string(rule.Operator)) == "" {
+			continue
 		}
-		leftStr := fmt.Sprintf("%v", v)
+		rules = append(rules, rule)
+	}
+	details["rules_count"] = len(rules)
+	if len(rules) == 0 {
+		details["reason"] = "no_rules"
+		return "no", details
+	}
 
-		switch op {
-		case "==":
-			if leftStr == right {
-				return "yes"
-			}
-			return "no"
-		case "!=":
-			if leftStr != right {
-				return "yes"
-			}
-			return "no"
-		case ">", "<", ">=", "<=":
-			lf, leftOK := toFloat(v)
-			rf, rightOK := toFloat(right)
-			if !leftOK || !rightOK {
-				log.Printf("executor: evalCondition numeric parse failed condition=%q left=%v right=%q", condition, v, right)
-				return "no"
-			}
-			switch op {
-			case ">":
-				if lf > rf {
-					return "yes"
-				}
-			case "<":
-				if lf < rf {
-					return "yes"
-				}
-			case ">=":
-				if lf >= rf {
-					return "yes"
-				}
-			case "<=":
-				if lf <= rf {
-					return "yes"
-				}
-			}
-			return "no"
+	ruleResults := make([]bool, len(rules))
+	matchedCount := 0
+	firstFailedIndex := -1
+	firstFailedReason := ""
+	firstFailedType := models.ConditionDataType("")
+
+	for idx, rule := range rules {
+		ruleMatched, ruleReason, dataType := e.evalConditionRule(rule, wf, data)
+		ruleResults[idx] = ruleMatched
+		if ruleMatched {
+			matchedCount++
+			continue
+		}
+		if firstFailedIndex == -1 {
+			firstFailedIndex = idx
+			firstFailedReason = ruleReason
+			firstFailedType = dataType
 		}
 	}
 
-	log.Printf("executor: evalCondition malformed expression condition=%q", condition)
-	return "no"
+	details["matched_rules"] = matchedCount
+	if firstFailedIndex >= 0 {
+		details["failed_rule_index"] = firstFailedIndex
+		details["data_type"] = string(firstFailedType)
+	}
+
+	logic := strings.TrimSpace(cfg.Logic)
+	if logic != "" {
+		details["logic"] = logic
+		logicMatched, err := evaluateConditionLogicExpression(logic, ruleResults)
+		if err != nil {
+			details["reason"] = "invalid_logic_expression"
+			details["logic_error"] = err.Error()
+			return "no", details
+		}
+		if logicMatched {
+			return "yes", details
+		}
+		details["reason"] = "logic_expression_false"
+		if firstFailedReason != "" {
+			details["rule_reason"] = firstFailedReason
+		}
+		return "no", details
+	}
+
+	if join == string(models.ConditionJoinAnd) {
+		if matchedCount == len(rules) {
+			return "yes", details
+		}
+		if firstFailedReason != "" {
+			details["reason"] = firstFailedReason
+		}
+		return "no", details
+	}
+
+	if matchedCount > 0 {
+		for idx, matched := range ruleResults {
+			if matched {
+				details["matched_rule_index"] = idx
+				break
+			}
+		}
+		return "yes", details
+	}
+
+	if firstFailedReason != "" {
+		details["reason"] = firstFailedReason
+	} else {
+		details["reason"] = "no_rule_matched"
+	}
+	return "no", details
+}
+
+func evaluateConditionLogicExpression(raw string, ruleResults []bool) (bool, error) {
+	tokens, err := tokenizeConditionLogicExpression(raw)
+	if err != nil {
+		return false, err
+	}
+	if len(tokens) == 0 {
+		return false, errors.New("logic expression is empty")
+	}
+
+	parser := &conditionLogicParser{
+		tokens:      tokens,
+		ruleResults: ruleResults,
+	}
+	value, parseErr := parser.parseExpr()
+	if parseErr != nil {
+		return false, parseErr
+	}
+	if parser.pos != len(tokens) {
+		return false, fmt.Errorf("unexpected token %q", tokens[parser.pos])
+	}
+	return value, nil
+}
+
+func tokenizeConditionLogicExpression(raw string) ([]string, error) {
+	input := strings.TrimSpace(raw)
+	if input == "" {
+		return nil, nil
+	}
+
+	tokens := make([]string, 0, len(input)/2)
+	for i := 0; i < len(input); {
+		ch := input[i]
+		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+			i++
+			continue
+		}
+		if ch == '(' || ch == ')' {
+			tokens = append(tokens, string(ch))
+			i++
+			continue
+		}
+		if ch >= '0' && ch <= '9' {
+			j := i + 1
+			for j < len(input) && input[j] >= '0' && input[j] <= '9' {
+				j++
+			}
+			tokens = append(tokens, input[i:j])
+			i = j
+			continue
+		}
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+			j := i + 1
+			for j < len(input) {
+				next := input[j]
+				if !((next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z')) {
+					break
+				}
+				j++
+			}
+			word := strings.ToUpper(input[i:j])
+			if word != "AND" && word != "OR" {
+				return nil, fmt.Errorf("unsupported token %q", word)
+			}
+			tokens = append(tokens, word)
+			i = j
+			continue
+		}
+		return nil, fmt.Errorf("invalid character %q", string(ch))
+	}
+
+	return tokens, nil
+}
+
+type conditionLogicParser struct {
+	tokens      []string
+	pos         int
+	ruleResults []bool
+}
+
+func (p *conditionLogicParser) parseExpr() (bool, error) {
+	left, err := p.parseTerm()
+	if err != nil {
+		return false, err
+	}
+	for p.pos < len(p.tokens) && p.tokens[p.pos] == "OR" {
+		p.pos++
+		right, rightErr := p.parseTerm()
+		if rightErr != nil {
+			return false, rightErr
+		}
+		left = left || right
+	}
+	return left, nil
+}
+
+func (p *conditionLogicParser) parseTerm() (bool, error) {
+	left, err := p.parseFactor()
+	if err != nil {
+		return false, err
+	}
+	for p.pos < len(p.tokens) && p.tokens[p.pos] == "AND" {
+		p.pos++
+		right, rightErr := p.parseFactor()
+		if rightErr != nil {
+			return false, rightErr
+		}
+		left = left && right
+	}
+	return left, nil
+}
+
+func (p *conditionLogicParser) parseFactor() (bool, error) {
+	if p.pos >= len(p.tokens) {
+		return false, errors.New("unexpected end of logic expression")
+	}
+
+	token := p.tokens[p.pos]
+	if token == "(" {
+		p.pos++
+		value, err := p.parseExpr()
+		if err != nil {
+			return false, err
+		}
+		if p.pos >= len(p.tokens) || p.tokens[p.pos] != ")" {
+			return false, errors.New("missing closing parenthesis")
+		}
+		p.pos++
+		return value, nil
+	}
+
+	ruleIndex, err := strconv.Atoi(token)
+	if err != nil || ruleIndex <= 0 {
+		return false, fmt.Errorf("invalid rule reference %q", token)
+	}
+	if ruleIndex > len(p.ruleResults) {
+		return false, fmt.Errorf("rule reference %d is out of range (max %d)", ruleIndex, len(p.ruleResults))
+	}
+
+	p.pos++
+	return p.ruleResults[ruleIndex-1], nil
+}
+
+func (e *Executor) evalConditionRule(rule models.ConditionRule, wf *models.Workflow, data map[string]interface{}) (bool, string, models.ConditionDataType) {
+	field := strings.TrimSpace(rule.Field)
+	if field == "" {
+		return false, "field_missing", ""
+	}
+	rawValue, found := data[field]
+	if !found {
+		return false, "field_missing", ""
+	}
+
+	dataType := normalizeConditionDataType(string(rule.DataType))
+	if dataType == "" {
+		dataType = inferConditionDataTypeFromTriggerField(wf, field)
+	}
+	if dataType == "" {
+		dataType = inferConditionDataTypeFromValue(rawValue)
+	}
+	if dataType == "" {
+		dataType = models.ConditionDataTypeText
+	}
+
+	if !isOperatorSupportedForDataType(dataType, rule.Operator) {
+		return false, "operator_not_supported_for_data_type", dataType
+	}
+
+	matched, reason := evaluateTypedCondition(dataType, rule.Operator, rawValue, rule.Value)
+	if reason != "" {
+		return false, reason, dataType
+	}
+	if matched {
+		return true, "", dataType
+	}
+	return false, "rule_not_matched", dataType
+}
+
+func normalizeConditionDataType(raw string) models.ConditionDataType {
+	value := strings.TrimSpace(strings.ToLower(raw))
+	switch value {
+	case "number", "numeric", "int", "float", "decimal":
+		return models.ConditionDataTypeNumber
+	case "boolean", "bool":
+		return models.ConditionDataTypeBoolean
+	case "date":
+		return models.ConditionDataTypeDate
+	case "datetime", "date_time", "timestamp":
+		return models.ConditionDataTypeDateTime
+	case "time":
+		return models.ConditionDataTypeTime
+	case "text", "string":
+		return models.ConditionDataTypeText
+	case "":
+		return ""
+	default:
+		return ""
+	}
+}
+
+func inferConditionDataTypeFromTriggerField(wf *models.Workflow, field string) models.ConditionDataType {
+	if wf == nil || wf.Trigger.Config == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(wf.Trigger.Config["field_schema"])
+	if raw == "" {
+		return ""
+	}
+	var schema []struct {
+		QuestionID string `json:"question_id"`
+		FieldType  string `json:"field_type"`
+		Variable   string `json:"variable"`
+		DataType   string `json:"data_type"`
+	}
+	if err := json.Unmarshal([]byte(raw), &schema); err != nil {
+		return ""
+	}
+	for _, item := range schema {
+		if strings.TrimSpace(item.Variable) != field {
+			continue
+		}
+		if dataType := normalizeConditionDataType(item.DataType); dataType != "" {
+			return dataType
+		}
+		switch strings.ToLower(strings.TrimSpace(item.FieldType)) {
+		case "scale":
+			return models.ConditionDataTypeNumber
+		case "date":
+			return models.ConditionDataTypeDate
+		case "time":
+			return models.ConditionDataTypeTime
+		default:
+			return models.ConditionDataTypeText
+		}
+	}
+	return ""
+}
+
+func inferConditionDataTypeFromValue(value interface{}) models.ConditionDataType {
+	switch v := value.(type) {
+	case bool:
+		return models.ConditionDataTypeBoolean
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		return models.ConditionDataTypeNumber
+	case time.Time:
+		return models.ConditionDataTypeDateTime
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return models.ConditionDataTypeText
+		}
+		if _, ok := toBool(s); ok {
+			return models.ConditionDataTypeBoolean
+		}
+		if _, ok := toFloat(s); ok {
+			return models.ConditionDataTypeNumber
+		}
+		if _, ok := parseDateValue(s); ok {
+			return models.ConditionDataTypeDate
+		}
+		if _, ok := parseDateTimeValue(s); ok {
+			return models.ConditionDataTypeDateTime
+		}
+		if _, ok := parseTimeValue(s); ok {
+			return models.ConditionDataTypeTime
+		}
+		return models.ConditionDataTypeText
+	default:
+		return models.ConditionDataTypeText
+	}
+}
+
+func isOperatorSupportedForDataType(dataType models.ConditionDataType, operator models.ConditionOperator) bool {
+	switch dataType {
+	case models.ConditionDataTypeText:
+		switch operator {
+		case models.ConditionOperatorEquals,
+			models.ConditionOperatorNotEquals,
+			models.ConditionOperatorContains,
+			models.ConditionOperatorNotContains,
+			models.ConditionOperatorStartsWith,
+			models.ConditionOperatorEndsWith,
+			models.ConditionOperatorIsEmpty,
+			models.ConditionOperatorIsNotEmpty:
+			return true
+		default:
+			return false
+		}
+	case models.ConditionDataTypeNumber, models.ConditionDataTypeDate, models.ConditionDataTypeDateTime, models.ConditionDataTypeTime:
+		switch operator {
+		case models.ConditionOperatorEquals,
+			models.ConditionOperatorNotEquals,
+			models.ConditionOperatorGreaterThan,
+			models.ConditionOperatorGreaterEq,
+			models.ConditionOperatorLessThan,
+			models.ConditionOperatorLessEq,
+			models.ConditionOperatorIsEmpty,
+			models.ConditionOperatorIsNotEmpty:
+			return true
+		default:
+			return false
+		}
+	case models.ConditionDataTypeBoolean:
+		switch operator {
+		case models.ConditionOperatorEquals,
+			models.ConditionOperatorNotEquals,
+			models.ConditionOperatorIsEmpty,
+			models.ConditionOperatorIsNotEmpty:
+			return true
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+func evaluateTypedCondition(dataType models.ConditionDataType, operator models.ConditionOperator, left interface{}, right interface{}) (bool, string) {
+	if operator == models.ConditionOperatorIsEmpty {
+		return isEmptyValue(left), ""
+	}
+	if operator == models.ConditionOperatorIsNotEmpty {
+		return !isEmptyValue(left), ""
+	}
+
+	switch dataType {
+	case models.ConditionDataTypeText:
+		leftValue := strings.TrimSpace(fmt.Sprintf("%v", left))
+		rightValue := strings.TrimSpace(fmt.Sprintf("%v", right))
+		switch operator {
+		case models.ConditionOperatorEquals:
+			return leftValue == rightValue, ""
+		case models.ConditionOperatorNotEquals:
+			return leftValue != rightValue, ""
+		case models.ConditionOperatorContains:
+			return strings.Contains(strings.ToLower(leftValue), strings.ToLower(rightValue)), ""
+		case models.ConditionOperatorNotContains:
+			return !strings.Contains(strings.ToLower(leftValue), strings.ToLower(rightValue)), ""
+		case models.ConditionOperatorStartsWith:
+			return strings.HasPrefix(strings.ToLower(leftValue), strings.ToLower(rightValue)), ""
+		case models.ConditionOperatorEndsWith:
+			return strings.HasSuffix(strings.ToLower(leftValue), strings.ToLower(rightValue)), ""
+		default:
+			return false, "unsupported_operator"
+		}
+
+	case models.ConditionDataTypeNumber:
+		leftNum, leftOK := toFloat(left)
+		rightNum, rightOK := toFloat(right)
+		if !leftOK || !rightOK {
+			return false, "type_mismatch"
+		}
+		switch operator {
+		case models.ConditionOperatorEquals:
+			return leftNum == rightNum, ""
+		case models.ConditionOperatorNotEquals:
+			return leftNum != rightNum, ""
+		case models.ConditionOperatorGreaterThan:
+			return leftNum > rightNum, ""
+		case models.ConditionOperatorGreaterEq:
+			return leftNum >= rightNum, ""
+		case models.ConditionOperatorLessThan:
+			return leftNum < rightNum, ""
+		case models.ConditionOperatorLessEq:
+			return leftNum <= rightNum, ""
+		default:
+			return false, "unsupported_operator"
+		}
+
+	case models.ConditionDataTypeBoolean:
+		leftBool, leftOK := toBool(left)
+		rightBool, rightOK := toBool(right)
+		if !leftOK || !rightOK {
+			return false, "type_mismatch"
+		}
+		switch operator {
+		case models.ConditionOperatorEquals:
+			return leftBool == rightBool, ""
+		case models.ConditionOperatorNotEquals:
+			return leftBool != rightBool, ""
+		default:
+			return false, "unsupported_operator"
+		}
+
+	case models.ConditionDataTypeDate:
+		leftTime, leftOK := coerceDateValue(left)
+		rightTime, rightOK := coerceDateValue(right)
+		if !leftOK || !rightOK {
+			return false, "type_mismatch"
+		}
+		return compareTimes(leftTime, rightTime, operator)
+
+	case models.ConditionDataTypeDateTime:
+		leftTime, leftOK := coerceDateTimeValue(left)
+		rightTime, rightOK := coerceDateTimeValue(right)
+		if !leftOK || !rightOK {
+			return false, "type_mismatch"
+		}
+		return compareTimes(leftTime, rightTime, operator)
+
+	case models.ConditionDataTypeTime:
+		leftTime, leftOK := coerceTimeValue(left)
+		rightTime, rightOK := coerceTimeValue(right)
+		if !leftOK || !rightOK {
+			return false, "type_mismatch"
+		}
+		return compareTimes(leftTime, rightTime, operator)
+	}
+
+	return false, "unsupported_data_type"
+}
+
+func compareTimes(left, right time.Time, operator models.ConditionOperator) (bool, string) {
+	switch operator {
+	case models.ConditionOperatorEquals:
+		return left.Equal(right), ""
+	case models.ConditionOperatorNotEquals:
+		return !left.Equal(right), ""
+	case models.ConditionOperatorGreaterThan:
+		return left.After(right), ""
+	case models.ConditionOperatorGreaterEq:
+		return left.After(right) || left.Equal(right), ""
+	case models.ConditionOperatorLessThan:
+		return left.Before(right), ""
+	case models.ConditionOperatorLessEq:
+		return left.Before(right) || left.Equal(right), ""
+	default:
+		return false, "unsupported_operator"
+	}
+}
+
+func coerceDateValue(value interface{}) (time.Time, bool) {
+	if t, ok := value.(time.Time); ok {
+		y, m, d := t.Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC), true
+	}
+	return parseDateValue(fmt.Sprintf("%v", value))
+}
+
+func coerceDateTimeValue(value interface{}) (time.Time, bool) {
+	if t, ok := value.(time.Time); ok {
+		return t, true
+	}
+	return parseDateTimeValue(fmt.Sprintf("%v", value))
+}
+
+func coerceTimeValue(value interface{}) (time.Time, bool) {
+	if t, ok := value.(time.Time); ok {
+		return t, true
+	}
+	return parseTimeValue(fmt.Sprintf("%v", value))
+}
+
+func parseDateValue(raw string) (time.Time, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{"2006-01-02", time.RFC3339, "2006-01-02 15:04:05", "2006-01-02T15:04", "2006-01-02T15:04:05"}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			y, m, d := parsed.Date()
+			return time.Date(y, m, d, 0, 0, 0, 0, time.UTC), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func parseDateTimeValue(raw string) (time.Time, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{time.RFC3339, "2006-01-02T15:04", "2006-01-02T15:04:05", "2006-01-02 15:04:05"}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, true
+		}
+	}
+	if parsed, err := time.Parse("2006-01-02", value); err == nil {
+		return parsed, true
+	}
+	return time.Time{}, false
+}
+
+func parseTimeValue(raw string) (time.Time, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{"15:04", "15:04:05", time.Kitchen}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, true
+		}
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed, true
+	}
+	return time.Time{}, false
+}
+
+func isEmptyValue(value interface{}) bool {
+	if value == nil {
+		return true
+	}
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v) == ""
+	case []string:
+		return len(v) == 0
+	case []interface{}:
+		return len(v) == 0
+	case map[string]interface{}:
+		return len(v) == 0
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", value)) == ""
+	}
+}
+
+func toBool(v interface{}) (bool, bool) {
+	switch value := v.(type) {
+	case bool:
+		return value, true
+	case string:
+		normalized := strings.TrimSpace(strings.ToLower(value))
+		switch normalized {
+		case "true", "1", "yes", "y":
+			return true, true
+		case "false", "0", "no", "n":
+			return false, true
+		default:
+			return false, false
+		}
+	default:
+		if num, ok := toFloat(v); ok {
+			return num != 0, true
+		}
+		return false, false
+	}
 }
 
 func toFloat(v interface{}) (float64, bool) {
@@ -862,30 +1565,79 @@ func (e *Executor) CanActOnTask(actorUserID string, task models.TaskAssignment, 
 }
 
 func (e *Executor) canClaimTask(actorUserID string, task models.TaskAssignment, authHeader string) (bool, error) {
-	roleName := strings.TrimSpace(task.AssignedRole)
-	if roleName == "" {
+	allowedUsers := uniqueNormalizedStrings(task.AssignedUsers)
+	allowedRoles := uniqueNormalizedStrings(task.AssignedRoles)
+	if len(allowedRoles) == 0 {
+		legacyRole := strings.TrimSpace(task.AssignedRole)
+		if legacyRole != "" {
+			allowedRoles = append(allowedRoles, legacyRole)
+		}
+	}
+
+	restricted := len(allowedUsers) > 0 || len(allowedRoles) > 0
+
+	for _, allowedUser := range allowedUsers {
+		if strings.EqualFold(strings.TrimSpace(allowedUser), actorUserID) {
+			return true, nil
+		}
+	}
+
+	if len(allowedRoles) == 0 {
+		if restricted {
+			return false, nil
+		}
 		return true, nil
 	}
 
 	directory := e.roleDirectory()
 	if directory == nil {
-		log.Printf("executor: roleDirectory returned nil for role-restricted task claim role=%q task_id=%q; allowing claim to avoid blocking workflow", roleName, task.ID)
+		log.Printf("executor: roleDirectory returned nil for role-restricted task claim roles=%v task_id=%q; allowing claim to avoid blocking workflow", allowedRoles, task.ID)
+		if restricted {
+			return true, nil
+		}
 		return true, nil
 	}
 
-	memberIDs, err := e.listRoleMemberIDs(directory, task.OrgID, roleName, authHeader)
-	if err != nil {
-		if errors.Is(err, ErrRoleNotFound) || errors.Is(err, ErrNoMembers) {
-			return false, nil
+	for _, roleName := range allowedRoles {
+		memberIDs, err := e.listRoleMemberIDs(directory, task.OrgID, roleName, authHeader)
+		if err != nil {
+			if errors.Is(err, ErrRoleNotFound) || errors.Is(err, ErrNoMembers) {
+				continue
+			}
+			return false, err
 		}
-		return false, err
-	}
-	for _, memberID := range memberIDs {
-		if strings.TrimSpace(memberID) == actorUserID {
-			return true, nil
+		for _, memberID := range memberIDs {
+			if strings.TrimSpace(memberID) == actorUserID {
+				return true, nil
+			}
 		}
 	}
-	return false, nil
+
+	if restricted {
+		return false, nil
+	}
+	return true, nil
+}
+
+func uniqueNormalizedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func (e *Executor) listRoleMemberIDs(directory RoleMemberDirectory, orgID, roleName, authHeader string) ([]string, error) {

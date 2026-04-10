@@ -431,8 +431,11 @@ func (m *MongoStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAss
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cursor, err := m.taskCol.Find(ctx, bson.M{
-		"org_id":        orgID,
-		"assigned_user": userID,
+		"org_id": orgID,
+		"$or": []bson.M{
+			{"assigned_user": userID},
+			{"assigned_users": userID, "status": string(models.TaskPending)},
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -449,9 +452,12 @@ func (m *MongoStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignmen
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cursor, err := m.taskCol.Find(ctx, bson.M{
-		"org_id":        orgID,
-		"assigned_role": role,
-		"status":        string(models.TaskPending),
+		"org_id": orgID,
+		"status": string(models.TaskPending),
+		"$or": []bson.M{
+			{"assigned_role": role},
+			{"assigned_roles": role},
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -471,9 +477,12 @@ func (m *MongoStore) ListTasksByRoles(orgID string, roles []string) ([]models.Ta
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cursor, err := m.taskCol.Find(ctx, bson.M{
-		"org_id":        orgID,
-		"assigned_role": bson.M{"$in": roles},
-		"status":        string(models.TaskPending),
+		"org_id": orgID,
+		"status": string(models.TaskPending),
+		"$or": []bson.M{
+			{"assigned_role": bson.M{"$in": roles}},
+			{"assigned_roles": bson.M{"$in": roles}},
+		},
 	})
 	if err != nil {
 		return nil, err

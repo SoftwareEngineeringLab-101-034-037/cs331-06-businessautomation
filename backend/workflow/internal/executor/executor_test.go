@@ -315,8 +315,20 @@ func (m *mockStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAssi
 	}
 	var out []models.TaskAssignment
 	for _, task := range m.tasks {
-		if task.OrgID == orgID && task.AssignedUser == userID {
+		if task.OrgID != orgID {
+			continue
+		}
+		if task.AssignedUser == userID {
 			out = append(out, task)
+			continue
+		}
+		if task.Status == models.TaskPending {
+			for _, allowedUser := range task.AssignedUsers {
+				if allowedUser == userID {
+					out = append(out, task)
+					break
+				}
+			}
 		}
 	}
 	return out, nil
@@ -330,8 +342,18 @@ func (m *mockStore) ListTasksByRole(orgID, role string) ([]models.TaskAssignment
 	}
 	var out []models.TaskAssignment
 	for _, task := range m.tasks {
-		if task.OrgID == orgID && task.AssignedRole == role {
+		if task.OrgID != orgID {
+			continue
+		}
+		if task.AssignedRole == role {
 			out = append(out, task)
+			continue
+		}
+		for _, assignedRole := range task.AssignedRoles {
+			if assignedRole == role {
+				out = append(out, task)
+				break
+			}
 		}
 	}
 	return out, nil
@@ -357,6 +379,13 @@ func (m *mockStore) ListTasksByRoles(orgID string, roles []string) ([]models.Tas
 		}
 		if _, ok := allowed[task.AssignedRole]; ok {
 			out = append(out, task)
+			continue
+		}
+		for _, assignedRole := range task.AssignedRoles {
+			if _, ok := allowed[assignedRole]; ok {
+				out = append(out, task)
+				break
+			}
 		}
 	}
 	return out, nil
@@ -444,28 +473,161 @@ func TestResolveParam(t *testing.T) {
 	}
 }
 
-func TestEvalCondition(t *testing.T) {
+func TestEvalConditionForNodeStructured(t *testing.T) {
 	e := NewExecutor(newMockStore(), &mockEmail{}, nil)
+	wf := &models.Workflow{
+		Trigger: models.Trigger{
+			Type: models.TriggerFormSubmit,
+			Config: map[string]string{
+				"field_schema": `[
+					{"question_id":"q_amount","title":"Amount","field_type":"scale","variable":"amount","data_type":"number"},
+					{"question_id":"q_dept","title":"Department","field_type":"text","variable":"department","data_type":"text"}
+				]`,
+			},
+		},
+	}
+
 	tests := []struct {
-		name string
-		cond string
-		data map[string]interface{}
-		want string
+		name        string
+		node        *models.WorkflowNode
+		data        map[string]interface{}
+		wantBranch  string
+		wantJoin    string
+		wantLogic   string
+		wantReason  string
+		wantMatched int
 	}{
-		{name: "empty condition", cond: "", data: map[string]interface{}{}, want: "yes"},
-		{name: "equals true", cond: "status == approved", data: map[string]interface{}{"status": "approved"}, want: "yes"},
-		{name: "not equals true", cond: "status != rejected", data: map[string]interface{}{"status": "approved"}, want: "yes"},
-		{name: "greater than true", cond: "amount > 100", data: map[string]interface{}{"amount": 150}, want: "yes"},
-		{name: "less than false", cond: "amount < 100", data: map[string]interface{}{"amount": 150}, want: "no"},
-		{name: "invalid expression falls back", cond: "this is invalid", data: map[string]interface{}{}, want: "no"},
-		{name: "invalid numeric comparison returns no", cond: "amount > nope", data: map[string]interface{}{"amount": 150}, want: "no"},
+		{
+			name: "single number rule",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join: models.ConditionJoinAnd,
+				Rules: []models.ConditionRule{{
+					Field:    "amount",
+					DataType: models.ConditionDataTypeNumber,
+					Operator: models.ConditionOperatorGreaterThan,
+					Value:    "100",
+				}},
+			}},
+			data:        map[string]interface{}{"amount": 120},
+			wantBranch:  "yes",
+			wantJoin:    "and",
+			wantMatched: 1,
+		},
+		{
+			name: "and combination with two matching rules",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join: models.ConditionJoinAnd,
+				Rules: []models.ConditionRule{
+					{Field: "amount", DataType: models.ConditionDataTypeNumber, Operator: models.ConditionOperatorGreaterEq, Value: "100"},
+					{Field: "department", DataType: models.ConditionDataTypeText, Operator: models.ConditionOperatorContains, Value: "fin"},
+				},
+			}},
+			data:        map[string]interface{}{"amount": 120, "department": "Finance"},
+			wantBranch:  "yes",
+			wantJoin:    "and",
+			wantMatched: 2,
+		},
+		{
+			name: "or combination with one matching rule",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join: models.ConditionJoinOr,
+				Rules: []models.ConditionRule{
+					{Field: "amount", DataType: models.ConditionDataTypeNumber, Operator: models.ConditionOperatorGreaterThan, Value: "1000"},
+					{Field: "department", DataType: models.ConditionDataTypeText, Operator: models.ConditionOperatorContains, Value: "fin"},
+				},
+			}},
+			data:        map[string]interface{}{"amount": 120, "department": "Finance"},
+			wantBranch:  "yes",
+			wantJoin:    "or",
+			wantMatched: 1,
+		},
+		{
+			name: "type mismatch routes no",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join: models.ConditionJoinAnd,
+				Rules: []models.ConditionRule{{
+					Field:    "amount",
+					DataType: models.ConditionDataTypeNumber,
+					Operator: models.ConditionOperatorGreaterThan,
+					Value:    "100",
+				}},
+			}},
+			data:       map[string]interface{}{"amount": "not-a-number"},
+			wantBranch: "no",
+			wantJoin:   "and",
+			wantReason: "type_mismatch",
+		},
+		{
+			name: "nested logic expression supports parentheses",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join:  models.ConditionJoinAnd,
+				Logic: "1 AND 2 AND (3 OR 4)",
+				Rules: []models.ConditionRule{
+					{Field: "amount", DataType: models.ConditionDataTypeNumber, Operator: models.ConditionOperatorGreaterEq, Value: "100"},
+					{Field: "department", DataType: models.ConditionDataTypeText, Operator: models.ConditionOperatorContains, Value: "fin"},
+					{Field: "amount", DataType: models.ConditionDataTypeNumber, Operator: models.ConditionOperatorLessThan, Value: "100"},
+					{Field: "department", DataType: models.ConditionDataTypeText, Operator: models.ConditionOperatorContains, Value: "fin"},
+				},
+			}},
+			data:        map[string]interface{}{"amount": 120, "department": "Finance"},
+			wantBranch:  "yes",
+			wantJoin:    "and",
+			wantLogic:   "1 AND 2 AND (3 OR 4)",
+			wantMatched: 3,
+		},
+		{
+			name: "invalid logic expression routes no",
+			node: &models.WorkflowNode{ConditionConfig: &models.ConditionConfig{
+				Join:  models.ConditionJoinAnd,
+				Logic: "1 AND (2 OR 9)",
+				Rules: []models.ConditionRule{
+					{Field: "amount", DataType: models.ConditionDataTypeNumber, Operator: models.ConditionOperatorGreaterEq, Value: "100"},
+					{Field: "department", DataType: models.ConditionDataTypeText, Operator: models.ConditionOperatorContains, Value: "fin"},
+				},
+			}},
+			data:       map[string]interface{}{"amount": 120, "department": "Finance"},
+			wantBranch: "no",
+			wantJoin:   "and",
+			wantLogic:  "1 AND (2 OR 9)",
+			wantReason: "invalid_logic_expression",
+		},
+		{
+			name:       "missing condition config routes no",
+			node:       &models.WorkflowNode{},
+			data:       map[string]interface{}{"amount": 100},
+			wantBranch: "no",
+			wantReason: "missing_condition_config",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := e.evalCondition(tt.cond, tt.data)
-			if got != tt.want {
-				t.Fatalf("evalCondition(%q) = %q, want %q", tt.cond, got, tt.want)
+			branch, details := e.evalConditionForNode(tt.node, wf, tt.data)
+			if branch != tt.wantBranch {
+				t.Fatalf("branch=%q want=%q details=%v", branch, tt.wantBranch, details)
+			}
+			if mode := fmt.Sprintf("%v", details["mode"]); mode != "structured" {
+				t.Fatalf("mode=%q want=%q details=%v", mode, "structured", details)
+			}
+			if tt.wantJoin != "" {
+				if join := fmt.Sprintf("%v", details["join"]); join != tt.wantJoin {
+					t.Fatalf("join=%q want=%q details=%v", join, tt.wantJoin, details)
+				}
+			}
+			if tt.wantLogic != "" {
+				if logic := fmt.Sprintf("%v", details["logic"]); logic != tt.wantLogic {
+					t.Fatalf("logic=%q want=%q details=%v", logic, tt.wantLogic, details)
+				}
+			}
+			if tt.wantReason != "" {
+				if reason := fmt.Sprintf("%v", details["reason"]); reason != tt.wantReason {
+					t.Fatalf("reason=%q want=%q details=%v", reason, tt.wantReason, details)
+				}
+			}
+			if tt.wantMatched > 0 {
+				if matched := fmt.Sprintf("%v", details["matched_rules"]); matched != fmt.Sprintf("%d", tt.wantMatched) {
+					t.Fatalf("matched_rules=%q want=%d details=%v", matched, tt.wantMatched, details)
+				}
 			}
 		})
 	}

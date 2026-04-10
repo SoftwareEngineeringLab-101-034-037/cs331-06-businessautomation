@@ -46,6 +46,54 @@ type ConnectorConfig struct {
 	Params map[string]interface{} `json:"params" bson:"params"`
 }
 
+type ConditionDataType string
+
+const (
+	ConditionDataTypeText     ConditionDataType = "text"
+	ConditionDataTypeNumber   ConditionDataType = "number"
+	ConditionDataTypeBoolean  ConditionDataType = "boolean"
+	ConditionDataTypeDate     ConditionDataType = "date"
+	ConditionDataTypeDateTime ConditionDataType = "datetime"
+	ConditionDataTypeTime     ConditionDataType = "time"
+)
+
+type ConditionOperator string
+
+const (
+	ConditionOperatorEquals      ConditionOperator = "eq"
+	ConditionOperatorNotEquals   ConditionOperator = "neq"
+	ConditionOperatorGreaterThan ConditionOperator = "gt"
+	ConditionOperatorGreaterEq   ConditionOperator = "gte"
+	ConditionOperatorLessThan    ConditionOperator = "lt"
+	ConditionOperatorLessEq      ConditionOperator = "lte"
+	ConditionOperatorContains    ConditionOperator = "contains"
+	ConditionOperatorNotContains ConditionOperator = "not_contains"
+	ConditionOperatorStartsWith  ConditionOperator = "starts_with"
+	ConditionOperatorEndsWith    ConditionOperator = "ends_with"
+	ConditionOperatorIsEmpty     ConditionOperator = "is_empty"
+	ConditionOperatorIsNotEmpty  ConditionOperator = "is_not_empty"
+)
+
+type ConditionJoin string
+
+const (
+	ConditionJoinAnd ConditionJoin = "and"
+	ConditionJoinOr  ConditionJoin = "or"
+)
+
+type ConditionRule struct {
+	Field    string            `json:"field" bson:"field"`
+	DataType ConditionDataType `json:"data_type,omitempty" bson:"data_type,omitempty"`
+	Operator ConditionOperator `json:"operator" bson:"operator"`
+	Value    interface{}       `json:"value,omitempty" bson:"value,omitempty"`
+}
+
+type ConditionConfig struct {
+	Join  ConditionJoin   `json:"join,omitempty" bson:"join,omitempty"`
+	Logic string          `json:"logic,omitempty" bson:"logic,omitempty"`
+	Rules []ConditionRule `json:"rules,omitempty" bson:"rules,omitempty"`
+}
+
 // ─────────────────────────────────────────────────────────────
 // Trigger Types
 // ─────────────────────────────────────────────────────────────
@@ -131,9 +179,10 @@ type WorkflowNode struct {
 	Next string `json:"next,omitempty" bson:"next,omitempty"`
 
 	// Condition nodes: expression to evaluate + yes/no successors.
-	Condition string `json:"condition,omitempty" bson:"condition,omitempty"`
-	NextYes   string `json:"next_yes,omitempty" bson:"next_yes,omitempty"`
-	NextNo    string `json:"next_no,omitempty" bson:"next_no,omitempty"`
+	Condition       string           `json:"condition,omitempty" bson:"condition,omitempty"`
+	ConditionConfig *ConditionConfig `json:"condition_config,omitempty" bson:"condition_config,omitempty"`
+	NextYes         string           `json:"next_yes,omitempty" bson:"next_yes,omitempty"`
+	NextNo          string           `json:"next_no,omitempty" bson:"next_no,omitempty"`
 
 	// Parallel nodes: list of node IDs to fan out to simultaneously.
 	NextBranches []string `json:"next_branches,omitempty" bson:"next_branches,omitempty"`
@@ -147,6 +196,12 @@ type WorkflowNode struct {
 
 	// AssignedRole is the role group that receives this task (e.g. "manager").
 	AssignedRole string `json:"assigned_role,omitempty" bson:"assigned_role,omitempty"`
+	// AssignedRoles stores all role targets for this task when multiple role tags are configured.
+	AssignedRoles []string `json:"assigned_roles,omitempty" bson:"assigned_roles,omitempty"`
+	// AssignedUsers stores explicit user targets for this task when @user tags are configured.
+	AssignedUsers []string `json:"assigned_users,omitempty" bson:"assigned_users,omitempty"`
+	// AssignedTargets stores the original assignment tokens (#role/@user) configured in builder UI.
+	AssignedTargets []string `json:"assigned_targets,omitempty" bson:"assigned_targets,omitempty"`
 	// AssignedPosition narrows within the role (e.g. "CFO", "Department Head").
 	AssignedPosition string `json:"assigned_position,omitempty" bson:"assigned_position,omitempty"`
 	// AssignedUser is a direct user fallback used only when AssignedRole is empty.
@@ -247,6 +302,9 @@ type TaskAssignment struct {
 	Title            string                 `json:"title" bson:"title"`
 	Description      string                 `json:"description,omitempty" bson:"description,omitempty"`
 	AssignedRole     string                 `json:"assigned_role,omitempty" bson:"assigned_role,omitempty"`
+	AssignedRoles    []string               `json:"assigned_roles,omitempty" bson:"assigned_roles,omitempty"`
+	AssignedUsers    []string               `json:"assigned_users,omitempty" bson:"assigned_users,omitempty"`
+	AssignedTargets  []string               `json:"assigned_targets,omitempty" bson:"assigned_targets,omitempty"`
 	AssignedPosition string                 `json:"assigned_position,omitempty" bson:"assigned_position,omitempty"`
 	AssignedUser     string                 `json:"assigned_user,omitempty" bson:"assigned_user,omitempty"`
 	AllowedActions   []string               `json:"allowed_actions,omitempty" bson:"allowed_actions,omitempty"`
