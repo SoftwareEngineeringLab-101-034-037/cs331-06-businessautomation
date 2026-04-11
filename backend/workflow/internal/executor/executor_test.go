@@ -394,6 +394,21 @@ func (m *mockStore) ListTasksByRoles(orgID string, roles []string) ([]models.Tas
 	return out, nil
 }
 
+func (m *mockStore) ListTasksByOrg(orgID string) ([]models.TaskAssignment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.listTaskErr != nil {
+		return nil, m.listTaskErr
+	}
+	var out []models.TaskAssignment
+	for _, task := range m.tasks {
+		if task.OrgID == orgID {
+			out = append(out, task)
+		}
+	}
+	return out, nil
+}
+
 func (m *mockStore) ListTasksByInstance(instanceID string) ([]models.TaskAssignment, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

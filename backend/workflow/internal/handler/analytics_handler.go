@@ -59,11 +59,11 @@ type prioritySliceItem struct {
 }
 
 type queueAging struct {
-	LtHalfSLA   int `json:"lt_half_sla"`
-	LtSLA       int `json:"lt_sla"`
-	Gt1_5SLA    int `json:"gt_1_5_sla"`
-	Gt2_5SLA    int `json:"gt_2_5_sla"`
-	OverdueOpen int `json:"overdue_open"`
+	LtHalfSLA         int `json:"lt_half_sla"`
+	LtSLA             int `json:"lt_sla"`
+	Between1And2_5SLA int `json:"between_1_and_2_5_sla"`
+	Gt2_5SLA          int `json:"gt_2_5_sla"`
+	OverdueOpen       int `json:"overdue_open"`
 }
 
 type throughputDay struct {
@@ -214,41 +214,46 @@ func (h *AnalyticsHandler) Get(c *gin.Context) {
 	allInstances := make([]models.Instance, 0)
 	taskByID := make(map[string]models.TaskAssignment)
 
-	for _, wf := range workflows {
-		if _, ok := scopedWorkflowIDs[wf.ID]; !ok {
+	instancesByOrg, listInstancesErr := h.Store.ListInstancesByOrg(orgID)
+	if listInstancesErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load workflow instances"})
+		return
+	}
+
+	scopedInstanceIDs := make(map[string]struct{}, len(instancesByOrg))
+	for _, inst := range instancesByOrg {
+		if inst.OrgID != orgID {
 			continue
 		}
-
-		instances, listErr := h.Store.ListInstancesByWorkflow(wf.ID)
-		if listErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load workflow instances"})
-			return
+		if _, ok := scopedWorkflowIDs[inst.WorkflowID]; !ok {
+			continue
 		}
-
-		for _, inst := range instances {
-			if inst.OrgID != orgID {
-				continue
-			}
-			if !withinRange(inst.StartedAt, filters.Since, filters.Until) {
-				continue
-			}
-			allInstances = append(allInstances, inst)
-
-			tasks, taskErr := h.Store.ListTasksByInstance(inst.ID)
-			if taskErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load instance tasks"})
-				return
-			}
-			for _, task := range tasks {
-				if task.OrgID != orgID {
-					continue
-				}
-				if !withinRange(task.CreatedAt, filters.Since, filters.Until) {
-					continue
-				}
-				taskByID[task.ID] = task
-			}
+		if !withinRange(inst.StartedAt, filters.Since, filters.Until) {
+			continue
 		}
+		allInstances = append(allInstances, inst)
+		scopedInstanceIDs[inst.ID] = struct{}{}
+	}
+
+	tasksByOrg, listTasksErr := h.Store.ListTasksByOrg(orgID)
+	if listTasksErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load instance tasks"})
+		return
+	}
+	for _, task := range tasksByOrg {
+		if task.OrgID != orgID {
+			continue
+		}
+		if _, ok := scopedWorkflowIDs[task.WorkflowID]; !ok {
+			continue
+		}
+		if _, ok := scopedInstanceIDs[task.InstanceID]; !ok {
+			continue
+		}
+		if !withinRange(task.CreatedAt, filters.Since, filters.Until) {
+			continue
+		}
+		taskByID[task.ID] = task
 	}
 
 	allTasks := make([]models.TaskAssignment, 0, len(taskByID))
@@ -323,6 +328,8 @@ func (h *AnalyticsHandler) Get(c *gin.Context) {
 		priority := priorityFromSLA(task.SLADays)
 		ageHours := now.Sub(task.CreatedAt).Hours()
 
+		// statusCounts intentionally double-counts overdue as a subset bucket; statusDist
+		// therefore shows overlapping percentages where overdue can exceed 100% when summed.
 		statusCounts[baseStatus] += 1
 		if isOverdue {
 			statusCounts["overdue"] += 1
@@ -577,10 +584,10 @@ func (h *AnalyticsHandler) Get(c *gin.Context) {
 			aging.LtHalfSLA += 1
 		} else if ratio < 1.0 {
 			aging.LtSLA += 1
-		} else if ratio > 2.5 {
-			aging.Gt2_5SLA += 1
+		} else if ratio <= 2.5 {
+			aging.Between1And2_5SLA += 1
 		} else {
-			aging.Gt1_5SLA += 1
+			aging.Gt2_5SLA += 1
 		}
 	}
 

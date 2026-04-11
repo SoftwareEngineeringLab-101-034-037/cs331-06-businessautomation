@@ -27,5 +27,6 @@ type Store interface {
 	ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error)
 	ListTasksByRole(orgID, role string) ([]models.TaskAssignment, error)
 	ListTasksByRoles(orgID string, roles []string) ([]models.TaskAssignment, error)
+	ListTasksByOrg(orgID string) ([]models.TaskAssignment, error)
 	ListTasksByInstance(instanceID string) ([]models.TaskAssignment, error)
 }
