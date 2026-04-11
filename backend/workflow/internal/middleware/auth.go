@@ -68,12 +68,12 @@ func ClerkAuthMiddleware(keyFunc jwt.Keyfunc, issuerURL string) gin.HandlerFunc 
 		// Clerk v2 tokens (v=2) carry it nested inside the "o" object: {"id":"org_...","rol":"admin",...}
 		orgID, _ := claims["org_id"].(string)
 		orgRole, _ := claims["org_role"].(string)
-		if orgID == "" {
-			if o, ok := claims["o"].(map[string]interface{}); ok {
+		if o, ok := claims["o"].(map[string]interface{}); ok {
+			if orgID == "" {
 				orgID, _ = o["id"].(string)
-				if orgRole == "" {
-					orgRole, _ = o["rol"].(string)
-				}
+			}
+			if orgRole == "" {
+				orgRole, _ = o["rol"].(string)
 			}
 		}
 		log.Printf("[AUTH] OK  sub=%s org_id=%q (empty means personal session token)", userID, orgID)

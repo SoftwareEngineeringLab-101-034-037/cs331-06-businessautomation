@@ -361,6 +361,18 @@ func (s *handlerStore) ListTasksByRoles(orgID string, roles []string) ([]models.
 	return out, nil
 }
 
+func (s *handlerStore) ListTasksByOrg(orgID string) ([]models.TaskAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]models.TaskAssignment, 0)
+	for _, task := range s.tasks {
+		if task.OrgID == orgID {
+			out = append(out, task)
+		}
+	}
+	return out, nil
+}
+
 func (s *handlerStore) ListTasksByInstance(instanceID string) ([]models.TaskAssignment, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -864,6 +876,7 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 	legacyRouter := gin.New()
 	legacyRouter.PUT("/api/orgs/:orgId/tasks/:id/:action", func(c *gin.Context) {
 		c.Set(middleware.UserIDKey, "user-1")
+		c.Set(middleware.OrgRoleKey, "admin")
 		legacyHandler.Action(c)
 	})
 
@@ -936,6 +949,11 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 	rec = testRequest(t, legacyRouter, http.MethodPut, "/api/orgs/org-1/tasks/task-1/unknown", []byte(`{"comment":"x"}`))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for unknown action, got %d", rec.Code)
+	}
+
+	rec = testRequest(t, legacyRouter, http.MethodPut, "/api/orgs/org-1/tasks/task-1/escalate_notify", []byte(`{"comment":"needs escalation"}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for escalation without executor, got %d", rec.Code)
 	}
 
 	// ── cross-org isolation ────────────────────────────────────────────────────
@@ -1011,5 +1029,105 @@ func TestTaskHandlerListAndAction(t *testing.T) {
 	}
 	if exec.calls[0].taskID != "task-1" || exec.calls[0].actorUserID != "user-1" || exec.calls[0].action != "approve" || exec.calls[0].comment != "approved" || exec.calls[0].authHeader == "" {
 		t.Fatalf("unexpected executor call: %+v", exec.calls[0])
+	}
+}
+
+func TestTaskHandlerEscalationCandidatesAndActions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newHandlerStore()
+	store.tasks["task-escalate"] = models.TaskAssignment{
+		ID:            "task-escalate",
+		OrgID:         "org-1",
+		InstanceID:    "inst-esc",
+		AssignedUser:  "user-1",
+		AssignedUsers: []string{"user-1", "user-2", "user-3"},
+		Status:        models.TaskPending,
+		CreatedAt:     time.Now(),
+	}
+
+	exec := &mockTaskExecutor{
+		responseTask: models.TaskAssignment{
+			ID:              "task-escalate",
+			OrgID:           "org-1",
+			Status:          models.TaskPending,
+			ActionCommitted: "escalate_notify",
+			Comment:         "escalated",
+			CreatedAt:       time.Now(),
+		},
+	}
+	h := NewTaskHandler(store, exec)
+	r := gin.New()
+	r.GET("/api/orgs/:orgId/tasks/:id/escalation-candidates", func(c *gin.Context) {
+		c.Set(middleware.UserIDKey, "admin-user")
+		c.Set(middleware.OrgRoleKey, "admin")
+		h.EscalationCandidates(c)
+	})
+	r.PUT("/api/orgs/:orgId/tasks/:id/:action", func(c *gin.Context) {
+		c.Set(middleware.UserIDKey, "admin-user")
+		c.Set(middleware.OrgRoleKey, "admin")
+		h.Action(c)
+	})
+
+	// (1) admin-forbidden via executor authorization hook
+	exec.authError = executor.ErrForbiddenTaskAction
+	rec := testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks/task-escalate/escalation-candidates", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for forbidden escalation candidates, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/tasks/task-escalate/escalate_notify", []byte(`{"comment":"please escalate"}`))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for forbidden escalation action, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// (2) empty candidate list should return [] without errors
+	exec.authError = nil
+	exec.candidates = nil
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks/task-escalate/escalation-candidates", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for empty candidates, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var emptyPayload struct {
+		Candidates []string `json:"candidates"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &emptyPayload); err != nil {
+		t.Fatalf("decode empty candidates response: %v", err)
+	}
+	if len(emptyPayload.Candidates) != 0 {
+		t.Fatalf("expected no candidates, got %+v", emptyPayload.Candidates)
+	}
+
+	// (3) current assignee should be filtered out from returned candidates
+	exec.candidates = []string{"user-1", "user-2", "user-3"}
+	rec = testRequest(t, r, http.MethodGet, "/api/orgs/org-1/tasks/task-escalate/escalation-candidates", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for candidates, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var candidatesPayload struct {
+		Candidates []string `json:"candidates"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &candidatesPayload); err != nil {
+		t.Fatalf("decode candidates response: %v", err)
+	}
+	if len(candidatesPayload.Candidates) != 2 {
+		t.Fatalf("expected 2 filtered candidates, got %+v", candidatesPayload.Candidates)
+	}
+	for _, candidate := range candidatesPayload.Candidates {
+		if candidate == "user-1" {
+			t.Fatalf("expected current assignee user-1 to be filtered out")
+		}
+	}
+
+	rec = testRequest(t, r, http.MethodPut, "/api/orgs/org-1/tasks/task-escalate/escalate_notify", []byte(`{"comment":"raise priority"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for escalation action, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(exec.calls) == 0 {
+		t.Fatalf("expected executor ContinueTask to be called for escalation action")
+	}
+	lastCall := exec.calls[len(exec.calls)-1]
+	if lastCall.action != "escalate_notify" || lastCall.comment != "raise priority" {
+		t.Fatalf("unexpected escalation executor call: %+v", lastCall)
 	}
 }

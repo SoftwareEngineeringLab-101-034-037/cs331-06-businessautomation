@@ -129,7 +129,7 @@ func parseCSVValues(raw string) []string {
 func (h *TaskHandler) Action(c *gin.Context) {
 	orgId := c.Param("orgId")
 	taskID := c.Param("id")
-	action := c.Param("action")
+	action := strings.TrimSpace(c.Param("action"))
 	isEscalationAction := action == "escalate_notify" || action == "escalate_reassign"
 
 	task, ok := h.Store.GetTask(taskID)
@@ -162,6 +162,10 @@ func (h *TaskHandler) Action(c *gin.Context) {
 	}
 	if isEscalationAction && !strings.EqualFold(middleware.GetOrgRole(c), "admin") {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	if h.Exec == nil && isEscalationAction {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "escalation actions require executor"})
 		return
 	}
 	if h.Exec != nil {
@@ -238,18 +242,21 @@ func (h *TaskHandler) EscalationCandidates(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"candidates": []string{}})
 		return
 	}
+	actorUserID := middleware.GetUserID(c)
+	if strings.TrimSpace(actorUserID) == "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
 
 	authHeader := middleware.GetAuthorizationHeader(c)
 	if h.Exec == nil {
-		candidates := make([]string, 0, len(task.AssignedUsers))
-		for _, userID := range task.AssignedUsers {
-			trimmed := strings.TrimSpace(userID)
-			if trimmed == "" || strings.EqualFold(trimmed, strings.TrimSpace(task.AssignedUser)) {
-				continue
-			}
-			candidates = append(candidates, trimmed)
-		}
-		c.JSON(http.StatusOK, gin.H{"candidates": candidates})
+		log.Printf("task_handler.EscalationCandidates org=%s task=%s skipped: executor unavailable", orgID, taskID)
+		c.JSON(http.StatusOK, gin.H{"candidates": []string{}})
+		return
+	}
+
+	if err := h.Exec.CanActOnTask(actorUserID, task, "escalate_reassign", authHeader); err != nil {
+		writeTaskActionError(c, "task_handler.EscalationCandidates authorize", err)
 		return
 	}
 
@@ -259,7 +266,19 @@ func (h *TaskHandler) EscalationCandidates(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"candidates": candidates})
+	filtered := make([]string, 0, len(candidates))
+	currentAssignee := strings.TrimSpace(task.AssignedUser)
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
+		}
+		if currentAssignee != "" && strings.EqualFold(trimmed, currentAssignee) {
+			continue
+		}
+		filtered = append(filtered, trimmed)
+	}
+	c.JSON(http.StatusOK, gin.H{"candidates": filtered})
 }
 
 func sanitizeTaskForResponse(task models.TaskAssignment) models.TaskAssignment {

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -620,6 +621,7 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader
 	if isTerminalTaskStatus(task.Status) {
 		return models.TaskAssignment{}, ErrTaskAlreadyCompleted
 	}
+	action = strings.TrimSpace(action)
 	comment = strings.TrimSpace(comment)
 	actorUserID = strings.TrimSpace(actorUserID)
 	if task.Status == models.TaskPending && action != "start" && !isEscalationAction(action) {
@@ -1617,12 +1619,13 @@ func isEscalationAction(action string) bool {
 }
 
 func (e *Executor) CanActOnTask(actorUserID string, task models.TaskAssignment, action, authHeader string) error {
+	action = strings.TrimSpace(action)
 	actorUserID = strings.TrimSpace(actorUserID)
 	if actorUserID == "" {
 		return ErrForbiddenTaskAction
 	}
 	if task.Status == models.TaskPending && isEscalationAction(action) {
-		return nil
+		return e.authorizeEscalationAction(actorUserID, task, action, authHeader)
 	}
 	if task.Status == models.TaskPending && action != "start" {
 		return ErrPendingTaskStartOnly
@@ -1648,6 +1651,47 @@ func (e *Executor) CanActOnTask(actorUserID string, task models.TaskAssignment, 
 		return ErrTaskClaimNotAllowed
 	}
 	return nil
+}
+
+func (e *Executor) authorizeEscalationAction(actorUserID string, task models.TaskAssignment, action, authHeader string) error {
+	if strings.TrimSpace(actorUserID) == "" {
+		return ErrForbiddenTaskAction
+	}
+	if task.Status != models.TaskPending || !isEscalationAction(action) {
+		return ErrForbiddenTaskAction
+	}
+	if !hasAdminRoleInAuthHeader(authHeader) {
+		return ErrForbiddenTaskAction
+	}
+	return nil
+}
+
+func hasAdminRoleInAuthHeader(authHeader string) bool {
+	token := strings.TrimSpace(authHeader)
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return false
+	}
+	if role, ok := claims["org_role"].(string); ok && strings.EqualFold(strings.TrimSpace(role), "admin") {
+		return true
+	}
+	if o, ok := claims["o"].(map[string]interface{}); ok {
+		if role, ok := o["rol"].(string); ok && strings.EqualFold(strings.TrimSpace(role), "admin") {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Executor) ListEscalationCandidates(task models.TaskAssignment, authHeader string) ([]string, error) {
