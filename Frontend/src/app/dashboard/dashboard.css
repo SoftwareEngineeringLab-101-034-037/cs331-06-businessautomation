@@ -2447,6 +2447,7 @@
 
 /* Timeline body rows */
 .timeline-body {
+
   --timeline-row-height: 64px;
   display: flex;
   flex-direction: column;

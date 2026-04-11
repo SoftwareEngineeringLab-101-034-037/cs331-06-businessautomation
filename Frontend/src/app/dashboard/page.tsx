@@ -544,9 +544,10 @@ export default function DashboardOverview() {
         setInstances(loadedInstances || []);
         setWorkflows(loadedWorkflows || []);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (requestVersion === requestVersionRef.current) {
-        setError(err?.message || "Could not load overview data");
+        const message = err instanceof Error ? err.message : "";
+        setError(message || "Could not load overview data");
       }
     } finally {
       if (requestVersion === requestVersionRef.current) {
@@ -593,11 +594,13 @@ export default function DashboardOverview() {
   const pendingTasks = tasks.filter((task) => task.status === "pending").length;
   const inProgressTasks = tasks.filter((task) => task.status === "in_progress").length;
   const completedTasks = tasks.filter((task) => ["completed", "rejected", "sent_back", "cancelled"].includes(task.status)).length;
-  const overdueTasks = tasks.filter((task) => {
+  const atRiskTasks = useMemo(() => tasks.filter((task) => {
     if (task.status === "escalated") return true;
     if (task.status !== "pending" && task.status !== "in_progress") return false;
     return new Date(task.dueDate).getTime() < Date.now();
-  }).length;
+  }), [tasks]);
+  const atRiskTaskIDs = useMemo(() => new Set(atRiskTasks.map((task) => task.id)), [atRiskTasks]);
+  const overdueTasks = atRiskTasks.length;
 
   const searchResults = searchQuery.trim()
     ? tasks.filter((task) => {
@@ -853,7 +856,7 @@ export default function DashboardOverview() {
 
             <div className="timeline-body">
               {showTodayMarker && (
-                <div className="timeline-today-marker" style={{ left: `calc(220px + ${todayPct}% * (100% - 220px) / 100%)` }}>
+                <div className="timeline-today-marker" style={{ left: `calc(220px + (100% - 220px) * ${todayPct / 100})` }}>
                   <div className="timeline-today-label">Today</div>
                 </div>
               )}
@@ -923,11 +926,7 @@ export default function DashboardOverview() {
             <span className="timeline-summary-label">Tasks In Week</span>
           </div>
           <div className="timeline-summary-item">
-            <span className="timeline-summary-value">{weekTasks.filter((task) => {
-              if (task.status === "escalated") return true;
-              if (task.status !== "pending" && task.status !== "in_progress") return false;
-              return new Date(task.dueDate).getTime() < Date.now();
-            }).length}</span>
+            <span className="timeline-summary-value">{weekTasks.filter((task) => atRiskTaskIDs.has(task.id)).length}</span>
             <span className="timeline-summary-label">At Risk</span>
           </div>
           <div className="timeline-summary-item">
