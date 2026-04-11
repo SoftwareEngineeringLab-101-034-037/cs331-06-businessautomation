@@ -181,6 +181,11 @@ export default function GoogleFormsIntegrationPage() {
         return;
       }
 
+      const source = event.source as Window | null;
+      if (!oauthPopupRef.current || source !== oauthPopupRef.current) {
+        return;
+      }
+
       if (oauthPollRef.current !== null) {
         window.clearInterval(oauthPollRef.current);
         oauthPollRef.current = null;

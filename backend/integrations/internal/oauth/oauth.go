@@ -452,7 +452,7 @@ func (s *Service) DisconnectAccountForProvider(ctx context.Context, orgID, provi
 	return nil
 }
 
-func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
+func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store, trustedFrontendOrigins []string) {
 	authorizeOrg := func(r *http.Request, orgID string) (int, string) {
 		return authorizeOrgAccess(r, orgID)
 	}
@@ -577,17 +577,25 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 	mux.HandleFunc("/auth/google/callback", func(w http.ResponseWriter, r *http.Request) {
 		cookieSecure := r.TLS != nil
 		wantsJSON := wantsJSONResponse(r)
-		writeCallbackError := func(status int, msg, orgID, provider string) {
+		frontendOrigin := resolveTrustedFrontendOrigin(r, trustedFrontendOrigins)
+		writeCallbackError := func(status int, publicMessage, internalMessage, orgID, provider string) {
+			if strings.TrimSpace(internalMessage) != "" {
+				log.Printf("oauth.callback error status=%d org_id=%q provider=%q detail=%s", status, orgID, provider, internalMessage)
+			}
 			if wantsJSON {
-				writeError(w, status, msg)
+				message := publicMessage
+				if strings.TrimSpace(internalMessage) != "" {
+					message = internalMessage
+				}
+				writeError(w, status, message)
 				return
 			}
-			writeOAuthCallbackPage(w, status, map[string]interface{}{
+			writeOAuthCallbackPage(w, status, frontendOrigin, map[string]interface{}{
 				"type":    "integration_oauth_result",
 				"status":  "error",
 				"org_id":  orgID,
 				"service": provider,
-				"error":   msg,
+				"error":   publicMessage,
 				"message": "Connection failed. You can close this window and return to the app.",
 			})
 		}
@@ -601,11 +609,11 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 				})
 				return
 			}
-			writeOAuthCallbackPage(w, http.StatusServiceUnavailable, map[string]interface{}{
-				"type":      "integration_oauth_result",
-				"status":    "error",
-				"error":     ErrOAuthNotConfigured.Error(),
-				"message":   "Google OAuth is not configured on the integrations service.",
+			writeOAuthCallbackPage(w, http.StatusServiceUnavailable, frontendOrigin, map[string]interface{}{
+				"type":       "integration_oauth_result",
+				"status":     "error",
+				"error":      ErrOAuthNotConfigured.Error(),
+				"message":    "Google OAuth is not configured on the integrations service.",
 				"configured": false,
 			})
 			return
@@ -614,30 +622,31 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 		code := r.URL.Query().Get("code")
 		stateToken := r.URL.Query().Get("state")
 		if code == "" || stateToken == "" {
-			writeCallbackError(http.StatusBadRequest, "missing code or state", "", "")
+			writeCallbackError(http.StatusBadRequest, "missing code or state", "", "", "")
 			return
 		}
 		orgID, stateUserID, provider, err := svc.ValidateAndConsumeState(stateToken)
 		if err != nil {
-			writeCallbackError(http.StatusForbidden, "invalid or expired oauth state", "", "")
+			writeCallbackError(http.StatusForbidden, "invalid or expired oauth state", err.Error(), "", "")
 			return
 		}
 		actorCookie, cookieErr := r.Cookie(oauthActorCookieName)
 		if cookieErr != nil || strings.TrimSpace(actorCookie.Value) == "" || strings.TrimSpace(actorCookie.Value) != stateUserID {
-			writeCallbackError(http.StatusForbidden, "oauth callback actor mismatch", orgID, provider)
+			writeCallbackError(http.StatusForbidden, "oauth callback actor mismatch", "", orgID, provider)
 			return
 		}
 		if authHeader := strings.TrimSpace(r.Header.Get("Authorization")); authHeader != "" {
 			currentUserID, userErr := extractBearerUserID(authHeader)
 			if userErr != nil || currentUserID != stateUserID {
-				writeCallbackError(http.StatusForbidden, "oauth callback actor mismatch", orgID, provider)
+				writeCallbackError(http.StatusForbidden, "oauth callback actor mismatch", "", orgID, provider)
 				return
 			}
 		}
 
 		http.SetCookie(w, &http.Cookie{Name: oauthActorCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: cookieSecure, SameSite: http.SameSiteLaxMode})
 		if err := svc.ExchangeForProvider(r.Context(), code, orgID, provider); err != nil {
-			writeCallbackError(http.StatusInternalServerError, err.Error(), orgID, provider)
+			log.Printf("oauth.callback exchange failed org_id=%q provider=%q: %v", orgID, provider, err)
+			writeCallbackError(http.StatusInternalServerError, "OAuth exchange failed, please try again", err.Error(), orgID, provider)
 			return
 		}
 
@@ -646,7 +655,7 @@ func RegisterHandlers(mux *http.ServeMux, svc *Service, store storage.Store) {
 			return
 		}
 
-		writeOAuthCallbackPage(w, http.StatusOK, map[string]interface{}{
+		writeOAuthCallbackPage(w, http.StatusOK, frontendOrigin, map[string]interface{}{
 			"type":    "integration_oauth_result",
 			"status":  "connected",
 			"org_id":  orgID,
@@ -806,13 +815,51 @@ func wantsJSONResponse(r *http.Request) bool {
 	return strings.Contains(accept, "application/json")
 }
 
-func writeOAuthCallbackPage(w http.ResponseWriter, status int, payload map[string]interface{}) {
+func resolveTrustedFrontendOrigin(r *http.Request, trustedOrigins []string) string {
+	candidate := strings.TrimSpace(r.URL.Query().Get("frontend_origin"))
+	if isTrustedOrigin(candidate, trustedOrigins) {
+		return candidate
+	}
+
+	headerOrigin := strings.TrimSpace(r.Header.Get("Origin"))
+	if isTrustedOrigin(headerOrigin, trustedOrigins) {
+		return headerOrigin
+	}
+
+	if len(trustedOrigins) == 1 {
+		fallback := strings.TrimSpace(trustedOrigins[0])
+		if fallback != "" {
+			return fallback
+		}
+	}
+
+	return ""
+}
+
+func isTrustedOrigin(origin string, trustedOrigins []string) bool {
+	trimmedOrigin := strings.TrimSpace(origin)
+	if trimmedOrigin == "" || len(trustedOrigins) == 0 {
+		return false
+	}
+	for _, allowed := range trustedOrigins {
+		if strings.EqualFold(strings.TrimSpace(allowed), trimmedOrigin) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeOAuthCallbackPage(w http.ResponseWriter, status int, frontendOrigin string, payload map[string]interface{}) {
 	if payload == nil {
 		payload = map[string]interface{}{}
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		payloadJSON = []byte(`{"type":"integration_oauth_result","status":"error","error":"failed to render oauth callback response","message":"Connection result is available. You can close this window."}`)
+	}
+	frontendOriginJSON, err := json.Marshal(strings.TrimSpace(frontendOrigin))
+	if err != nil {
+		frontendOriginJSON = []byte(`""`)
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -842,6 +889,7 @@ func writeOAuthCallbackPage(w http.ResponseWriter, status int, payload map[strin
 	<script>
 		(function () {
 			const payload = %s;
+			const frontendOrigin = %s;
 			const ok = payload && payload.status === "connected";
 			const titleEl = document.getElementById("oauth-title");
 			const messageEl = document.getElementById("oauth-message");
@@ -854,8 +902,8 @@ func writeOAuthCallbackPage(w http.ResponseWriter, status int, payload map[strin
 					: (ok ? "Account connected. Returning to the app..." : "Connection failed. You can close this window and return to the app.");
 			}
 			try {
-				if (window.opener && !window.opener.closed) {
-					window.opener.postMessage(payload, "*");
+				if (frontendOrigin && window.opener && !window.opener.closed) {
+					window.opener.postMessage(payload, frontendOrigin);
 					window.close();
 				}
 			} catch (err) {
@@ -864,7 +912,7 @@ func writeOAuthCallbackPage(w http.ResponseWriter, status int, payload map[strin
 		})();
 	</script>
 </body>
-</html>`, string(payloadJSON))
+</html>`, string(payloadJSON), string(frontendOriginJSON))
 }
 
 func hasRequiredScopes(granted, required []string) (bool, []string) {
