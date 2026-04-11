@@ -260,6 +260,7 @@ type mockTaskExecutor struct {
 	responseTask  models.TaskAssignment
 	responseError error
 	authError     error
+	candidates    []string
 }
 
 type taskContinueCall struct {
@@ -291,6 +292,18 @@ func (m *mockTaskExecutor) CanActOnTask(actorUserID string, task models.TaskAssi
 		return m.authError
 	}
 	return nil
+}
+
+func (m *mockTaskExecutor) ListEscalationCandidates(task models.TaskAssignment, authHeader string) ([]string, error) {
+	if m.responseError != nil {
+		return nil, m.responseError
+	}
+	if len(m.candidates) == 0 {
+		return []string{}, nil
+	}
+	out := make([]string, len(m.candidates))
+	copy(out, m.candidates)
+	return out, nil
 }
 
 func (s *handlerStore) ListTasksByAssignee(orgID, userID string) ([]models.TaskAssignment, error) {

@@ -26,6 +26,7 @@ export interface Task {
   comment?: string;
   actionCommitted?: string;
   status: TaskStatus;
+  baseStatus?: TaskStatus;
   priority: TaskPriority;
   assignedTo: string;
   assignedToName: string;
@@ -44,6 +45,7 @@ export interface Task {
   stepNumber: number;
   totalSteps: number;
   allowedActions?: string[];
+  overridePendingActions?: boolean;
   visibleData?: Record<string, unknown>;
   nodeId?: string;
   orgId?: string;

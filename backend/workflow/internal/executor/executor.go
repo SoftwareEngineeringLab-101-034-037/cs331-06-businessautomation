@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -621,7 +622,7 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader
 	}
 	comment = strings.TrimSpace(comment)
 	actorUserID = strings.TrimSpace(actorUserID)
-	if task.Status == models.TaskPending && action != "start" {
+	if task.Status == models.TaskPending && action != "start" && !isEscalationAction(action) {
 		return models.TaskAssignment{}, ErrPendingTaskStartOnly
 	}
 	if action != "start" && comment == "" {
@@ -631,7 +632,7 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader
 		return models.TaskAssignment{}, err
 	}
 
-	if action != "start" && len(task.AllowedActions) > 0 {
+	if action != "start" && !isEscalationAction(action) && len(task.AllowedActions) > 0 {
 		allowed := false
 		for _, a := range task.AllowedActions {
 			if a == action {
@@ -683,6 +684,68 @@ func (e *Executor) ContinueTask(taskID, actorUserID, action, comment, authHeader
 			"task_id":       task.ID,
 			"actor":         actorUserID,
 			"assigned_user": task.AssignedUser,
+		})
+		return task, nil
+	case "escalate_notify":
+		if task.Status != models.TaskPending {
+			return models.TaskAssignment{}, fmt.Errorf("%w: cannot escalate from status %s", ErrForbiddenTaskAction, task.Status)
+		}
+		task.Status = models.TaskPending
+		task.ActionCommitted = action
+		task.CompletedAt = nil
+		if task.SLADays > 1 {
+			task.SLADays--
+		}
+		swapped, err := e.store.CompareAndSwapTask(task, prevStatus)
+		if err != nil {
+			return models.TaskAssignment{}, fmt.Errorf("save task: %w", err)
+		}
+		if !swapped {
+			return models.TaskAssignment{}, ErrTaskConflict
+		}
+		e.audit(task.InstanceID, task.NodeID, "task_escalated_notify", map[string]interface{}{
+			"task_id":       task.ID,
+			"actor":         actorUserID,
+			"assigned_user": task.AssignedUser,
+			"assigned_role": task.AssignedRole,
+			"comment":       comment,
+			"sla_days":      task.SLADays,
+		})
+		return task, nil
+	case "escalate_reassign":
+		if task.Status != models.TaskPending {
+			return models.TaskAssignment{}, fmt.Errorf("%w: cannot escalate from status %s", ErrForbiddenTaskAction, task.Status)
+		}
+		candidates, err := e.ListEscalationCandidates(task, authHeader)
+		if err != nil {
+			return models.TaskAssignment{}, err
+		}
+		if len(candidates) == 0 {
+			return models.TaskAssignment{}, ErrNoEligibleAssignee
+		}
+		previousAssignee := strings.TrimSpace(task.AssignedUser)
+		task.AssignedUser = candidates[0]
+		task.Status = models.TaskPending
+		task.ActionCommitted = action
+		task.CompletedAt = nil
+		if task.SLADays > 1 {
+			task.SLADays--
+		}
+		swapped, err := e.store.CompareAndSwapTask(task, prevStatus)
+		if err != nil {
+			return models.TaskAssignment{}, fmt.Errorf("save task: %w", err)
+		}
+		if !swapped {
+			return models.TaskAssignment{}, ErrTaskConflict
+		}
+		e.audit(task.InstanceID, task.NodeID, "task_escalated_reassigned", map[string]interface{}{
+			"task_id":            task.ID,
+			"actor":              actorUserID,
+			"from_assigned_user": previousAssignee,
+			"to_assigned_user":   task.AssignedUser,
+			"assigned_role":      task.AssignedRole,
+			"comment":            comment,
+			"sla_days":           task.SLADays,
 		})
 		return task, nil
 	case "approve":
@@ -1544,10 +1607,22 @@ func isTerminalTaskStatus(status models.TaskStatus) bool {
 	}
 }
 
+func isEscalationAction(action string) bool {
+	switch strings.TrimSpace(action) {
+	case "escalate_notify", "escalate_reassign":
+		return true
+	default:
+		return false
+	}
+}
+
 func (e *Executor) CanActOnTask(actorUserID string, task models.TaskAssignment, action, authHeader string) error {
 	actorUserID = strings.TrimSpace(actorUserID)
 	if actorUserID == "" {
 		return ErrForbiddenTaskAction
+	}
+	if task.Status == models.TaskPending && isEscalationAction(action) {
+		return nil
 	}
 	if task.Status == models.TaskPending && action != "start" {
 		return ErrPendingTaskStartOnly
@@ -1573,6 +1648,80 @@ func (e *Executor) CanActOnTask(actorUserID string, task models.TaskAssignment, 
 		return ErrTaskClaimNotAllowed
 	}
 	return nil
+}
+
+func (e *Executor) ListEscalationCandidates(task models.TaskAssignment, authHeader string) ([]string, error) {
+	candidates, err := e.collectEligibleAssigneeIDs(task, authHeader)
+	if err != nil {
+		return nil, err
+	}
+	currentAssignee := strings.TrimSpace(task.AssignedUser)
+	if currentAssignee == "" {
+		sort.Strings(candidates)
+		return candidates, nil
+	}
+	filtered := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if strings.EqualFold(strings.TrimSpace(candidate), currentAssignee) {
+			continue
+		}
+		filtered = append(filtered, candidate)
+	}
+	sort.Strings(filtered)
+	return filtered, nil
+}
+
+func (e *Executor) collectEligibleAssigneeIDs(task models.TaskAssignment, authHeader string) ([]string, error) {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(task.AssignedUsers)+4)
+	add := func(userID string) {
+		trimmed := strings.TrimSpace(userID)
+		if trimmed == "" {
+			return
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+
+	for _, userID := range task.AssignedUsers {
+		add(userID)
+	}
+	if strings.TrimSpace(task.AssignedUser) != "" {
+		add(task.AssignedUser)
+	}
+
+	roleNames := uniqueNormalizedStrings(task.AssignedRoles)
+	if len(roleNames) == 0 {
+		legacyRole := strings.TrimSpace(task.AssignedRole)
+		if legacyRole != "" {
+			roleNames = append(roleNames, legacyRole)
+		}
+	}
+
+	if len(roleNames) > 0 {
+		directory := e.roleDirectory()
+		if directory == nil {
+			return nil, fmt.Errorf("role directory unavailable for escalation")
+		}
+		for _, roleName := range roleNames {
+			memberIDs, err := e.listRoleMemberIDs(directory, task.OrgID, roleName, authHeader)
+			if err != nil {
+				if errors.Is(err, ErrRoleNotFound) || errors.Is(err, ErrNoMembers) {
+					continue
+				}
+				return nil, err
+			}
+			for _, memberID := range memberIDs {
+				add(memberID)
+			}
+		}
+	}
+
+	return out, nil
 }
 
 func (e *Executor) canClaimTask(actorUserID string, task models.TaskAssignment, authHeader string) (bool, error) {

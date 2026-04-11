@@ -85,6 +85,10 @@ type AnalyticsResponse = {
   failed_instances: FailedInstance[];
 };
 
+type EscalationCandidatesResponse = {
+  candidates?: string[];
+};
+
 type SideSection = "task-types" | "overdue-tasks" | "instance-health";
 
 function formatHours(hours: number): string {
@@ -115,6 +119,7 @@ export default function WorkflowAnalyticsDetailPage() {
   const [activeSection, setActiveSection] = useState<SideSection>("task-types");
   const [selectedEmployeeID, setSelectedEmployeeID] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [escalationCandidates, setEscalationCandidates] = useState<string[]>([]);
 
   const requestVersionRef = useRef(0);
   const hasLoadedOnceRef = useRef(false);
@@ -217,6 +222,23 @@ export default function WorkflowAnalyticsDetailPage() {
     return employeeByID.get(selectedEmployeeID) || null;
   }, [employeeByID, selectedEmployeeID]);
 
+  const selectedTaskForDrawer = useMemo(() => {
+    if (!selectedTask) return null;
+    const isPending = (selectedTask.baseStatus || selectedTask.status) === "pending";
+    if (!isPending) return selectedTask;
+
+    const pendingActions = ["escalate_notify"];
+    if (escalationCandidates.length > 0) {
+      pendingActions.push("escalate_reassign");
+    }
+
+    return {
+      ...selectedTask,
+      allowedActions: pendingActions,
+      overridePendingActions: true,
+    } satisfies Task;
+  }, [selectedTask, escalationCandidates]);
+
   const workflowName =
     payload?.workflow_rollups?.[0]?.workflow_name
     || payload?.problem_tasks?.[0]?.workflow_name
@@ -241,6 +263,7 @@ export default function WorkflowAnalyticsDetailPage() {
       title: task.title || task.task_id,
       description: "Workflow task from deep-dive overdue analytics.",
       status: task.display_status,
+      baseStatus: task.status,
       priority: task.priority,
       assignedTo: task.assigned_user || "",
       assignedToName: task.assigned_user ? employeeDisplayName(task.assigned_user) : (task.assigned_role || "Role Queue"),
@@ -255,12 +278,84 @@ export default function WorkflowAnalyticsDetailPage() {
       stepNumber: 1,
       totalSteps: 1,
       nodeId: task.node_id,
+      orgId: organization?.id,
       instanceId: task.instance_id,
     };
-  }, [employeeDisplayName]);
+  }, [employeeDisplayName, organization?.id]);
 
-  const closeTaskDrawer = useCallback(() => setSelectedTask(null), []);
+  const closeTaskDrawer = useCallback(() => {
+    setSelectedTask(null);
+    setEscalationCandidates([]);
+  }, []);
   const closeEmployeeDrawer = useCallback(() => setSelectedEmployeeID(null), []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadEscalationCandidates() {
+      if (!selectedTask || !organization?.id) {
+        setEscalationCandidates([]);
+        return;
+      }
+      if ((selectedTask.baseStatus || selectedTask.status) !== "pending") {
+        setEscalationCandidates([]);
+        return;
+      }
+
+      try {
+        const response = await authFetch(`${WF_API}/api/orgs/${organization.id}/tasks/${selectedTask.id}/escalation-candidates`);
+        if (!response.ok) {
+          if (!cancelled) {
+            setEscalationCandidates([]);
+          }
+          return;
+        }
+        const payload = (await response.json()) as EscalationCandidatesResponse;
+        if (!cancelled) {
+          setEscalationCandidates(Array.isArray(payload.candidates) ? payload.candidates : []);
+        }
+      } catch {
+        if (!cancelled) {
+          setEscalationCandidates([]);
+        }
+      }
+    }
+
+    void loadEscalationCandidates();
+    return () => {
+      cancelled = true;
+    };
+  }, [authFetch, organization?.id, selectedTask]);
+
+  const handleTaskAction = useCallback(async (task: Task, action: string, data?: Record<string, string>) => {
+    if (!organization?.id || !task.id) return;
+
+    try {
+      const response = await authFetch(`${WF_API}/api/orgs/${organization.id}/tasks/${task.id}/${action}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comment: data?.reason || "" }),
+      });
+
+      if (!response.ok) {
+        let message = `Task action failed (${response.status})`;
+        try {
+          const payload = (await response.json()) as { error?: string };
+          if (payload?.error) {
+            message = payload.error;
+          }
+        } catch {
+          // Keep status-derived fallback message.
+        }
+        throw new Error(message);
+      }
+
+      await loadWorkflowAnalytics();
+      closeTaskDrawer();
+    } catch (err: any) {
+      setError(err?.message || "Task action failed");
+    }
+  }, [authFetch, closeTaskDrawer, loadWorkflowAnalytics, organization?.id]);
 
   return (
     <RoleGate
@@ -496,11 +591,12 @@ export default function WorkflowAnalyticsDetailPage() {
         </div>
       </div>
 
-      {selectedTask && (
+      {selectedTaskForDrawer && (
         <TaskDetailDrawer
-          task={selectedTask}
-          isOpen={!!selectedTask}
+          task={selectedTaskForDrawer}
+          isOpen={!!selectedTaskForDrawer}
           onClose={closeTaskDrawer}
+          onAction={handleTaskAction}
         />
       )}
 

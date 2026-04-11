@@ -18,13 +18,17 @@ export default function TaskActions({ task, onAction }: TaskActionsProps) {
     reject: { label: "Reject", className: "action-btn action-btn-danger" },
     clarify: { label: "Clarify", className: "action-btn action-btn-warning" },
     complete: { label: "Complete", className: "action-btn action-btn-primary" },
+    escalate_notify: { label: "Increase Priority + Notify", className: "action-btn action-btn-warning" },
+    escalate_reassign: { label: "Escalate (Reassign)", className: "action-btn action-btn-danger" },
   };
 
-  const allowed = task.status === "pending"
-    ? ["start"]
-    : (task.allowedActions && task.allowedActions.length > 0
-      ? task.allowedActions
-      : ["complete"]);
+  const effectiveStatus = task.baseStatus || task.status;
+  const useProvidedPendingActions = effectiveStatus === "pending" && task.overridePendingActions;
+  const shouldUseProvidedActions = task.allowedActions && task.allowedActions.length > 0 && (effectiveStatus !== "pending" || useProvidedPendingActions);
+
+  const allowed = shouldUseProvidedActions
+    ? task.allowedActions!
+    : (effectiveStatus === "pending" ? ["start"] : ["complete"]);
 
   function handleClick(action: string) {
     if (action === "start") {

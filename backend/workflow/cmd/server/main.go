@@ -122,6 +122,7 @@ func main() {
 			// Task management
 			orgApi.GET("/tasks", taskHandler.List)
 			orgApi.PUT("/tasks/:id/:action", taskHandler.Action)
+			orgApi.GET("/tasks/:id/escalation-candidates", taskHandler.EscalationCandidates)
 
 			// Analytics
 			orgApi.GET("/analytics", analyticsHandler.Get)
