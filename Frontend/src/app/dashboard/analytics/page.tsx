@@ -50,7 +50,7 @@ type PrioritySliceItem = {
 type QueueAging = {
   lt_half_sla: number;
   lt_sla: number;
-  gt_1_5_sla: number;
+  between_1_and_2_5_sla: number;
   gt_2_5_sla: number;
   overdue_open: number;
 };
@@ -165,9 +165,10 @@ export default function AnalyticsPage() {
       if (requestVersion === requestVersionRef.current) {
         setPayload(data);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (requestVersion === requestVersionRef.current) {
-        setError(err?.message || "Could not load analytics");
+        const message = err instanceof Error ? err.message : String(err || "");
+        setError(message || "Could not load analytics");
       }
     } finally {
       if (requestVersion === requestVersionRef.current) {
@@ -443,7 +444,7 @@ export default function AnalyticsPage() {
               {[
                 { key: "lt-half", label: "< 0.5 SLA", value: queueAging?.lt_half_sla || 0, color: "#22c55e" },
                 { key: "lt-sla", label: "< SLA", value: queueAging?.lt_sla || 0, color: "#84cc16" },
-                { key: "gt-1-5", label: "> 1.5 SLA", value: queueAging?.gt_1_5_sla || 0, color: "#f59e0b" },
+                { key: "between-1-and-2-5", label: "1.0 to 2.5 SLA", value: queueAging?.between_1_and_2_5_sla || 0, color: "#f59e0b" },
                 { key: "gt-2-5", label: "> 2.5 SLA", value: queueAging?.gt_2_5_sla || 0, color: "#ef4444" },
               ].map((bucket) => {
                 const pct = toPercent(bucket.value, summary?.tasks_open || 1);

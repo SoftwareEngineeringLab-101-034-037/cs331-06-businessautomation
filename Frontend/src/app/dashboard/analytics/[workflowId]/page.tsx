@@ -178,9 +178,10 @@ export default function WorkflowAnalyticsDetailPage() {
         setPayload(data);
         setEmployees(employeeData);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (requestVersion === requestVersionRef.current) {
-        setError(err?.message || "Could not load workflow analytics");
+        const message = err instanceof Error ? err.message : String(err || "");
+        setError(message || "Could not load workflow analytics");
       }
     } finally {
       if (requestVersion === requestVersionRef.current) {
@@ -350,12 +351,14 @@ export default function WorkflowAnalyticsDetailPage() {
         throw new Error(message);
       }
 
+      setError(null);
       await loadWorkflowAnalytics();
       closeTaskDrawer();
-    } catch (err: any) {
-      setError(err?.message || "Task action failed");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err || "");
+      setError(message || "Task action failed");
     }
-  }, [authFetch, closeTaskDrawer, loadWorkflowAnalytics, organization?.id]);
+  }, [authFetch, closeTaskDrawer, loadWorkflowAnalytics, organization?.id, setError]);
 
   return (
     <RoleGate
