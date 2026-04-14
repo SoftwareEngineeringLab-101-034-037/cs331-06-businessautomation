@@ -100,7 +100,7 @@ func (s *Server) gmailHandler() *gmailhttp.Handler {
 }
 
 func (s *Server) registerRoutes() {
-	oauth.RegisterHandlers(s.mux, s.oauthSvc, s.store)
+	oauth.RegisterHandlers(s.mux, s.oauthSvc, s.store, s.cfg.CORSAllowedOrigins)
 
 	s.mux.HandleFunc("/forms", s.withOrgAuthorization(s.handleForms))
 	s.mux.HandleFunc("/forms/", s.withOrgAuthorization(s.handleFormByPath))

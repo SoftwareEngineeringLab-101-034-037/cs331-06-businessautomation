@@ -167,6 +167,12 @@
           "type": "string",
           "description": "ID of a form template the assignee must fill in before the task can be completed."
         },
+        "task_priority": {
+          "type": "string",
+          "enum": ["low", "general", "high", "critical"],
+          "default": "general",
+          "description": "Priority applied to tasks created from this node."
+        },
         "sla_days": {
           "type": "integer",
           "minimum": 0,

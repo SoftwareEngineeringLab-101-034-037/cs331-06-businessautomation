@@ -67,6 +67,7 @@ func main() {
 	workflowHandler := handler.NewWorkflowHandler(store)
 	instanceHandler := handler.NewInstanceHandler(store, exec, cfg.IntegrationKey)
 	taskHandler := handler.NewTaskHandler(store, exec)
+	analyticsHandler := handler.NewAnalyticsHandler(store)
 
 	// ── Clerk JWT auth ────────────────────────────────────────────────────────
 	jwksURL := strings.TrimRight(cfg.ClerkIssuerURL, "/") + "/.well-known/jwks.json"
@@ -121,6 +122,10 @@ func main() {
 			// Task management
 			orgApi.GET("/tasks", taskHandler.List)
 			orgApi.PUT("/tasks/:id/:action", taskHandler.Action)
+			orgApi.GET("/tasks/:id/escalation-candidates", taskHandler.EscalationCandidates)
+
+			// Analytics
+			orgApi.GET("/analytics", analyticsHandler.Get)
 		}
 	}
 

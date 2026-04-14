@@ -9,6 +9,7 @@ import type {
   NodeType,
   ConnectorType,
   TaskAction,
+  WorkflowTaskPriority,
   TaskDataVisibilityMode,
   ConditionConfig,
   ConditionRule,
@@ -24,6 +25,8 @@ import {
   PRESET_ORG_ROLES,
   CONNECTOR_CONFIG,
   TASK_ACTION_OPTIONS,
+  TASK_PRIORITY_OPTIONS,
+  normalizeWorkflowTaskPriority,
 } from "@/types/workflow";
 import {
   parseFieldMapping,
@@ -1033,6 +1036,7 @@ export function StepEditor({
 
     return [] as Array<{ token: string; label: string; subtitle?: string }>;
   }, [assignmentSearch, availableRoles, availableUsers]);
+  const taskPriority: WorkflowTaskPriority = normalizeWorkflowTaskPriority(step.taskPriority);
   const visibilityMode: TaskDataVisibilityMode = step.taskDataVisibility || "all";
   const visibleDataKeys = step.visibleDataKeys || [];
   const conditionFieldLookup = new Map(availableConditionFields.map((field) => [field.key, field]));
@@ -1394,6 +1398,29 @@ export function StepEditor({
                   value={step.formTemplateId || ""}
                   onChange={(e) => onChange({ ...step, formTemplateId: e.target.value })}
                 />
+              </div>
+            </div>
+
+            {/* ── Priority ── */}
+            <div className="wf-section">
+              <div className="wf-section-label">Priority</div>
+              <span className="wf-field-hint">
+                Sets the default priority for tasks created from this node.
+              </span>
+              <div className="wf-task-actions-grid" style={{ marginTop: 8 }}>
+                {TASK_PRIORITY_OPTIONS.map((opt) => {
+                  const selected = taskPriority === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      className={`wf-task-action-btn ${selected ? "active" : ""}`}
+                      style={selected ? { borderColor: opt.color, background: `${opt.color}18`, color: opt.color } : {}}
+                      onClick={() => onChange({ ...step, taskPriority: opt.value })}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 

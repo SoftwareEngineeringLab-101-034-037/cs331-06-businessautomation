@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { RoleGate, useRole } from "@/components/dashboard/RoleProvider";
+import { ToastContainer, useToast } from "@/components/Toast";
 
 const INTEGRATIONS_API = process.env.NEXT_PUBLIC_INTEGRATIONS_API || process.env.NEXT_PUBLIC_GOOGLE_FORMS_API || undefined;
 const INTEGRATIONS_API_MISSING_ERROR = "NEXT_PUBLIC_INTEGRATIONS_API (or NEXT_PUBLIC_GOOGLE_FORMS_API) is not configured.";
@@ -40,17 +41,12 @@ export default function GmailIntegrationPage() {
   const { getToken } = useAuth();
   const { organization } = useOrganization();
   const { role, roleResolved } = useRole();
+  const { toasts, showToast, dismissToast } = useToast();
 
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [error, setError] = useState<string | null>(null);
-
-  const [sendTo, setSendTo] = useState("");
-  const [sendSubject, setSendSubject] = useState("Workflow test email");
-  const [sendBody, setSendBody] = useState("This is a test email from the workflow Gmail integration page.");
-  const [sendResult, setSendResult] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
 
   const loadDataRequestIdRef = useRef(0);
   const oauthPollRef = useRef<number | null>(null);
@@ -170,6 +166,81 @@ export default function GmailIntegrationPage() {
   }, [apiBase]);
 
   useEffect(() => {
+    if (!apiBase) {
+      return;
+    }
+
+    let allowedOrigin = "";
+    try {
+      allowedOrigin = new URL(apiBase).origin;
+    } catch {
+      return;
+    }
+
+    const onOAuthMessage = (event: MessageEvent) => {
+      if (event.origin !== allowedOrigin) {
+        return;
+      }
+
+      const payload = event.data as Record<string, unknown> | null;
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
+
+      const type = typeof payload.type === "string" ? payload.type : "";
+      if (type !== "integration_oauth_result") {
+        return;
+      }
+
+      const service = typeof payload.service === "string" ? payload.service : "";
+      if (service && service !== "gmail") {
+        return;
+      }
+
+      const orgID = typeof payload.org_id === "string" ? payload.org_id : "";
+      if (orgID && organization?.id && orgID !== organization.id) {
+        return;
+      }
+
+      const source = event.source as Window | null;
+      if (!oauthPopupRef.current || source !== oauthPopupRef.current) {
+        return;
+      }
+
+      if (oauthPollRef.current !== null) {
+        window.clearInterval(oauthPollRef.current);
+        oauthPollRef.current = null;
+      }
+      if (oauthPopupRef.current && !oauthPopupRef.current.closed) {
+        oauthPopupRef.current.close();
+      }
+      oauthPopupRef.current = null;
+
+      const statusValue = typeof payload.status === "string" ? payload.status : "";
+      if (statusValue === "connected") {
+        showToast("Gmail account connected successfully.", "success");
+        setError(null);
+        void loadData();
+        return;
+      }
+
+      const message = typeof payload.error === "string"
+        ? payload.error
+        : typeof payload.message === "string"
+          ? payload.message
+          : "Gmail OAuth connection failed";
+      showToast(message, "error");
+      setError(message);
+      void loadData();
+    };
+
+    window.addEventListener("message", onOAuthMessage);
+    return () => {
+      window.removeEventListener("message", onOAuthMessage);
+    };
+  }, [apiBase, organization?.id, loadData, showToast]);
+
+  useEffect(() => {
     if (!canManageIntegrations) {
       return;
     }
@@ -233,60 +304,6 @@ export default function GmailIntegrationPage() {
       setLoading(false);
     }
   }, [apiBase, organization?.id, loadData, authFetch]);
-
-  const sendTestEmail = useCallback(async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setSendResult(null);
-
-    if (!organization?.id) {
-      setError("Select an organization first.");
-      return;
-    }
-    if (!apiBase) {
-      setError(INTEGRATIONS_API_MISSING_ERROR);
-      return;
-    }
-    if (!sendTo.trim()) {
-      setError("Recipient is required.");
-      return;
-    }
-
-    const recipients = sendTo
-      .split(/[;,]/)
-      .map((value) => value.trim())
-      .filter(Boolean);
-    if (recipients.length === 0) {
-      setError("Recipient is required.");
-      return;
-    }
-
-    setSending(true);
-    setError(null);
-
-    try {
-      const res = await authFetch(`${apiBase}/integrations/gmail/send?org_id=${encodeURIComponent(organization.id)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          to: recipients,
-          subject: sendSubject,
-          body_text: sendBody,
-        }),
-      });
-
-      if (!res.ok) {
-        const body = await res.text();
-        throw new Error(`${res.status} ${body}`);
-      }
-
-      const payload = await res.json() as { message_id?: string };
-      setSendResult(`Email sent successfully${payload.message_id ? ` (message: ${payload.message_id})` : ""}.`);
-    } catch (err: any) {
-      setError(err?.message || "Failed to send test email");
-    } finally {
-      setSending(false);
-    }
-  }, [apiBase, organization?.id, sendTo, sendSubject, sendBody, authFetch]);
 
   const missingFields = (status?.missing_fields || []).join(", ");
 
@@ -391,12 +408,6 @@ export default function GmailIntegrationPage() {
           </div>
         )}
 
-        {sendResult && (
-          <div className="wf-page-card" style={{ borderColor: "#22c55e" }}>
-            <p className="page-subtitle" style={{ color: "#15803d" }}>{sendResult}</p>
-          </div>
-        )}
-
         <section className="integration-grid">
           <article className="integration-card">
             <div className="integration-card-head">
@@ -467,38 +478,6 @@ export default function GmailIntegrationPage() {
             </div>
           </article>
 
-          <article className="integration-card">
-            <div className="integration-card-head">
-              <h3 className="section-title">Send Test Email</h3>
-            </div>
-            <form onSubmit={sendTestEmail} style={{ display: "grid", gap: 10 }}>
-              <input
-                className="wf-input"
-                placeholder="recipient@example.com"
-                value={sendTo}
-                onChange={(event) => setSendTo(event.target.value)}
-              />
-              <input
-                className="wf-input"
-                placeholder="Subject"
-                value={sendSubject}
-                onChange={(event) => setSendSubject(event.target.value)}
-              />
-              <textarea
-                className="wf-textarea"
-                rows={4}
-                placeholder="Email body"
-                value={sendBody}
-                onChange={(event) => setSendBody(event.target.value)}
-              />
-              <button className="action-btn action-btn-primary" type="submit" disabled={sending || !status?.connected}>
-                {sending ? "Sending..." : "Send Test Email"}
-              </button>
-              {!status?.connected && (
-                <span className="wf-field-hint">Connect a Gmail account first to send emails.</span>
-              )}
-            </form>
-          </article>
         </section>
 
         <section className="integration-accounts-section">
@@ -549,6 +528,7 @@ export default function GmailIntegrationPage() {
             </div>
           )}
         </section>
+        <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       </div>
     </RoleGate>
   );

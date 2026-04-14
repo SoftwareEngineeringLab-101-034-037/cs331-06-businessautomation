@@ -242,6 +242,32 @@ export interface TriggerFieldSchemaItem {
 /** Allowed task actions the assignee can take */
 export type TaskAction = "approve" | "reject" | "clarify" | "complete";
 
+export type WorkflowTaskPriority = "low" | "general" | "high" | "critical";
+
+export const TASK_PRIORITY_OPTIONS: { value: WorkflowTaskPriority; label: string; color: string }[] = [
+  { value: "low", label: "Low", color: "#22c55e" },
+  { value: "general", label: "General", color: "#f59e0b" },
+  { value: "high", label: "High", color: "#f97316" },
+  { value: "critical", label: "Critical", color: "#ef4444" },
+];
+
+export function normalizeWorkflowTaskPriority(value: unknown): WorkflowTaskPriority {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  switch (raw) {
+    case "low":
+      return "low";
+    case "high":
+      return "high";
+    case "critical":
+      return "critical";
+    case "medium":
+    case "general":
+      return "general";
+    default:
+      return "general";
+  }
+}
+
 export type TaskDataVisibilityMode = "all" | "selected" | "none";
 
 export const TASK_ACTION_OPTIONS: { value: TaskAction; label: string; color: string }[] = [
@@ -340,6 +366,7 @@ export interface WorkflowStep {
   /** Maps each task action to the downstream node ID (derived from canvas edges on publish). */
   nextActions?: Record<string, string>;
   formTemplateId?: string;
+  taskPriority?: WorkflowTaskPriority;
   taskDataVisibility?: TaskDataVisibilityMode;
   visibleDataKeys?: string[];
   includeFullFormResponse?: boolean;
@@ -420,6 +447,7 @@ export function createBlankStep(
     actionType: "custom_task",
     assignmentTargets: [],
     assignedRole: "",
+    taskPriority: "general",
     taskDataVisibility: "all",
     visibleDataKeys: [],
     includeFullFormResponse: false,

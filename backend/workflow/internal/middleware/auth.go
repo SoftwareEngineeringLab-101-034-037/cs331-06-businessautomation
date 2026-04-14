@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	UserIDKey = "user_id"
-	OrgIDKey  = "org_id"
+	UserIDKey  = "user_id"
+	OrgIDKey   = "org_id"
+	OrgRoleKey = "org_role"
 )
 
 func ClerkAuthMiddleware(keyFunc jwt.Keyfunc, issuerURL string) gin.HandlerFunc {
@@ -66,15 +67,20 @@ func ClerkAuthMiddleware(keyFunc jwt.Keyfunc, issuerURL string) gin.HandlerFunc 
 		// Clerk v1 tokens carry org_id as a top-level string claim.
 		// Clerk v2 tokens (v=2) carry it nested inside the "o" object: {"id":"org_...","rol":"admin",...}
 		orgID, _ := claims["org_id"].(string)
-		if orgID == "" {
-			if o, ok := claims["o"].(map[string]interface{}); ok {
+		orgRole, _ := claims["org_role"].(string)
+		if o, ok := claims["o"].(map[string]interface{}); ok {
+			if orgID == "" {
 				orgID, _ = o["id"].(string)
+			}
+			if orgRole == "" {
+				orgRole, _ = o["rol"].(string)
 			}
 		}
 		log.Printf("[AUTH] OK  sub=%s org_id=%q (empty means personal session token)", userID, orgID)
 
 		c.Set(UserIDKey, userID)
 		c.Set(OrgIDKey, orgID)
+		c.Set(OrgRoleKey, strings.ToLower(strings.TrimSpace(orgRole)))
 		c.Next()
 	}
 }
@@ -85,6 +91,10 @@ func GetUserID(c *gin.Context) string {
 
 func GetOrgID(c *gin.Context) string {
 	return c.GetString(OrgIDKey)
+}
+
+func GetOrgRole(c *gin.Context) string {
+	return strings.TrimSpace(c.GetString(OrgRoleKey))
 }
 
 func GetAuthorizationHeader(c *gin.Context) string {

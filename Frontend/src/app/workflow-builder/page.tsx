@@ -33,7 +33,7 @@ import type {
   ConditionOperator,
   WorkflowDataField,
 } from "@/types/workflow";
-import { createBlankStep, generateStepId, NODE_TYPE_CONFIG } from "@/types/workflow";
+import { createBlankStep, generateStepId, NODE_TYPE_CONFIG, normalizeWorkflowTaskPriority } from "@/types/workflow";
 
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
@@ -100,6 +100,7 @@ const INITIAL_STEPS: WorkflowStep[] = [
     description: "",
     actionType: "custom_task",
     assignedRole: "",
+    taskPriority: "general",
     slaDays: 1,
     isRequired: true,
     position: { x: 250, y: 0 },
@@ -111,6 +112,7 @@ const INITIAL_STEPS: WorkflowStep[] = [
     description: "",
     actionType: "custom_task",
     assignedRole: "",
+    taskPriority: "general",
     slaDays: 1,
     isRequired: true,
     position: { x: 250, y: 300 },
@@ -128,6 +130,17 @@ const INITIAL_DRAFT: WorkflowDraft = {
   edges: INITIAL_EDGES,
   tags: [],
 };
+
+function normalizeStepTaskPriority(step: WorkflowStep): WorkflowStep {
+  const nodeType: NodeType = step.type || "task";
+  if (nodeType !== "task") {
+    return step;
+  }
+  return {
+    ...step,
+    taskPriority: normalizeWorkflowTaskPriority(step.taskPriority),
+  };
+}
 
 const CONDITION_VALIDATION_OPERATORS_BY_TYPE: Record<ConditionDataType, Array<{ value: ConditionOperator; requiresValue?: boolean }>> = {
   text: [
@@ -1084,6 +1097,7 @@ export default function WorkflowBuilderPage() {
             if (Array.isArray(raw.edges)) edges = raw.edges;
           } catch { /* ignore bad JSON */ }
         }
+        steps = steps.map((step) => normalizeStepTaskPriority(step));
 
         const loaded: WorkflowDraft = {
           name: wf.name || "",
@@ -1762,6 +1776,7 @@ export default function WorkflowBuilderPage() {
         }
         node.task_actions = s.taskActions || [];
         node.form_template_id = s.formTemplateId || "";
+        node.task_priority = normalizeWorkflowTaskPriority(s.taskPriority);
         node.sla_days = s.slaDays || 0;
         node.task_data_visibility = s.taskDataVisibility || "all";
         node.visible_data_keys = parseVisibleDataKeys(s.visibleDataKeys);
@@ -1884,6 +1899,7 @@ export default function WorkflowBuilderPage() {
         node.assigned_users = assignees.users;
         node.task_actions = s.taskActions || [];
         node.form_template_id = s.formTemplateId || "";
+        node.task_priority = normalizeWorkflowTaskPriority(s.taskPriority);
         node.sla_days = s.slaDays || 0;
         node.task_data_visibility = s.taskDataVisibility || "all";
         node.visible_data_keys = parseVisibleDataKeys(s.visibleDataKeys);

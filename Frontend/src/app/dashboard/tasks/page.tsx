@@ -7,7 +7,7 @@ import TaskDetailDrawer from "@/components/dashboard/TaskDetailDrawer";
 import { authFetch as authFetchWithToken } from "@/lib/auth-fetch";
 import { computeHeightBasedProgress, type WorkflowProgressNode } from "@/lib/workflow-progress";
 import type { Task, TaskStatus, TaskPriority } from "@/types/dashboard";
-import { PRIORITY_CONFIG } from "@/types/dashboard";
+import { PRIORITY_CONFIG, normalizeTaskPriority } from "@/types/dashboard";
 
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
 const WF_API = process.env.NEXT_PUBLIC_WF_API || "http://localhost:8085";
@@ -29,6 +29,7 @@ type BackendTask = {
   assigned_user?: string;
   allowed_actions?: string[];
   action_committed?: string;
+  priority?: string;
   sla_days?: number;
   status: string;
   comment?: string;
@@ -100,10 +101,10 @@ function mapBackendStatus(status: string): TaskStatus {
 }
 
 function priorityFromSLA(slaDays?: number): TaskPriority {
-  if (!slaDays || slaDays <= 0) return "medium";
+  if (!slaDays || slaDays <= 0) return "general";
   if (slaDays <= 1) return "critical";
   if (slaDays <= 2) return "high";
-  if (slaDays <= 5) return "medium";
+  if (slaDays <= 5) return "general";
   return "low";
 }
 
@@ -238,7 +239,7 @@ function extractInstanceError(instance: BackendInstance | undefined): string | u
 
 function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined, instance: BackendInstance | undefined): Task {
   const status = mapBackendStatus(task.status);
-  const priority = priorityFromSLA(task.sla_days);
+  const priority = normalizeTaskPriority(task.priority || priorityFromSLA(task.sla_days));
   const createdAt = task.created_at || new Date().toISOString();
   const dueDate = task.sla_days && task.sla_days > 0
     ? new Date(new Date(createdAt).getTime() + task.sla_days * 24 * 60 * 60 * 1000).toISOString()

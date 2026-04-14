@@ -17,7 +17,7 @@ export type TaskStatus =
   | "cancelled"
   | "sent_back";
 
-export type TaskPriority = "low" | "medium" | "high" | "critical";
+export type TaskPriority = "low" | "general" | "high" | "critical";
 
 export interface Task {
   id: string;
@@ -26,6 +26,7 @@ export interface Task {
   comment?: string;
   actionCommitted?: string;
   status: TaskStatus;
+  baseStatus?: TaskStatus;
   priority: TaskPriority;
   assignedTo: string;
   assignedToName: string;
@@ -44,6 +45,7 @@ export interface Task {
   stepNumber: number;
   totalSteps: number;
   allowedActions?: string[];
+  overridePendingActions?: boolean;
   visibleData?: Record<string, unknown>;
   nodeId?: string;
   orgId?: string;
@@ -71,10 +73,27 @@ export const PRIORITY_CONFIG: Record<
   { label: string; color: string; bg: string }
 > = {
   low: { label: "Low", color: "#22c55e", bg: "rgba(34,197,94,0.12)" },
-  medium: { label: "Medium", color: "#f59e0b", bg: "rgba(245,158,11,0.12)" },
+  general: { label: "General", color: "#f59e0b", bg: "rgba(245,158,11,0.12)" },
   high: { label: "High", color: "#f97316", bg: "rgba(249,115,22,0.12)" },
   critical: { label: "Critical", color: "#ef4444", bg: "rgba(239,68,68,0.12)" },
 };
+
+export function normalizeTaskPriority(value: unknown): TaskPriority {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  switch (raw) {
+    case "low":
+      return "low";
+    case "high":
+      return "high";
+    case "critical":
+      return "critical";
+    case "medium":
+    case "general":
+      return "general";
+    default:
+      return "general";
+  }
+}
 
 // ─── Activity Feed ─────────────────────────────────────────────
 export type ActivityType =

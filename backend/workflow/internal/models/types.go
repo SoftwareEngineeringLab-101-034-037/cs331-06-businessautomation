@@ -215,6 +215,9 @@ type WorkflowNode struct {
 	NextActions map[string]string `json:"next_actions,omitempty" bson:"next_actions,omitempty"`
 	// FormTemplateID is an optional form the assignee must fill in.
 	FormTemplateID string `json:"form_template_id,omitempty" bson:"form_template_id,omitempty"`
+	// TaskPriority controls urgency for tasks generated from this node.
+	// Allowed values: low | general | high | critical. Defaults to general.
+	TaskPriority TaskPriority `json:"task_priority,omitempty" bson:"task_priority,omitempty"`
 	// SLADays is the deadline in business days; 0 means no SLA.
 	SLADays int `json:"sla_days,omitempty" bson:"sla_days,omitempty"`
 	// TaskDataVisibility controls what instance data is shown to assignees.
@@ -293,6 +296,15 @@ const (
 	TaskCompleted  TaskStatus = "completed"
 )
 
+type TaskPriority string
+
+const (
+	TaskPriorityLow      TaskPriority = "low"
+	TaskPriorityGeneral  TaskPriority = "general"
+	TaskPriorityHigh     TaskPriority = "high"
+	TaskPriorityCritical TaskPriority = "critical"
+)
+
 type TaskAssignment struct {
 	ID               string                 `json:"id" bson:"id"`
 	OrgID            string                 `json:"org_id" bson:"org_id"`
@@ -309,6 +321,7 @@ type TaskAssignment struct {
 	AssignedUser     string                 `json:"assigned_user,omitempty" bson:"assigned_user,omitempty"`
 	AllowedActions   []string               `json:"allowed_actions,omitempty" bson:"allowed_actions,omitempty"`
 	FormTemplateID   string                 `json:"form_template_id,omitempty" bson:"form_template_id,omitempty"`
+	Priority         TaskPriority           `json:"priority,omitempty" bson:"priority,omitempty"`
 	SLADays          int                    `json:"sla_days,omitempty" bson:"sla_days,omitempty"`
 	Status           TaskStatus             `json:"status" bson:"status"`
 	ActionCommitted  string                 `json:"action_committed,omitempty" bson:"action_committed,omitempty"`

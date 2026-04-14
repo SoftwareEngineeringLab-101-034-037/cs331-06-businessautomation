@@ -19,6 +19,7 @@ import (
 type TaskExecutor interface {
 	CanActOnTask(actorUserID string, task models.TaskAssignment, action, authHeader string) error
 	ContinueTask(taskID, actorUserID, action, comment, authHeader string) (models.TaskAssignment, error)
+	ListEscalationCandidates(task models.TaskAssignment, authHeader string) ([]string, error)
 }
 
 // TaskHandler handles listing and actioning task assignments.
@@ -120,11 +121,16 @@ func parseCSVValues(raw string) []string {
 	return out
 }
 
-// PUT /api/orgs/:orgId/tasks/:id/:action  (action = approve | reject | clarify | complete)
+// PUT /api/orgs/:orgId/tasks/:id/:action
+// actions:
+//   - start (pending -> in_progress)
+//   - approve | reject | clarify | complete
+//   - escalate_notify | escalate_reassign (admin only, pending tasks)
 func (h *TaskHandler) Action(c *gin.Context) {
 	orgId := c.Param("orgId")
 	taskID := c.Param("id")
-	action := c.Param("action")
+	action := strings.TrimSpace(c.Param("action"))
+	isEscalationAction := action == "escalate_notify" || action == "escalate_reassign"
 
 	task, ok := h.Store.GetTask(taskID)
 	if !ok {
@@ -152,6 +158,14 @@ func (h *TaskHandler) Action(c *gin.Context) {
 	authHeader := middleware.GetAuthorizationHeader(c)
 	if actorUserID == "" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	if isEscalationAction && !strings.EqualFold(middleware.GetOrgRole(c), "admin") {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	if h.Exec == nil && isEscalationAction {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "escalation actions require executor"})
 		return
 	}
 	if h.Exec != nil {
@@ -210,6 +224,63 @@ func (h *TaskHandler) Action(c *gin.Context) {
 	c.JSON(http.StatusOK, sanitizeTaskForResponse(updatedTask))
 }
 
+// GET /api/orgs/:orgId/tasks/:id/escalation-candidates
+func (h *TaskHandler) EscalationCandidates(c *gin.Context) {
+	orgID := c.Param("orgId")
+	taskID := c.Param("id")
+
+	task, ok := h.Store.GetTask(taskID)
+	if !ok || task.OrgID != orgID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+		return
+	}
+	if !strings.EqualFold(middleware.GetOrgRole(c), "admin") {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	if task.Status != models.TaskPending {
+		c.JSON(http.StatusOK, gin.H{"candidates": []string{}})
+		return
+	}
+	actorUserID := middleware.GetUserID(c)
+	if strings.TrimSpace(actorUserID) == "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
+	authHeader := middleware.GetAuthorizationHeader(c)
+	if h.Exec == nil {
+		log.Printf("task_handler.EscalationCandidates org=%s task=%s skipped: executor unavailable", orgID, taskID)
+		c.JSON(http.StatusOK, gin.H{"candidates": []string{}})
+		return
+	}
+
+	if err := h.Exec.CanActOnTask(actorUserID, task, "escalate_reassign", authHeader); err != nil {
+		writeTaskActionError(c, "task_handler.EscalationCandidates authorize", err)
+		return
+	}
+
+	candidates, err := h.Exec.ListEscalationCandidates(task, authHeader)
+	if err != nil {
+		log.Printf("task_handler.EscalationCandidates org=%s task=%s failed: %v", orgID, taskID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+	filtered := make([]string, 0, len(candidates))
+	currentAssignee := strings.TrimSpace(task.AssignedUser)
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
+		}
+		if currentAssignee != "" && strings.EqualFold(trimmed, currentAssignee) {
+			continue
+		}
+		filtered = append(filtered, trimmed)
+	}
+	c.JSON(http.StatusOK, gin.H{"candidates": filtered})
+}
+
 func sanitizeTaskForResponse(task models.TaskAssignment) models.TaskAssignment {
 	return task
 }
@@ -226,6 +297,8 @@ func writeTaskActionError(c *gin.Context, context string, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
 	case errors.Is(err, executor.ErrTaskAlreadyCompleted):
 		c.JSON(http.StatusConflict, gin.H{"error": "task already completed"})
+	case errors.Is(err, executor.ErrNoEligibleAssignee):
+		c.JSON(http.StatusConflict, gin.H{"error": "no eligible assignee found"})
 	case errors.Is(err, executor.ErrTaskConflict):
 		c.JSON(http.StatusConflict, gin.H{"error": "task was updated concurrently"})
 	default:
