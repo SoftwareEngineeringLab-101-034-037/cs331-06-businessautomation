@@ -1490,10 +1490,12 @@
   color: #9a3412;
 }
 
+.kanban-card-priority.general::before,
 .kanban-card-priority.medium::before {
   background: #f59e0b;
 }
 
+.kanban-card-priority.general,
 .kanban-card-priority.medium {
   background-color: rgba(245, 158, 11, 0.2);
   color: #92400e;
@@ -1656,6 +1658,7 @@
   border-left-color: #f97316;
 }
 
+.kanban-priority-general,
 .kanban-priority-medium {
   border-left-color: #f59e0b;
 }
@@ -4041,6 +4044,42 @@
 
 .filter-search-input::placeholder {
   color: var(--text-muted);
+}
+
+.workstation-search {
+  min-width: 270px;
+  max-width: 420px;
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--accent) 5%, transparent) 0%, transparent 42%),
+    var(--surface);
+}
+
+.workstation-search-clear {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.workstation-search-clear:hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-alt));
+}
+
+.workstation-search-clear:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  outline-offset: 2px;
 }
 
 .filter-pills {

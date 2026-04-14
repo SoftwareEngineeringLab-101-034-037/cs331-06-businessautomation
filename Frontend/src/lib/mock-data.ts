@@ -34,7 +34,7 @@ export const MOCK_TASKS: Task[] = [
     description:
       "Complete the IT onboarding checklist for Raj Patel joining the Engineering department. Set up workstation, create accounts, assign access badges, and schedule orientation sessions.",
     status: "in_progress",
-    priority: "medium",
+    priority: "general",
     assignedTo: "user_1",
     assignedToName: "You",
     assignedBy: "user_hr",
@@ -74,7 +74,7 @@ export const MOCK_TASKS: Task[] = [
     description:
       "Compile and submit all Q4 expenses including travel, client entertainment, and software subscriptions. Attach receipts and categorize line items.",
     status: "completed",
-    priority: "medium",
+    priority: "general",
     assignedTo: "user_1",
     assignedToName: "You",
     assignedBy: "user_finance",
@@ -136,7 +136,7 @@ export const MOCK_TASKS: Task[] = [
     description:
       "Sent back for revision: pricing terms need renegotiation. Original approval was rejected due to 15% price increase exceeding budget threshold.",
     status: "sent_back",
-    priority: "medium",
+    priority: "general",
     assignedTo: "user_1",
     assignedToName: "You",
     assignedBy: "user_legal",

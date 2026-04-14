@@ -8,7 +8,7 @@ import ActivityFeed from "@/components/dashboard/ActivityFeed";
 import { RoleGate, useRole } from "@/components/dashboard/RoleProvider";
 import { authFetch as authFetchWithToken } from "@/lib/auth-fetch";
 import { computeHeightBasedProgress, type WorkflowProgressNode } from "@/lib/workflow-progress";
-import { ROLE_LABELS, TASK_STATUS_CONFIG, PRIORITY_CONFIG } from "@/types/dashboard";
+import { ROLE_LABELS, TASK_STATUS_CONFIG, PRIORITY_CONFIG, normalizeTaskPriority } from "@/types/dashboard";
 import type { ActivityItem, Task, TaskPriority, TaskStatus } from "@/types/dashboard";
 
 const AUTH_API = process.env.NEXT_PUBLIC_AUTH_API || "http://localhost:8080";
@@ -31,6 +31,7 @@ type BackendTask = {
   assigned_user?: string;
   allowed_actions?: string[];
   action_committed?: string;
+  priority?: string;
   sla_days?: number;
   status: string;
   comment?: string;
@@ -139,10 +140,10 @@ function mapBackendStatus(status: string): TaskStatus {
 }
 
 function priorityFromSLA(slaDays?: number): TaskPriority {
-  if (!slaDays || slaDays <= 0) return "medium";
+  if (!slaDays || slaDays <= 0) return "general";
   if (slaDays <= 1) return "critical";
   if (slaDays <= 2) return "high";
-  if (slaDays <= 5) return "medium";
+  if (slaDays <= 5) return "general";
   return "low";
 }
 
@@ -242,7 +243,7 @@ function extractInstanceError(instance: BackendInstance | undefined): string | u
 
 function toUITask(task: BackendTask, workflow: BackendWorkflow | undefined, instance: BackendInstance | undefined): Task {
   const status = mapBackendStatus(task.status);
-  const priority = priorityFromSLA(task.sla_days);
+  const priority = normalizeTaskPriority(task.priority || priorityFromSLA(task.sla_days));
   const createdAt = task.created_at || new Date().toISOString();
   const fallbackDue = new Date(new Date(createdAt).getTime() + 2 * 24 * 60 * 60 * 1000).toISOString();
   const dueDate = task.sla_days && task.sla_days > 0
@@ -614,7 +615,7 @@ export default function DashboardOverview() {
     : [];
 
   const activeTask = useMemo(() => {
-    const priorityRank: Record<TaskPriority, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+    const priorityRank: Record<TaskPriority, number> = { critical: 0, high: 1, general: 2, low: 3 };
     return [...tasks]
       .filter((task) => !["completed", "cancelled", "rejected"].includes(task.status))
       .sort((a, b) => {
