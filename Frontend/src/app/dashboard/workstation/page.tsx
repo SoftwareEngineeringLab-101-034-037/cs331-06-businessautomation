@@ -730,6 +730,7 @@ export default function WorkstationPage() {
   const [filterDept, setFilterDept] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterTag, setFilterTag] = useState("all");
+  const [workflowSearch, setWorkflowSearch] = useState("");
 
   /* Unique filter options from live data */
   const deptOptions = useMemo(() => {
@@ -744,13 +745,26 @@ export default function WorkstationPage() {
 
   /* Filtered list */
   const filtered = useMemo(() => {
+    const query = workflowSearch.trim().toLowerCase();
     return workflows.filter((wf) => {
       if (filterDept !== "all" && wf.department !== filterDept) return false;
       if (filterStatus !== "all" && wf.status !== filterStatus) return false;
       if (filterTag !== "all" && !(wf.tags ?? []).includes(filterTag)) return false;
+      if (query) {
+        const haystack = [
+          wf.id,
+          wf.name,
+          wf.description || "",
+          wf.department || "",
+          wf.status,
+          wf.trigger?.type || "",
+          ...(wf.tags || []),
+        ].join(" ").toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
       return true;
     });
-  }, [workflows, filterDept, filterStatus, filterTag]);
+  }, [workflows, filterDept, filterStatus, filterTag, workflowSearch]);
 
   const workflowByID = useMemo(() => {
     return new Map(workflows.map((workflow) => [workflow.id, workflow]));
@@ -758,9 +772,11 @@ export default function WorkstationPage() {
 
   const [instanceStatusFilter, setInstanceStatusFilter] = useState<"all" | InstanceDisplayStatus>("all");
   const [instanceTimeFilter, setInstanceTimeFilter] = useState<"all" | "24h" | "7d" | "30d">("all");
+  const [instanceSearch, setInstanceSearch] = useState("");
 
   const filteredInstances = useMemo(() => {
     const now = Date.now();
+    const query = instanceSearch.trim().toLowerCase();
     const cutoffMs = instanceTimeFilter === "24h"
       ? 24 * 60 * 60 * 1000
       : instanceTimeFilter === "7d"
@@ -778,6 +794,21 @@ export default function WorkstationPage() {
           return false;
         }
 
+        if (query) {
+          const haystack = [
+            instance.id,
+            formatInstanceLabel(instance.id),
+            instance.workflow_name || "",
+            workflow?.name || "",
+            instance.workflow_id,
+            instance.current_node || "",
+            displayStatus,
+          ].join(" ").toLowerCase();
+          if (!haystack.includes(query)) {
+            return false;
+          }
+        }
+
         if (cutoffMs > 0) {
           const startedAtMs = toTimeValue(instance.started_at);
           if (startedAtMs == null || now - startedAtMs > cutoffMs) {
@@ -790,7 +821,7 @@ export default function WorkstationPage() {
       .sort((a, b) => {
         return (toTimeValue(b.started_at) || 0) - (toTimeValue(a.started_at) || 0);
       });
-  }, [instances, workflowByID, instanceStatusFilter, instanceTimeFilter]);
+  }, [instances, workflowByID, instanceStatusFilter, instanceTimeFilter, instanceSearch]);
 
   const instanceViewRows = useMemo(() => {
     return filteredInstances.map((instance) => {
@@ -823,8 +854,35 @@ export default function WorkstationPage() {
         {/* Workflows section */}
         <section className="dashboard-section">
           <div className="section-header" style={{ flexWrap: "wrap", gap: 10 }}>
-            <h3 className="section-title">Workflows</h3>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <h3 className="section-title">Workflows</h3>
+              {!loading && !error && (
+                <span className="table-muted">{filtered.length} shown</span>
+              )}
+            </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginLeft: "auto" }}>
+              <div className="filter-search workstation-search" role="search">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" width="16" height="16" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-4.35-4.35m1.35-5.4a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z" />
+                </svg>
+                <input
+                  className="filter-search-input"
+                  value={workflowSearch}
+                  onChange={(e) => setWorkflowSearch(e.target.value)}
+                  placeholder="Search workflows by name, trigger, tag, or ID"
+                  aria-label="Search workflows"
+                />
+                {workflowSearch && (
+                  <button
+                    type="button"
+                    className="workstation-search-clear"
+                    onClick={() => setWorkflowSearch("")}
+                    aria-label="Clear workflow search"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
               <select className="filter-select" value={filterDept} onChange={(e) => setFilterDept(e.target.value)}>
                 <option value="all">All Departments</option>
                 {deptOptions.map((d) => (<option key={d} value={d}>{d}</option>))}
@@ -841,8 +899,8 @@ export default function WorkstationPage() {
                   {tagOptions.map((t) => (<option key={t} value={t}>{t}</option>))}
                 </select>
               )}
-              {(filterDept !== "all" || filterStatus !== "all" || filterTag !== "all") && (
-                <button className="action-btn action-btn-outline action-btn-sm" onClick={() => { setFilterDept("all"); setFilterStatus("all"); setFilterTag("all"); }}>
+              {(workflowSearch || filterDept !== "all" || filterStatus !== "all" || filterTag !== "all") && (
+                <button className="action-btn action-btn-outline action-btn-sm" onClick={() => { setWorkflowSearch(""); setFilterDept("all"); setFilterStatus("all"); setFilterTag("all"); }}>
                   Clear
                 </button>
               )}
@@ -876,7 +934,7 @@ export default function WorkstationPage() {
           )}
           {!loading && !error && workflows.length > 0 && filtered.length === 0 && (
             <div className="empty-state" style={{ padding: "40px 0" }}>
-              <p className="table-muted">No workflows match the selected filters.</p>
+              <p className="table-muted">No workflows match your search or selected filters.</p>
             </div>
           )}
           {!loading && !error && filtered.length > 0 && (
@@ -924,8 +982,35 @@ export default function WorkstationPage() {
 
         <section className="dashboard-section" style={{ marginTop: 20 }}>
           <div className="section-header" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <h3 className="section-title">Workflow Instances</h3>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <h3 className="section-title">Workflow Instances</h3>
+              {!loading && !error && (
+                <span className="table-muted">{filteredInstances.length} shown</span>
+              )}
+            </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginLeft: "auto" }}>
+              <div className="filter-search workstation-search" role="search">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" width="16" height="16" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-4.35-4.35m1.35-5.4a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z" />
+                </svg>
+                <input
+                  className="filter-search-input"
+                  value={instanceSearch}
+                  onChange={(e) => setInstanceSearch(e.target.value)}
+                  placeholder="Search instances by ID, workflow, node, or status"
+                  aria-label="Search workflow instances"
+                />
+                {instanceSearch && (
+                  <button
+                    type="button"
+                    className="workstation-search-clear"
+                    onClick={() => setInstanceSearch("")}
+                    aria-label="Clear instance search"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
               <select className="filter-select" value={instanceStatusFilter} onChange={(e) => setInstanceStatusFilter(e.target.value as "all" | InstanceDisplayStatus)}>
                 <option value="all">All Statuses</option>
                 <option value="running">Running</option>
@@ -941,8 +1026,8 @@ export default function WorkstationPage() {
                 <option value="7d">Last week</option>
                 <option value="30d">Last 30 days</option>
               </select>
-              {(instanceStatusFilter !== "all" || instanceTimeFilter !== "all") && (
-                <button className="action-btn action-btn-outline action-btn-sm" onClick={() => { setInstanceStatusFilter("all"); setInstanceTimeFilter("all"); }}>
+              {(instanceSearch || instanceStatusFilter !== "all" || instanceTimeFilter !== "all") && (
+                <button className="action-btn action-btn-outline action-btn-sm" onClick={() => { setInstanceSearch(""); setInstanceStatusFilter("all"); setInstanceTimeFilter("all"); }}>
                   Clear
                 </button>
               )}
@@ -960,7 +1045,7 @@ export default function WorkstationPage() {
 
           {!loading && !error && instances.length > 0 && filteredInstances.length === 0 && (
             <div className="empty-state" style={{ padding: "28px 0" }}>
-              <p className="table-muted">No instances match the selected filters.</p>
+              <p className="table-muted">No instances match your search or selected filters.</p>
             </div>
           )}
 
