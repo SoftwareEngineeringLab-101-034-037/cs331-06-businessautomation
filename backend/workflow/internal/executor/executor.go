@@ -456,6 +456,7 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 		AssignedUser:     assignedUser,
 		AllowedActions:   node.TaskActions,
 		FormTemplateID:   node.FormTemplateID,
+		Priority:         normalizeTaskPriority(node.TaskPriority),
 		SLADays:          node.SLADays,
 		Status:           models.TaskPending,
 		Data:             cloneWorkflowData(data),
@@ -474,6 +475,7 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 		"assigned_users":   task.AssignedUsers,
 		"assigned_targets": task.AssignedTargets,
 		"assigned_user":    task.AssignedUser,
+		"priority":         task.Priority,
 		"allowed_actions":  node.TaskActions,
 	})
 
@@ -485,6 +487,21 @@ func (e *Executor) executeTask(instanceID string, wf *models.Workflow, node *mod
 	}
 
 	return "", nil
+}
+
+func normalizeTaskPriority(priority models.TaskPriority) models.TaskPriority {
+	switch strings.ToLower(strings.TrimSpace(string(priority))) {
+	case string(models.TaskPriorityLow):
+		return models.TaskPriorityLow
+	case "medium", string(models.TaskPriorityGeneral):
+		return models.TaskPriorityGeneral
+	case string(models.TaskPriorityHigh):
+		return models.TaskPriorityHigh
+	case string(models.TaskPriorityCritical):
+		return models.TaskPriorityCritical
+	default:
+		return models.TaskPriorityGeneral
+	}
 }
 
 func extractNodeAssignmentTargets(node *models.WorkflowNode) ([]string, []string, []string) {

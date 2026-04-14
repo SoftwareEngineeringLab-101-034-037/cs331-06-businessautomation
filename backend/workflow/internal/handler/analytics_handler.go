@@ -305,7 +305,7 @@ func (h *AnalyticsHandler) Get(c *gin.Context) {
 		"cancelled":   0,
 		"sent_back":   0,
 	}
-	priorityCountsOpen := map[string]int{"low": 0, "medium": 0, "high": 0, "critical": 0}
+	priorityCountsOpen := map[string]int{"low": 0, "general": 0, "high": 0, "critical": 0}
 	resolvedByWorkflowLead := make(map[string][]float64)
 	workflowRollupMap := make(map[string]*workflowRollup)
 	taskTypeRollupMap := make(map[string]*taskTypeRollup)
@@ -325,7 +325,7 @@ func (h *AnalyticsHandler) Get(c *gin.Context) {
 			displayStatus = "overdue"
 		}
 
-		priority := priorityFromSLA(task.SLADays)
+		priority := taskPriorityForAnalytics(task)
 		ageHours := now.Sub(task.CreatedAt).Hours()
 
 		// statusCounts intentionally double-counts overdue as a subset bucket; statusDist
@@ -552,7 +552,7 @@ func (h *AnalyticsHandler) Get(c *gin.Context) {
 		})
 	}
 
-	priorityOrder := []string{"critical", "high", "medium", "low"}
+	priorityOrder := []string{"critical", "high", "general", "low"}
 	priorityDist := make([]prioritySliceItem, 0, len(priorityOrder))
 	for _, key := range priorityOrder {
 		count := priorityCountsOpen[key]
@@ -917,9 +917,25 @@ func mapTaskStatus(status models.TaskStatus) string {
 	}
 }
 
-func priorityFromSLA(slaDays int) string {
+func taskPriorityForAnalytics(task models.TaskAssignment) string {
+	raw := strings.TrimSpace(strings.ToLower(string(task.Priority)))
+	switch raw {
+	case "critical":
+		return "critical"
+	case "high":
+		return "high"
+	case "general", "medium":
+		return "general"
+	case "low":
+		return "low"
+	default:
+		return priorityFromLegacySLA(task.SLADays)
+	}
+}
+
+func priorityFromLegacySLA(slaDays int) string {
 	if slaDays <= 0 {
-		return "medium"
+		return "general"
 	}
 	if slaDays <= 1 {
 		return "critical"
@@ -928,7 +944,7 @@ func priorityFromSLA(slaDays int) string {
 		return "high"
 	}
 	if slaDays <= 5 {
-		return "medium"
+		return "general"
 	}
 	return "low"
 }

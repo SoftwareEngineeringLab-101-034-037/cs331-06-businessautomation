@@ -847,6 +847,9 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	if savedTask.NodeID != "task" || savedTask.AssignedRole != "manager" {
 		t.Fatalf("unexpected saved task: %+v", savedTask)
 	}
+	if savedTask.Priority != models.TaskPriorityGeneral {
+		t.Fatalf("expected default task priority %q, got %q", models.TaskPriorityGeneral, savedTask.Priority)
+	}
 	if savedTask.VisibleData == nil {
 		t.Fatalf("expected visible data to be populated by default")
 	}
@@ -886,6 +889,57 @@ func TestRunTaskCreatesAssignmentAndBranchesByAction(t *testing.T) {
 	}
 	if _, ok := inst.NodeStates["approved-end"]; !ok {
 		t.Fatalf("expected approved-end to be visited")
+	}
+}
+
+func TestNormalizeTaskPriority(t *testing.T) {
+	tests := []struct {
+		name string
+		in   models.TaskPriority
+		want models.TaskPriority
+	}{
+		{name: "empty defaults to general", in: "", want: models.TaskPriorityGeneral},
+		{name: "low", in: models.TaskPriorityLow, want: models.TaskPriorityLow},
+		{name: "general", in: models.TaskPriorityGeneral, want: models.TaskPriorityGeneral},
+		{name: "medium aliases to general", in: models.TaskPriority("medium"), want: models.TaskPriorityGeneral},
+		{name: "high", in: models.TaskPriorityHigh, want: models.TaskPriorityHigh},
+		{name: "critical", in: models.TaskPriorityCritical, want: models.TaskPriorityCritical},
+		{name: "invalid defaults to general", in: models.TaskPriority("urgent"), want: models.TaskPriorityGeneral},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeTaskPriority(tt.in)
+			if got != tt.want {
+				t.Fatalf("normalizeTaskPriority(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExecuteTaskPersistsNodePriority(t *testing.T) {
+	store := newMockStore()
+	exec := NewExecutor(store, &mockEmail{}, nil)
+
+	wf := models.Workflow{ID: "wf-priority", OrgID: "org-1"}
+	node := models.WorkflowNode{
+		ID:           "task-priority",
+		Type:         models.NodeTask,
+		Title:        "Priority Task",
+		TaskPriority: models.TaskPriorityCritical,
+	}
+
+	if _, err := exec.executeTask("inst-priority", &wf, &node, map[string]interface{}{}, ""); err != nil {
+		t.Fatalf("executeTask failed: %v", err)
+	}
+
+	if len(store.tasks) != 1 {
+		t.Fatalf("expected one saved task, got %d", len(store.tasks))
+	}
+	for _, saved := range store.tasks {
+		if saved.Priority != models.TaskPriorityCritical {
+			t.Fatalf("expected persisted priority %q, got %q", models.TaskPriorityCritical, saved.Priority)
+		}
 	}
 }
 
