@@ -1,0 +1,21 @@
+=== RUN   TestCreateDepartmentBadRequestWhenNameMissing
+--- PASS: TestCreateDepartmentBadRequestWhenNameMissing (0.00s)
+=== RUN   TestCreateDepartmentCreatedThenConflict
+2026/04/19 18:19:23 Department created: 5f2f97b27888458e034ae50cde05292a in org org_1
+--- PASS: TestCreateDepartmentCreatedThenConflict (0.00s)
+=== RUN   TestListDepartmentsReturnsOrgDepartments
+--- PASS: TestListDepartmentsReturnsOrgDepartments (0.00s)
+=== RUN   TestUpdateOrganizationSettingsUpsertsAndPersists
+--- PASS: TestUpdateOrganizationSettingsUpsertsAndPersists (0.00s)
+=== RUN   TestInviteSingleBadRequestOnInvalidBody
+--- PASS: TestInviteSingleBadRequestOnInvalidBody (0.00s)
+=== RUN   TestInviteSingleCreatedThenDuplicateConflict
+2026/04/19 18:19:23 Warning: Clerk invitation email failed for new.user@example.com: clerk secret key not configured, skipping email (local invitation still created)
+--- PASS: TestInviteSingleCreatedThenDuplicateConflict (0.00s)
+=== RUN   TestRevokeInvitationSuccessThenNotFound
+2026/04/19 18:19:23 Invitation inv_1 revoked
+--- PASS: TestRevokeInvitationSuccessThenNotFound (0.00s)
+=== RUN   TestDeleteDepartmentWithAssignedEmployeeReturnsBadRequest
+--- PASS: TestDeleteDepartmentWithAssignedEmployeeReturnsBadRequest (0.00s)
+PASS
+ok  	github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/handler	(cached)

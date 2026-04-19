@@ -1,0 +1,14 @@
+=== RUN   TestAssignment9Defect_AcceptInvitationEmailCaseMismatch
+    assignment9_exploratory_test.go:34: expected acceptance to be case-insensitive for email; got invitation email does not match user email
+--- FAIL: TestAssignment9Defect_AcceptInvitationEmailCaseMismatch (0.00s)
+=== RUN   TestAssignment9Defect_ResolveDepartmentIDTrimmedInput
+    assignment9_exploratory_test.go:52: expected department lookup to trim input; got not found: department " Engineering " not found in organization org_1
+--- FAIL: TestAssignment9Defect_ResolveDepartmentIDTrimmedInput (0.00s)
+=== RUN   TestAssignment9Defect_DuplicateInviteEmailCaseInsensitive
+2026/04/19 23:38:06 Warning: Clerk invitation email failed for First.User@Example.com: clerk secret key not configured, skipping email (local invitation still created)
+2026/04/19 23:38:06 Warning: Clerk invitation email failed for first.user@example.com: clerk secret key not configured, skipping email (local invitation still created)
+    assignment9_exploratory_test.go:91: expected duplicate invitation blocked for case-variant email
+--- FAIL: TestAssignment9Defect_DuplicateInviteEmailCaseInsensitive (0.00s)
+FAIL
+FAIL	github.com/SoftwareEngineeringLab-101-034-037/CS331-06-BusinessAutomation/backend/auth/internal/service	1.351s
+FAIL
