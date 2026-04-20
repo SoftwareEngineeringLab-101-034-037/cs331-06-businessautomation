@@ -117,7 +117,7 @@ Testing is considered complete and ready for sign-off when:
 | Field | Details |
 |-------|---------|
 | **Test Case ID** | TC-INV-01 |
-| **Test Scenario / Description** | An admin invites a new employee with valid details (email, name, existing department). The invitation should be created with `status=pending`, a secure token hash should be stored, and the Clerk email (mocked) should be triggered. |
+| **Test Scenario / Description** | An admin invites a new employee with valid details (email, name, existing department). The invitation should be created with `status=pending`, a secure token hash should be stored, and the Clerk email  should be triggered. |
 | **Input Data** | `POST /api/orgs/org_1/employees/invite` <br> `{"email":"alice@example.com","first_name":"Alice","last_name":"Smith","department":"Engineering","role":"analyst","job_title":"Data Analyst"}` <br> Header: `X-User-ID: admin_user` |
 | **Pre-conditions** | Department "Engineering" exists in `org_1`. No existing pending invitation for `alice@example.com`. |
 | **Expected Output** | HTTP `201 Created` <br> Response body contains `invitation.status = "pending"` and `invitation.email = "alice@example.com"` <br> DB: 1 row in `employee_invitations` with `status="pending"` and non-empty `token` |
